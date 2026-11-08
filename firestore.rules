@@ -1,0 +1,58 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper functions
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    // Default Deny Catch-All (Fortress Zero-Trust)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Candidates Collection (Protected - Access via Server Backend Only)
+    match /pawako_candidates/{candidateId} {
+      allow read, write: if false;
+    }
+
+    // Referrers Collection (Protected - Access via Server Backend Only)
+    match /pawako_referrers/{referrerId} {
+      allow read, write: if false;
+    }
+
+    // Users Collection (Protected - Access via Server Backend Only)
+    match /pawako_users/{userId} {
+      allow read, write: if false;
+    }
+
+    // Status History Collection (Protected - Access via Server Backend Only)
+    match /pawako_status_history/{historyId} {
+      allow read, write: if false;
+    }
+
+    // Role Mappings Collection (Protected - Access via Server Backend Only)
+    match /pawako_discord_role_mappings/{mappingId} {
+      allow read, write: if false;
+    }
+
+    // Audit Logs Collection (Protected - Access via Server Backend Only)
+    match /pawako_audit_logs/{logId} {
+      allow read, write: if false;
+    }
+
+    // Metadata Collection (Protected - Access via Server Backend Only)
+    match /pawako_metadata/{metaId} {
+      allow read, write: if false;
+    }
+  }
+}

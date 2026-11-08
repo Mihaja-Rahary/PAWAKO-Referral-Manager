@@ -1,0 +1,8 @@
+{
+  "name": "PAWAKO Referral Manager",
+  "description": "Système centralisé de gestion des parrainages, du recrutement et du suivi des agents PAWAKO connecté à Discord.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

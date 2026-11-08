@@ -1,0 +1,305 @@
+{
+  "entities": {
+    "Candidate": {
+      "title": "Candidate",
+      "description": "Dossier candidat pour le recrutement et suivi des agents VA Chatting ou VA Instagram.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Identifiant unique du candidat"
+        },
+        "discordUserId": {
+          "type": "string",
+          "description": "Discord Snowflake User ID"
+        },
+        "username": {
+          "type": "string",
+          "description": "Nom d'utilisateur Discord"
+        },
+        "displayName": {
+          "type": "string",
+          "description": "Nom d'affichage Discord ou nom complet"
+        },
+        "avatar": {
+          "type": "string",
+          "description": "URL de l'avatar Discord"
+        },
+        "vaType": {
+          "type": "string",
+          "enum": ["CHATTEUR", "INSTAGRAM"],
+          "description": "Activité du candidat (VA Chatting ou VA Instagram)"
+        },
+        "adminStatus": {
+          "type": "string",
+          "enum": ["EN_ATTENTE", "ACCEPTE", "REFUSE", "ABANDONNE"],
+          "description": "Statut administratif du dossier"
+        },
+        "operationalStatus": {
+          "type": "string",
+          "enum": ["RECRUTEMENT", "FORMATION", "SIMULATION", "VALIDE", "PRODUCTION", "INACTIF"],
+          "description": "Statut opérationnel en cours"
+        },
+        "referrerId": {
+          "type": "string",
+          "description": "ID du parrain associé"
+        },
+        "referrerDiscordUserId": {
+          "type": "string",
+          "description": "Discord ID du parrain"
+        },
+        "referrerName": {
+          "type": "string",
+          "description": "Nom du parrain"
+        },
+        "currentServer": {
+          "type": "string",
+          "enum": ["RECRUTEMENT", "FORMATION", "PRODUCTION_CHATTING", "PRODUCTION_INSTAGRAM"],
+          "description": "Serveur Discord actuel parmi les 4 serveurs PAWAKO"
+        },
+        "hasAnomaly": {
+          "type": "boolean",
+          "description": "Indicateur d'anomalie ou incohérence de rôle Discord"
+        },
+        "anomalyReason": {
+          "type": "string",
+          "description": "Détails de l'anomalie détectée"
+        },
+        "arrivalDate": {
+          "type": "string",
+          "description": "Date d'arrivée sur Discord (ISO 8601)"
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "Horodatage de création"
+        },
+        "updatedAt": {
+          "type": "string",
+          "description": "Dernière mise à jour"
+        }
+      },
+      "required": ["id", "discordUserId", "username", "vaType", "adminStatus", "operationalStatus", "createdAt", "updatedAt"]
+    },
+    "Referrer": {
+      "title": "Referrer",
+      "description": "Profil parrain agréé avec lien d'invitation Discord unique.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Identifiant unique du parrain"
+        },
+        "discordUserId": {
+          "type": "string",
+          "description": "Discord Snowflake ID du parrain"
+        },
+        "discordUsername": {
+          "type": "string",
+          "description": "Nom d'utilisateur Discord"
+        },
+        "discordDisplayName": {
+          "type": "string",
+          "description": "Nom d'affichage du parrain"
+        },
+        "inviteCode": {
+          "type": "string",
+          "description": "Code unique de parrainage (ex: PWK-ALEX-42)"
+        },
+        "inviteUrl": {
+          "type": "string",
+          "description": "URL d'invitation Discord personnalisée"
+        },
+        "usesCount": {
+          "type": "number",
+          "description": "Nombre de clics ou arrivées enregistrées"
+        },
+        "isActive": {
+          "type": "boolean",
+          "description": "Statut actif ou désactivé"
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "Date de création du lien"
+        }
+      },
+      "required": ["id", "discordUserId", "discordUsername", "inviteCode", "inviteUrl", "isActive", "createdAt"]
+    },
+    "User": {
+      "title": "User",
+      "description": "Utilisateur authentifié PAWAKO avec contrôle RBAC strict.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Discord Snowflake ID de l'utilisateur"
+        },
+        "username": {
+          "type": "string",
+          "description": "Nom d'utilisateur Discord"
+        },
+        "displayName": {
+          "type": "string",
+          "description": "Nom d'affichage"
+        },
+        "avatar": {
+          "type": "string",
+          "description": "URL avatar"
+        },
+        "role": {
+          "type": "string",
+          "enum": ["ADMINISTRATEUR", "RESPONSABLE", "PARRAIN"],
+          "description": "Rôle RBAC vérifié côté serveur"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["ACTIVE", "SUSPENDED"],
+          "description": "Statut du compte"
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "Date de première connexion"
+        },
+        "lastLoginAt": {
+          "type": "string",
+          "description": "Dernière authentification"
+        }
+      },
+      "required": ["id", "username", "displayName", "role", "status", "createdAt"]
+    },
+    "StatusHistoryEntry": {
+      "title": "StatusHistoryEntry",
+      "description": "Historique chronologique et audit inaltérable des statuts.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "ID de l'événement d'historique"
+        },
+        "candidateId": {
+          "type": "string",
+          "description": "ID du candidat concerné"
+        },
+        "fromAdminStatus": {
+          "type": "string",
+          "description": "Ancien statut administratif"
+        },
+        "toAdminStatus": {
+          "type": "string",
+          "description": "Nouveau statut administratif"
+        },
+        "fromOperationalStatus": {
+          "type": "string",
+          "description": "Ancien statut opérationnel"
+        },
+        "toOperationalStatus": {
+          "type": "string",
+          "description": "Nouveau statut opérationnel"
+        },
+        "authorName": {
+          "type": "string",
+          "description": "Auteur du changement"
+        },
+        "reason": {
+          "type": "string",
+          "description": "Motif obligatoire tracé"
+        },
+        "isConfidential": {
+          "type": "boolean",
+          "description": "Vrai si motif réservé à la Direction"
+        },
+        "timestamp": {
+          "type": "string",
+          "description": "Horodatage de la transition"
+        }
+      },
+      "required": ["id", "candidateId", "authorName", "reason", "timestamp"]
+    },
+    "DiscordRoleMapping": {
+      "title": "DiscordRoleMapping",
+      "description": "Association d'un Role ID Discord Snowflake à un statut PAWAKO.",
+      "type": "object",
+      "properties": {
+        "serverId": {
+          "type": "string",
+          "enum": ["RECRUTEMENT", "FORMATION", "PRODUCTION_CHATTING", "PRODUCTION_INSTAGRAM"],
+          "description": "Serveur Discord cible"
+        },
+        "roleType": {
+          "type": "string",
+          "description": "Rôle fonctionnel PAWAKO"
+        },
+        "discordRoleId": {
+          "type": "string",
+          "description": "Discord Role ID Snowflake numérique"
+        },
+        "roleName": {
+          "type": "string",
+          "description": "Libellé lisible du rôle"
+        }
+      },
+      "required": ["serverId", "roleType", "discordRoleId"]
+    },
+    "AuditLog": {
+      "title": "AuditLog",
+      "description": "Journal d'audit de sécurité des actions administratives.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "ID unique du log"
+        },
+        "action": {
+          "type": "string",
+          "description": "Type d'action effectuée"
+        },
+        "actorUserId": {
+          "type": "string",
+          "description": "ID de l'acteur"
+        },
+        "actorName": {
+          "type": "string",
+          "description": "Nom de l'acteur"
+        },
+        "targetType": {
+          "type": "string",
+          "description": "Type de ressource cible"
+        },
+        "targetId": {
+          "type": "string",
+          "description": "ID de la cible"
+        },
+        "timestamp": {
+          "type": "string",
+          "description": "Horodatage de l'action"
+        }
+      },
+      "required": ["id", "action", "actorUserId", "actorName", "timestamp"]
+    }
+  },
+  "firestore": {
+    "/pawako_candidates/{candidateId}": {
+      "schema": { "$ref": "#/entities/Candidate" },
+      "description": "Collection centrale des candidats PAWAKO."
+    },
+    "/pawako_referrers/{referrerId}": {
+      "schema": { "$ref": "#/entities/Referrer" },
+      "description": "Collection des parrains agréés et de leurs liens d'invitation uniques."
+    },
+    "/pawako_users/{userId}": {
+      "schema": { "$ref": "#/entities/User" },
+      "description": "Profils des utilisateurs et contrôle RBAC."
+    },
+    "/pawako_status_history/{historyId}": {
+      "schema": { "$ref": "#/entities/StatusHistoryEntry" },
+      "description": "Historique complet et traçabilité des transitions de statuts."
+    },
+    "/pawako_discord_role_mappings/{mappingId}": {
+      "schema": { "$ref": "#/entities/DiscordRoleMapping" },
+      "description": "Correspondances configurables entre Role IDs Discord et statuts PAWAKO pour les 4 serveurs."
+    },
+    "/pawako_audit_logs/{logId}": {
+      "schema": { "$ref": "#/entities/AuditLog" },
+      "description": "Journal d'audit inaltérable pour la Direction."
+    }
+  }
+}

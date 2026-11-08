@@ -1,0 +1,105 @@
+{
+  "users": [],
+  "referrers": [],
+  "candidates": [],
+  "status_history": [],
+  "referral_attributions_history": [],
+  "discord_servers": [
+    {
+      "id": "RECRUTEMENT",
+      "guildId": "",
+      "name": "PAWAKO — Serveur Recrutement",
+      "description": "Accueil de tous les candidats, orientation VA Chatteurs et VA Instagram.",
+      "inviteBaseUrl": "https://discord.gg/pawako-recrutement",
+      "memberCount": 0,
+      "botConnected": false,
+      "lastSyncAt": "2026-11-08T00:00:00.000Z"
+    },
+    {
+      "id": "FORMATION",
+      "guildId": "",
+      "name": "PAWAKO — Serveur Formation",
+      "description": "Réservé exclusivement aux VA Chatteurs en cours de formation.",
+      "inviteBaseUrl": "https://discord.gg/pawako-formation",
+      "memberCount": 0,
+      "botConnected": false,
+      "lastSyncAt": "2026-11-08T00:00:00.000Z"
+    },
+    {
+      "id": "PRODUCTION_CHATTING",
+      "guildId": "",
+      "name": "PAWAKO — Serveur Production VA Chatting",
+      "description": "Réservé aux VA Chatteurs validés en production active.",
+      "inviteBaseUrl": "https://discord.gg/pawako-prod-chatting",
+      "memberCount": 0,
+      "botConnected": false,
+      "lastSyncAt": "2026-11-08T00:00:00.000Z"
+    },
+    {
+      "id": "PRODUCTION_INSTAGRAM",
+      "guildId": "",
+      "name": "PAWAKO — Serveur Production VA Instagram",
+      "description": "Réservé aux VA Instagram acceptés en production active.",
+      "inviteBaseUrl": "https://discord.gg/pawako-prod-instagram",
+      "memberCount": 0,
+      "botConnected": false,
+      "lastSyncAt": "2026-11-08T00:00:00.000Z"
+    }
+  ],
+  "discord_role_mappings": [
+    {
+      "serverId": "RECRUTEMENT",
+      "roleType": "CANDIDAT",
+      "discordRoleId": "",
+      "roleName": "Candidat (En attente)"
+    },
+    {
+      "serverId": "RECRUTEMENT",
+      "roleType": "CANDIDAT_ACCEPTE",
+      "discordRoleId": "",
+      "roleName": "Candidat Accepté"
+    },
+    {
+      "serverId": "RECRUTEMENT",
+      "roleType": "CANDIDAT_REFUSE",
+      "discordRoleId": "",
+      "roleName": "Candidat Refusé"
+    },
+    {
+      "serverId": "FORMATION",
+      "roleType": "EN_FORMATION",
+      "discordRoleId": "",
+      "roleName": "En Formation"
+    },
+    {
+      "serverId": "FORMATION",
+      "roleType": "EN_SIMULATION",
+      "discordRoleId": "",
+      "roleName": "En Simulation"
+    },
+    {
+      "serverId": "FORMATION",
+      "roleType": "VA_VALIDE",
+      "discordRoleId": "",
+      "roleName": "VA Validé"
+    },
+    {
+      "serverId": "PRODUCTION_CHATTING",
+      "roleType": "VA_PRODUCTION",
+      "discordRoleId": "",
+      "roleName": "VA Chatteur Production"
+    },
+    {
+      "serverId": "PRODUCTION_INSTAGRAM",
+      "roleType": "VA_PRODUCTION",
+      "discordRoleId": "",
+      "roleName": "VA Instagram Production"
+    }
+  ],
+  "discord_memberships": [],
+  "recruitment_events": [],
+  "audit_logs": [],
+  "meta": {
+    "initialAdminClaimed": false
+  }
+}
