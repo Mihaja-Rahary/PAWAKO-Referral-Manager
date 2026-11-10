@@ -151,19 +151,98 @@ export class FirestoreRepository {
 
   /**
    * Tente d'acquérir atomiquement un verrou de traitement d'événement Webhook dans Firestore.
-   * Empêche deux instances Worker de traiter simultanément le même événement.
+   * Gère les verrous PROCESSING expirés avec reprise atomique et associe un ownerId unique.
    */
-  async lockWebhookEvent(eventId: string, expiresAt: number): Promise<{ acquired: boolean; reason?: string }> {
+  async lockWebhookEvent(
+    eventId: string,
+    ownerId: string,
+    ttlMs: number = 60000
+  ): Promise<{ acquired: boolean; reason?: string }> {
+    const now = Date.now();
     try {
-      const existing = await this.client.getDocument<{ status: string; expiresAt: number }>('pawako_consumed_webhooks', eventId);
-      if (existing) {
-        if (existing.status === 'COMPLETED') {
-          return { acquired: false, reason: 'Événement webhook déjà traité avec succès (anti-rejeu).' };
+      const existing = await this.client.getDocument<{
+        eventId: string;
+        status: string;
+        ownerId: string;
+        expiresAt: number;
+        _updateTime?: string;
+      }>('pawako_consumed_webhooks', eventId);
+
+      if (!existing) {
+        try {
+          await this.client.setDocument(
+            'pawako_consumed_webhooks',
+            eventId,
+            {
+              eventId,
+              status: 'PROCESSING',
+              ownerId,
+              lockedAt: new Date().toISOString(),
+              expiresAt: now + ttlMs,
+            },
+            { precondition: { exists: false } }
+          );
+          return { acquired: true };
+        } catch {
+          // Document créé simultanément par une autre instance Worker
+          return { acquired: false, reason: 'Conflit d écriture concurrent sur l événement webhook.' };
         }
-        // Si encore en cours de traitement et non expiré (< 60 secondes)
-        if (existing.status === 'PROCESSING' && existing.expiresAt > Date.now()) {
+      }
+
+      if (existing.status === 'COMPLETED') {
+        return { acquired: false, reason: 'Événement webhook déjà traité avec succès (anti-rejeu).' };
+      }
+
+      if (existing.status === 'PROCESSING') {
+        if (existing.expiresAt > now) {
           return { acquired: false, reason: 'Événement webhook en cours de traitement par une autre instance.' };
         }
+
+        // Le verrou PROCESSING précédent a expiré : reprise atomique par la nouvelle tentative
+        try {
+          await this.client.setDocument(
+            'pawako_consumed_webhooks',
+            eventId,
+            {
+              eventId,
+              status: 'PROCESSING',
+              ownerId,
+              lockedAt: new Date().toISOString(),
+              expiresAt: now + ttlMs,
+            },
+            { precondition: { updateTime: existing._updateTime } }
+          );
+          return { acquired: true };
+        } catch {
+          return { acquired: false, reason: 'Conflit concurrent lors de la reprise du verrou webhook expiré.' };
+        }
+      }
+
+      return { acquired: false, reason: 'État de verrou webhook inconnu.' };
+    } catch (err: any) {
+      return { acquired: false, reason: `Erreur d acquisition du verrou : ${err.message}` };
+    }
+  }
+
+  /**
+   * Marque l'événement comme COMPLETED uniquement si le verrou appartient toujours à l'ownerId actuel
+   * et via une précondition sur updateTime pour empêcher tout conflit concurrent.
+   */
+  async completeWebhookEvent(
+    eventId: string,
+    ownerId: string,
+    details?: Record<string, any>
+  ): Promise<boolean> {
+    try {
+      const existing = await this.client.getDocument<{
+        ownerId: string;
+        status: string;
+        lockedAt: string;
+        _updateTime?: string;
+      }>('pawako_consumed_webhooks', eventId);
+
+      if (!existing || existing.ownerId !== ownerId || existing.status !== 'PROCESSING') {
+        return false;
       }
 
       await this.client.setDocument(
@@ -171,40 +250,41 @@ export class FirestoreRepository {
         eventId,
         {
           eventId,
-          status: 'PROCESSING',
-          lockedAt: new Date().toISOString(),
-          expiresAt,
+          status: 'COMPLETED',
+          ownerId,
+          lockedAt: existing.lockedAt,
+          completedAt: new Date().toISOString(),
+          expiresAt: Date.now() + 86400000, // Conservation 24h avant purge automatique
+          details: details || {},
         },
-        { precondition: { exists: false } }
+        { precondition: { updateTime: existing._updateTime } }
       );
-      return { acquired: true };
+      return true;
     } catch {
-      // Précondition échouée : document créé simultanément par une autre instance
-      return { acquired: false, reason: 'Conflit d écriture concurrent sur l événement webhook.' };
+      return false;
     }
   }
 
   /**
-   * Marque définitivement l'événement Webhook comme COMPLETED après succès du traitement métier.
+   * Libère le verrou en cas d'erreur métier uniquement si l'ownerId correspond toujours.
    */
-  async completeWebhookEvent(eventId: string, details?: Record<string, any>): Promise<void> {
-    await this.client.setDocument('pawako_consumed_webhooks', eventId, {
-      eventId,
-      status: 'COMPLETED',
-      completedAt: new Date().toISOString(),
-      expiresAt: Date.now() + 86400000, // Conservation 24h avant purge automatique
-      details: details || {},
-    });
-  }
-
-  /**
-   * Libère le verrou en cas d'échec du traitement métier afin de permettre une nouvelle tentative.
-   */
-  async releaseWebhookEvent(eventId: string): Promise<void> {
+  async releaseWebhookEvent(eventId: string, ownerId: string): Promise<boolean> {
     try {
-      await this.client.deleteDocument('pawako_consumed_webhooks', eventId);
+      const existing = await this.client.getDocument<{
+        ownerId: string;
+        status: string;
+        _updateTime?: string;
+      }>('pawako_consumed_webhooks', eventId);
+
+      if (!existing || existing.ownerId !== ownerId || existing.status !== 'PROCESSING') {
+        return false;
+      }
+
+      return await this.client.deleteDocument('pawako_consumed_webhooks', eventId, {
+        precondition: { updateTime: existing._updateTime },
+      });
     } catch {
-      // Ignoré si déjà nettoyé
+      return false;
     }
   }
 
@@ -297,6 +377,8 @@ export class FirestoreRepository {
             initialAdminClaimed: true,
             initialAdminClaimedAt: now,
             initialAdminDiscordUserId: user.id,
+            activeAdminDiscordUserIds: [user.id],
+            lastUpdated: now,
           },
           { precondition: { exists: false } }
         );
@@ -342,6 +424,77 @@ export class FirestoreRepository {
     return newUser;
   }
 
+  /**
+   * Met à jour de façon atomique la liste des administrateurs actifs dans pawako_metadata/system.
+   * Utilise une précondition Firestore sur _updateTime pour empêcher toute course concurrente
+   * qui tenterait de supprimer ou suspendre simultanément le dernier administrateur.
+   */
+  private async syncActiveAdminState(
+    targetUserId: string,
+    action: 'ADD' | 'REMOVE'
+  ): Promise<void> {
+    const maxRetries = 3;
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      const meta = await this.client.getDocument<{
+        initialAdminClaimed?: boolean;
+        initialAdminClaimedAt?: string | null;
+        initialAdminDiscordUserId?: string | null;
+        activeAdminDiscordUserIds?: string[];
+        _updateTime?: string;
+      }>('pawako_metadata', 'system');
+
+      let currentAdmins: string[] = Array.isArray(meta?.activeAdminDiscordUserIds)
+        ? meta.activeAdminDiscordUserIds
+        : [];
+
+      // Si le tableau n'est pas encore initialisé dans les métadonnées, le synchroniser depuis la collection users
+      if (currentAdmins.length === 0) {
+        const allUsers = await this.getUsers();
+        currentAdmins = allUsers
+          .filter(u => u.role === 'ADMINISTRATEUR' && u.status === 'ACTIVE')
+          .map(u => u.id);
+        if (currentAdmins.length === 0 && meta?.initialAdminDiscordUserId) {
+          currentAdmins = [meta.initialAdminDiscordUserId];
+        }
+      }
+
+      let updatedAdmins: string[];
+      if (action === 'REMOVE') {
+        const remaining = currentAdmins.filter(id => id !== targetUserId);
+        if (remaining.length === 0) {
+          throw new Error('Opération impossible : vous ne pouvez ni rétrograder ni désactiver le dernier administrateur actif du système.');
+        }
+        updatedAdmins = remaining;
+      } else {
+        updatedAdmins = Array.from(new Set([...currentAdmins, targetUserId]));
+      }
+
+      try {
+        const updatePayload = {
+          initialAdminClaimed: Boolean(meta?.initialAdminClaimed),
+          initialAdminClaimedAt: meta?.initialAdminClaimedAt || null,
+          initialAdminDiscordUserId: meta?.initialAdminDiscordUserId || null,
+          activeAdminDiscordUserIds: updatedAdmins,
+          lastUpdated: new Date().toISOString(),
+        };
+
+        if (meta?._updateTime) {
+          await this.client.setDocument('pawako_metadata', 'system', updatePayload, {
+            precondition: { updateTime: meta._updateTime },
+          });
+        } else {
+          await this.client.setDocument('pawako_metadata', 'system', updatePayload);
+        }
+        return; // Succès atomique
+      } catch (err: any) {
+        if (attempt === maxRetries - 1) {
+          throw new Error(`Conflit d écriture concurrent sur la vérification de l administrateur : ${err.message}`);
+        }
+        await new Promise(r => setTimeout(r, 60 * (attempt + 1)));
+      }
+    }
+  }
+
   async updateUserRole(
     userId: string,
     newRole: UserRole,
@@ -351,12 +504,14 @@ export class FirestoreRepository {
     const user = await this.getUserById(userId);
     if (!user) return null;
 
-    // Protection : interdire la rétrogradation du dernier administrateur actif
+    // Protection atomique : synchroniser l'état des administrateurs actifs
     if (user.role === 'ADMINISTRATEUR' && newRole !== 'ADMINISTRATEUR') {
-      const allUsers = await this.getUsers();
-      const activeAdmins = allUsers.filter(u => u.role === 'ADMINISTRATEUR' && u.status === 'ACTIVE' && u.id !== userId);
-      if (activeAdmins.length === 0) {
-        throw new Error('Impossible de rétrograder le dernier administrateur actif du système.');
+      if (user.status === 'ACTIVE') {
+        await this.syncActiveAdminState(userId, 'REMOVE');
+      }
+    } else if (user.role !== 'ADMINISTRATEUR' && newRole === 'ADMINISTRATEUR') {
+      if (user.status === 'ACTIVE') {
+        await this.syncActiveAdminState(userId, 'ADD');
       }
     }
 
@@ -384,12 +539,12 @@ export class FirestoreRepository {
     const user = await this.getUserById(userId);
     if (!user) return null;
 
-    // Protection : interdire la désactivation ou suspension du dernier administrateur actif
-    if (user.role === 'ADMINISTRATEUR' && newStatus !== 'ACTIVE') {
-      const allUsers = await this.getUsers();
-      const activeAdmins = allUsers.filter(u => u.role === 'ADMINISTRATEUR' && u.status === 'ACTIVE' && u.id !== userId);
-      if (activeAdmins.length === 0) {
-        throw new Error('Impossible de désactiver ou suspendre le dernier administrateur actif du système.');
+    // Protection atomique : synchroniser l'état des administrateurs actifs lors de suspension/réactivation
+    if (user.role === 'ADMINISTRATEUR') {
+      if (user.status === 'ACTIVE' && newStatus !== 'ACTIVE') {
+        await this.syncActiveAdminState(userId, 'REMOVE');
+      } else if (user.status !== 'ACTIVE' && newStatus === 'ACTIVE') {
+        await this.syncActiveAdminState(userId, 'ADD');
       }
     }
 

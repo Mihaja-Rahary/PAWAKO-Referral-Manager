@@ -399,6 +399,15 @@ class DatabaseService {
     const user = this.getUserById(userId);
     if (!user) return null;
     const oldRole = user.role;
+    if (oldRole === newRole) return user;
+
+    if (oldRole === 'ADMINISTRATEUR' && newRole !== 'ADMINISTRATEUR') {
+      const activeAdmins = this.data.users.filter(u => u.role === 'ADMINISTRATEUR' && u.status === 'ACTIVE');
+      if (activeAdmins.length <= 1) {
+        throw new Error('Action refusée : impossible de rétrograder le dernier administrateur actif du système.');
+      }
+    }
+
     user.role = newRole;
     this.saveDatabase();
 

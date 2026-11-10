@@ -2,14 +2,16 @@
  * PAWAKO Referral Manager — Cloudflare Worker API Backend (pawako-api)
  * Déployable sur l'offre gratuite Cloudflare Workers (workers.dev)
  * Persistance stricte sur Cloud Firestore via REST API
+ * Sécurité durcie : Zéro secret par défaut, CORS strict, Webhooks anti-rejeu atomiques,
+ * Protection du dernier administrateur, Réponses OAuth sans fuite d'information.
  */
 
 import { Hono } from 'hono';
-import { cors } from 'hono/cors';
 import { FirestoreRestClient } from '../server/firestoreRest';
 import { FirestoreRepository } from '../server/firestoreRepository';
 import {
   AdminStatus,
+  Candidate,
   CandidateStatus,
   DiscordServerType,
   OperationalStatus,
@@ -24,7 +26,7 @@ import {
   verifyAndConsumeOAuthState,
   createSignedSessionToken,
   verifySignedSessionToken,
-  validateWebhookTimestampAndNonce,
+  validateWebhookTimestampAndEventId,
 } from '../server/cryptoUtils';
 
 export interface Env {
@@ -49,6 +51,17 @@ export interface Env {
 
 const app = new Hono<{ Bindings: Env }>();
 
+// Échappement HTML sécurisé pour toute injection dynamique
+function escapeHtml(str: any): string {
+  if (str === null || str === undefined) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
 // Helper pour initialiser le repository Firestore depuis l'environnement du Worker
 function getRepository(env: Env): FirestoreRepository {
   const projectId = env.FIREBASE_PROJECT_ID?.trim() || 'gen-lang-client-0255826431';
@@ -70,49 +83,87 @@ function getRepository(env: Env): FirestoreRepository {
   return new FirestoreRepository(restClient);
 }
 
-// Configuration CORS dynamique
-app.use('*', async (c, next) => {
-  const origin = c.req.header('Origin') || '';
-  const frontendUrl = c.env.FRONTEND_URL?.trim() || '';
+// -----------------------------------------------------------------------------
+// 1. GESTION STRICTE DU SECRET DE SESSION (AUCUN FALLBACK PRÉVISIBLE)
+// -----------------------------------------------------------------------------
 
-  // Autorise le frontend Firebase Hosting configuré, ou les domaines de développement/staging
-  const isAllowedOrigin =
-    (frontendUrl && origin === frontendUrl) ||
-    origin.endsWith('.web.app') ||
-    origin.endsWith('.firebaseapp.com') ||
-    origin.endsWith('.run.app') ||
-    origin.includes('localhost') ||
-    origin.includes('127.0.0.1');
-
-  const corsHandler = cors({
-    origin: isAllowedOrigin ? origin : '*',
-    credentials: true,
-    allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowHeaders: [
-      'Origin',
-      'Content-Type',
-      'Accept',
-      'Authorization',
-      'X-JARVIS-Secret',
-      'X-JARVIS-Timestamp',
-      'X-JARVIS-Nonce',
-      'X-Pawako-Session',
-      'X-Pawako-User-Id',
-    ],
-  });
-
-  return corsHandler(c, next);
-});
-
-function getSessionSecret(env: Env): string {
-  const secret = (env.SESSION_SECRET || env.DISCORD_CLIENT_SECRET || '').trim();
-  if (secret.length >= 32) return secret;
-  return secret || 'pawako_default_secret_key_minimum_32_chars_2026';
+function getValidatedSessionSecret(env: Env): string {
+  const secret = (env.SESSION_SECRET || '').trim();
+  if (!secret || secret.length < 32) {
+    throw new Error('Configuration serveur incomplète : SESSION_SECRET manquant ou inférieur à 32 caractères dans les secrets Cloudflare.');
+  }
+  return secret;
 }
+
+// -----------------------------------------------------------------------------
+// 2. CONFIGURATION CORS STRICTE (RESTRICTION AUX SEULES ORIGINES AUTORISÉES)
+// -----------------------------------------------------------------------------
+
+app.use('*', async (c, next) => {
+  const origin = c.req.header('Origin');
+
+  // Si aucune en-tête Origin n'est fournie (requête server-to-server, webhook, curl direct sans Origin)
+  if (!origin) {
+    return next();
+  }
+
+  const frontendUrl = (c.env.FRONTEND_URL || '').trim();
+  let configuredFrontendOrigin = '';
+  if (frontendUrl) {
+    try {
+      configuredFrontendOrigin = new URL(frontendUrl).origin;
+    } catch {
+      configuredFrontendOrigin = frontendUrl;
+    }
+  }
+
+  // Origines autorisées : strictement l'URL frontend configurée, ou localhost en développement
+  const isDevOrigin =
+    origin === 'http://localhost:3000' ||
+    origin === 'http://127.0.0.1:3000' ||
+    origin === 'http://localhost:5173' ||
+    origin === 'http://127.0.0.1:5173';
+
+  const isAllowedOrigin = (configuredFrontendOrigin && origin === configuredFrontendOrigin) || isDevOrigin;
+
+  // Traitement des requêtes pré-vol (OPTIONS)
+  if (c.req.method === 'OPTIONS') {
+    if (!isAllowedOrigin) {
+      return c.json({ error: 'Origine CORS non autorisée' }, 403);
+    }
+    return new Response(null, {
+      status: 204,
+      headers: {
+        'Access-Control-Allow-Origin': origin,
+        'Access-Control-Allow-Credentials': 'true',
+        'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
+        'Access-Control-Allow-Headers':
+          'Origin, Content-Type, Accept, Authorization, X-JARVIS-Secret, X-JARVIS-Timestamp, X-JARVIS-Nonce, X-Pawako-Session, X-Pawako-User-Id',
+        'Access-Control-Max-Age': '86400',
+      },
+    });
+  }
+
+  // Requête standard d'une origine non autorisée : refus immédiat
+  if (!isAllowedOrigin) {
+    return c.json({ error: 'Origine CORS non autorisée' }, 403);
+  }
+
+  await next();
+
+  c.res.headers.set('Access-Control-Allow-Origin', origin);
+  c.res.headers.set('Access-Control-Allow-Credentials', 'true');
+});
 
 // Helper pour extraire et valider l'utilisateur authentifié
 async function getAuthenticatedUser(c: any, repo: FirestoreRepository): Promise<User | null> {
-  const secret = getSessionSecret(c.env);
+  let secret: string;
+  try {
+    secret = getValidatedSessionSecret(c.env);
+  } catch {
+    // Si SESSION_SECRET n'est pas configuré, refuser silencieusement toute session non sécurisée
+    return null;
+  }
 
   // 1. En-tête Authorization: Bearer <token>
   const authHeader = c.req.header('Authorization') || '';
@@ -144,14 +195,54 @@ async function getAuthenticatedUser(c: any, repo: FirestoreRepository): Promise<
 
   const user = await repo.getUserById(verification.payload.userId);
   if (!user || user.status !== 'ACTIVE') {
-    return null; // Révocation immédiate si l'utilisateur est inexistant ou désactivé
+    return null; // Révocation immédiate si l'utilisateur est inexistant ou non actif
   }
 
   return user;
 }
 
 // -----------------------------------------------------------------------------
-// 1. SANTÉ & VÉRIFICATION DU WORKER
+// 3. WHITELIST STRICTE POUR LE PORTAIL PARRAIN
+// -----------------------------------------------------------------------------
+
+export interface ParrainCandidateView {
+  id: string;
+  discordUserId: string;
+  username: string;
+  displayName: string;
+  avatar: string | null;
+  vaType: VAType;
+  adminStatus: AdminStatus;
+  operationalStatus: OperationalStatus;
+  status: CandidateStatus;
+  currentServer: DiscordServerType | 'AUCUN';
+  arrivalDate: string;
+  refusalReason: string | null;
+  productionDate: string | null;
+  createdAt: string;
+}
+
+export function toParrainCandidateView(c: Candidate): ParrainCandidateView {
+  return {
+    id: c.id,
+    discordUserId: c.discordUserId,
+    username: c.username,
+    displayName: c.displayName,
+    avatar: c.avatar || null,
+    vaType: c.vaType,
+    adminStatus: c.adminStatus,
+    operationalStatus: c.operationalStatus,
+    status: c.status,
+    currentServer: c.currentServer,
+    arrivalDate: c.arrivalDate,
+    refusalReason: c.adminStatus === 'REFUSE' ? (c.refusalReason || null) : null,
+    productionDate: c.productionDate || null,
+    createdAt: c.createdAt,
+  };
+}
+
+// -----------------------------------------------------------------------------
+// 4. SANTÉ DU WORKER
 // -----------------------------------------------------------------------------
 
 app.get('/health', c => {
@@ -177,15 +268,21 @@ app.get('/api/health', c => {
 });
 
 // -----------------------------------------------------------------------------
-// 2. AUTHENTIFICATION & SESSIONS DISCORD OAUTH2
+// 5. AUTHENTIFICATION & SESSIONS DISCORD OAUTH2
 // -----------------------------------------------------------------------------
 
 app.get('/api/auth/url', async c => {
+  let signingSecret: string;
+  try {
+    signingSecret = getValidatedSessionSecret(c.env);
+  } catch (err: any) {
+    return c.json({ error: err.message }, 500);
+  }
+
   const portal = c.req.query('portal') === 'parrain' ? 'parrain' : 'admin';
   const clientId = c.env.DISCORD_CLIENT_ID?.trim() || '';
-  const signingSecret = c.env.DISCORD_CLIENT_SECRET || c.env.SESSION_SECRET || 'pawako_oauth_salt_2026';
 
-  // Calcule l'URL de redirection par défaut vers le Worker
+  // Calcule l'URL de redirection vers le Worker
   const workerOrigin = new URL(c.req.url).origin;
   const redirectUri = c.env.DISCORD_REDIRECT_URI?.trim() || `${workerOrigin}/auth/callback`;
 
@@ -216,11 +313,27 @@ app.get('/api/auth/url', async c => {
 });
 
 const handleAuthCallback = async (c: any) => {
+  let signingSecret: string;
+  try {
+    signingSecret = getValidatedSessionSecret(c.env);
+  } catch {
+    return c.html(`
+      <!DOCTYPE html>
+      <html>
+        <head><title>Erreur Serveur — PAWAKO</title></head>
+        <body style="font-family: system-ui, sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; background: #0f172a; color: white;">
+          <div style="background: #1e293b; padding: 32px; border-radius: 14px; border: 1px solid #dc2626; text-align: center; max-width: 440px;">
+            <h3 style="margin: 0 0 8px 0; color: #f87171;">Configuration serveur incomplète</h3>
+            <p style="color: #cbd5e1; font-size: 13px;">Le secret de session serveur (SESSION_SECRET) n est pas configuré. Veuillez contacter l administrateur.</p>
+          </div>
+        </body>
+      </html>
+    `, 500);
+  }
+
   const code = c.req.query('code');
   const state = c.req.query('state') || '';
   const error = c.req.query('error');
-  const errorDescription = c.req.query('error_description');
-  const signingSecret = c.env.DISCORD_CLIENT_SECRET || c.env.SESSION_SECRET || 'pawako_oauth_salt_2026';
 
   const repo = getRepository(c.env);
 
@@ -234,11 +347,21 @@ const handleAuthCallback = async (c: any) => {
   const cookiePortalMatch = cookieHeader.match(/oauth_portal=([^;]+)/);
   const portalFromCookie = cookiePortalMatch ? cookiePortalMatch[1] : null;
 
-  let portal: 'admin' | 'parrain' = stateCheck.valid && stateCheck.portal
-    ? stateCheck.portal
-    : (portalFromCookie === 'parrain' || state.startsWith('parrain_') ? 'parrain' : 'admin');
+  let portal: 'admin' | 'parrain' =
+    stateCheck.valid && stateCheck.portal
+      ? stateCheck.portal
+      : portalFromCookie === 'parrain' || state.startsWith('parrain_')
+      ? 'parrain'
+      : 'admin';
 
   const frontendUrl = c.env.FRONTEND_URL?.trim() || 'https://gen-lang-client-0255826431.web.app';
+  let targetOrigin = '';
+  try {
+    targetOrigin = new URL(frontendUrl).origin;
+  } catch {
+    targetOrigin = 'https://gen-lang-client-0255826431.web.app';
+  }
+
   const portalLoginUrl = `${frontendUrl}/${portal}/login`;
   const portalDestUrl = `${frontendUrl}/${portal}`;
 
@@ -250,9 +373,21 @@ const handleAuthCallback = async (c: any) => {
         <body style="font-family: system-ui, sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; background: #f8fafc;">
           <div style="background: white; padding: 28px; border-radius: 12px; border: 1px solid #e2e8f0; text-align: center; max-width: 440px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);">
             <h3 style="color: #0f172a; margin-top: 0; font-size: 18px;">Autorisation Discord annulée</h3>
-            <p style="color: #64748b; font-size: 14px;">${errorDescription || error || 'Code manquant'}</p>
-            <button onclick="if(window.opener){window.close();}else{window.location.href='${portalLoginUrl}';}" style="background: #0f172a; color: white; border: none; padding: 9px 18px; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 500;">Retour à la page de connexion</button>
+            <p style="color: #64748b; font-size: 14px;">L autorisation demandée a été annulée ou refusée.</p>
+            <button id="btn-back" style="background: #0f172a; color: white; border: none; padding: 9px 18px; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 500;">Retour à la page de connexion</button>
           </div>
+          <script>
+            const targetOrigin = ${JSON.stringify(targetOrigin)};
+            const loginUrl = ${JSON.stringify(portalLoginUrl)};
+            document.getElementById('btn-back').addEventListener('click', function() {
+              if (window.opener) {
+                window.opener.postMessage({ type: 'OAUTH_AUTH_CANCELLED' }, targetOrigin);
+                window.close();
+              } else {
+                window.location.href = loginUrl;
+              }
+            });
+          </script>
         </body>
       </html>
     `, 400);
@@ -268,9 +403,21 @@ const handleAuthCallback = async (c: any) => {
           <div style="background: #1e293b; padding: 32px; border-radius: 14px; border: 1px solid #dc2626; text-align: center; max-width: 440px;">
             <div style="width: 48px; height: 48px; background: rgba(220,38,38,0.2); color: #f87171; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 16px auto; font-size: 24px;">✕</div>
             <h3 style="margin: 0 0 8px 0; color: #f87171;">Échec de sécurité OAuth2</h3>
-            <p style="color: #cbd5e1; font-size: 13px;">${stateCheck.reason || 'State OAuth2 invalide ou expiré.'}</p>
-            <button onclick="if(window.opener){window.close();}else{window.location.href='${portalLoginUrl}';}" style="background: #334155; color: white; border: none; padding: 9px 18px; border-radius: 8px; cursor: pointer; font-size: 13px; margin-top: 14px;">Retour à la connexion</button>
+            <p style="color: #cbd5e1; font-size: 13px;">La validation de sécurité a échoué (session expirée ou tentative de rejeu détectée).</p>
+            <button id="btn-back" style="background: #334155; color: white; border: none; padding: 9px 18px; border-radius: 8px; cursor: pointer; font-size: 13px; margin-top: 14px;">Retour à la connexion</button>
           </div>
+          <script>
+            const targetOrigin = ${JSON.stringify(targetOrigin)};
+            const loginUrl = ${JSON.stringify(portalLoginUrl)};
+            document.getElementById('btn-back').addEventListener('click', function() {
+              if (window.opener) {
+                window.opener.postMessage({ type: 'OAUTH_AUTH_FAILED', error: 'Échec de sécurité OAuth2' }, targetOrigin);
+                window.close();
+              } else {
+                window.location.href = loginUrl;
+              }
+            });
+          </script>
         </body>
       </html>
     `, 403);
@@ -296,8 +443,7 @@ const handleAuthCallback = async (c: any) => {
     });
 
     if (!tokenRes.ok) {
-      const errBody = await tokenRes.text();
-      throw new Error(`Échec de l'échange de token Discord (${tokenRes.status}) : ${errBody}`);
+      throw new Error('Échec de l échange de token Discord');
     }
 
     const tokenData = (await tokenRes.json()) as { access_token: string };
@@ -308,7 +454,7 @@ const handleAuthCallback = async (c: any) => {
     });
 
     if (!userRes.ok) {
-      throw new Error('Impossible de récupérer le profil Discord de l utilisateur.');
+      throw new Error('Impossible de récupérer le profil Discord de l utilisateur');
     }
 
     const discordUser = (await userRes.json()) as {
@@ -336,12 +482,24 @@ const handleAuthCallback = async (c: any) => {
                 <div style="width: 52px; height: 52px; background: rgba(239, 68, 68, 0.15); color: #f87171; border-radius: 12px; display: flex; align-items: center; justify-content: center; margin: 0 auto 16px auto; font-size: 24px; font-weight: bold;">✕</div>
                 <h3 style="margin: 0 0 8px 0; font-size: 20px;">Accès Refusé — Administration</h3>
                 <div style="background: #0f172a; padding: 14px; border-radius: 8px; border: 1px solid #334155; margin: 16px 0; text-align: left; font-size: 12px; line-height: 1.6; color: #cbd5e1;">
-                  <div>Compte Discord : <strong>${discordUser.username}</strong></div>
-                  <div>Discord ID : <code style="color: #38bdf8;">${discordUser.id}</code></div>
-                  <div style="margin-top: 8px; color: #f87171;">${authCheck.reason || 'Ce compte n est pas accrédité comme Administrateur.'}</div>
+                  <div>Compte Discord : <strong>${escapeHtml(discordUser.username)}</strong></div>
+                  <div>Discord ID : <code style="color: #38bdf8;">${escapeHtml(discordUser.id)}</code></div>
+                  <div style="margin-top: 8px; color: #f87171;">Ce compte n est pas accrédité comme Administrateur ou Responsable.</div>
                 </div>
-                <button onclick="if(window.opener){window.opener.postMessage({type:'OAUTH_AUTH_FAILED', error:'${authCheck.reason}'},'*');window.close();}else{window.location.href='${portalLoginUrl}';}" style="background: #334155; color: #f8fafc; border: none; padding: 10px 20px; border-radius: 8px; cursor: pointer; font-size: 13px;">Retour à la page de connexion</button>
+                <button id="btn-back" style="background: #334155; color: #f8fafc; border: none; padding: 10px 20px; border-radius: 8px; cursor: pointer; font-size: 13px;">Retour à la page de connexion</button>
               </div>
+              <script>
+                const targetOrigin = ${JSON.stringify(targetOrigin)};
+                const loginUrl = ${JSON.stringify(portalLoginUrl)};
+                document.getElementById('btn-back').addEventListener('click', function() {
+                  if (window.opener) {
+                    window.opener.postMessage({ type: 'OAUTH_AUTH_FAILED', error: 'Compte non accrédité Administrateur' }, targetOrigin);
+                    window.close();
+                  } else {
+                    window.location.href = loginUrl;
+                  }
+                });
+              </script>
             </body>
           </html>
         `, 403);
@@ -359,12 +517,24 @@ const handleAuthCallback = async (c: any) => {
                 <div style="width: 52px; height: 52px; background: #fef2f2; color: #dc2626; border-radius: 12px; display: flex; align-items: center; justify-content: center; margin: 0 auto 16px auto; font-size: 24px; font-weight: bold;">✕</div>
                 <h3 style="color: #0f172a; margin: 0 0 8px 0; font-size: 20px;">Compte Parrain Non Enregistré</h3>
                 <div style="background: #f8fafc; padding: 14px; border-radius: 8px; border: 1px solid #e2e8f0; margin: 16px 0; text-align: left; font-size: 12px; line-height: 1.6; color: #334155;">
-                  <div>Compte Discord : <strong>${discordUser.username}</strong></div>
-                  <div>Discord ID : <code style="color: #0284c7;">${discordUser.id}</code></div>
-                  <div style="margin-top: 8px; color: #dc2626;">${authCheck.reason || 'Ce compte n est pas enregistré comme Parrain.'}</div>
+                  <div>Compte Discord : <strong>${escapeHtml(discordUser.username)}</strong></div>
+                  <div>Discord ID : <code style="color: #0284c7;">${escapeHtml(discordUser.id)}</code></div>
+                  <div style="margin-top: 8px; color: #dc2626;">Ce compte n est pas enregistré comme Parrain autorisé PAWAKO.</div>
                 </div>
-                <button onclick="if(window.opener){window.opener.postMessage({type:'OAUTH_AUTH_FAILED', error:'${authCheck.reason}'},'*');window.close();}else{window.location.href='${portalLoginUrl}';}" style="background: #0f172a; color: white; border: none; padding: 10px 20px; border-radius: 8px; cursor: pointer; font-size: 13px;">Retour à la page de connexion</button>
+                <button id="btn-back" style="background: #0f172a; color: white; border: none; padding: 10px 20px; border-radius: 8px; cursor: pointer; font-size: 13px;">Retour à la page de connexion</button>
               </div>
+              <script>
+                const targetOrigin = ${JSON.stringify(targetOrigin)};
+                const loginUrl = ${JSON.stringify(portalLoginUrl)};
+                document.getElementById('btn-back').addEventListener('click', function() {
+                  if (window.opener) {
+                    window.opener.postMessage({ type: 'OAUTH_AUTH_FAILED', error: 'Compte non enregistré comme Parrain' }, targetOrigin);
+                    window.close();
+                  } else {
+                    window.location.href = loginUrl;
+                  }
+                });
+              </script>
             </body>
           </html>
         `, 403);
@@ -386,14 +556,11 @@ const handleAuthCallback = async (c: any) => {
       configuredAdminId
     );
 
-    // Génération du jeton de session cryptographique (compatible 3rd-party cookies)
-    const sessionSecret = c.env.SESSION_SECRET || c.env.DISCORD_CLIENT_SECRET || 'pawako_session_salt_2026';
-    const signedToken = await createSignedSessionToken(user.id, user.role, sessionSecret);
+    // Génération du jeton de session cryptographique (exige SESSION_SECRET validé)
+    const signedToken = await createSignedSessionToken(user.id, user.role, signingSecret);
 
     // Définition du cookie de session sécurisé
     const sessionCookie = `pawako_session=${signedToken}; Path=/; Secure; SameSite=None; Max-Age=2592000; HttpOnly`;
-
-    const targetOrigin = new URL(frontendUrl).origin;
 
     return c.html(
       `
@@ -404,20 +571,27 @@ const handleAuthCallback = async (c: any) => {
           <div style="background: white; padding: 32px; border-radius: 12px; border: 1px solid #e2e8f0; text-align: center; max-width: 440px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);">
             <div style="width: 48px; height: 48px; background: #ecfdf5; color: #059669; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 16px auto; font-size: 24px;">✓</div>
             <h2 style="color: #0f172a; margin: 0 0 8px 0; font-size: 20px;">Connexion Discord réussie</h2>
-            <p style="color: #64748b; font-size: 14px; margin: 0 0 20px 0;">Bienvenue <strong>${user.displayName}</strong> (${user.role}).</p>
+            <p style="color: #64748b; font-size: 14px; margin: 0 0 20px 0;">Bienvenue <strong>${escapeHtml(user.displayName)}</strong> (${escapeHtml(user.role)}).</p>
           </div>
           <script>
             try {
+              const targetOrigin = ${JSON.stringify(targetOrigin)};
+              const payload = {
+                type: 'OAUTH_AUTH_SUCCESS',
+                portal: ${JSON.stringify(portal)},
+                role: ${JSON.stringify(user.role)},
+                userId: ${JSON.stringify(user.id)},
+                token: ${JSON.stringify(signedToken)}
+              };
+              const redirectUrl = ${JSON.stringify(`${portalDestUrl}#sessionToken=${signedToken}&session=${user.id}`)};
               if (window.opener) {
-                // Origine cible strictement restreinte au domaine frontend pour empêcher toute interception
-                window.opener.postMessage({ type: 'OAUTH_AUTH_SUCCESS', portal: '${portal}', role: '${user.role}', userId: '${user.id}', token: '${signedToken}' }, '${targetOrigin}');
+                window.opener.postMessage(payload, targetOrigin);
                 window.close();
               } else {
-                // Utilisation du fragment (#) au lieu de query (?) pour ne pas exposer le jeton dans les logs de requêtes ou l'en-tête Referer
-                window.location.replace('${portalDestUrl}#sessionToken=${signedToken}&session=${user.id}');
+                window.location.replace(redirectUrl);
               }
             } catch (e) {
-              window.location.replace('${portalDestUrl}#sessionToken=${signedToken}&session=${user.id}');
+              window.location.replace(${JSON.stringify(`${portalDestUrl}#sessionToken=${signedToken}&session=${user.id}`)});
             }
           </script>
         </body>
@@ -428,17 +602,27 @@ const handleAuthCallback = async (c: any) => {
         'Set-Cookie': sessionCookie,
       }
     );
-  } catch (err: any) {
+  } catch {
     return c.html(`
       <!DOCTYPE html>
       <html>
         <head><title>Erreur de connexion Discord</title></head>
         <body style="font-family: system-ui, sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; background: #fef2f2;">
           <div style="background: white; padding: 32px; border-radius: 12px; border: 1px solid #fecaca; text-align: center; max-width: 480px;">
-            <h3 style="color: #991b1b; margin-top: 0;">Erreur d'authentification</h3>
-            <p style="color: #7f1d1d; font-size: 14px;">${err.message || 'Erreur imprévue'}</p>
-            <button onclick="if(window.opener){window.close();}else{window.location.href='${portalLoginUrl}';}" style="background: #e11d48; color: white; border: none; padding: 8px 18px; border-radius: 6px; cursor: pointer; font-size: 13px;">Fermer</button>
+            <h3 style="color: #991b1b; margin-top: 0;">Erreur d authentification</h3>
+            <p style="color: #7f1d1d; font-size: 14px;">Une erreur est survenue lors de l authentification Discord. Veuillez réessayer.</p>
+            <button id="btn-close" style="background: #e11d48; color: white; border: none; padding: 8px 18px; border-radius: 6px; cursor: pointer; font-size: 13px;">Fermer</button>
           </div>
+          <script>
+            const loginUrl = ${JSON.stringify(portalLoginUrl)};
+            document.getElementById('btn-close').addEventListener('click', function() {
+              if (window.opener) {
+                window.close();
+              } else {
+                window.location.href = loginUrl;
+              }
+            });
+          </script>
         </body>
       </html>
     `, 500);
@@ -452,12 +636,20 @@ app.get('/api/auth/me', async c => {
   const repo = getRepository(c.env);
   const user = await getAuthenticatedUser(c, repo);
 
+  let hasValidSecret = false;
+  try {
+    getValidatedSessionSecret(c.env);
+    hasValidSecret = true;
+  } catch {
+    hasValidSecret = false;
+  }
+
   if (!user) {
     return c.json({
       authenticated: false,
       user: null,
       referrer: null,
-      isOAuthConfigured: Boolean(c.env.DISCORD_CLIENT_ID && c.env.DISCORD_CLIENT_SECRET),
+      isOAuthConfigured: Boolean(c.env.DISCORD_CLIENT_ID && c.env.DISCORD_CLIENT_SECRET && hasValidSecret),
       isBotConfigured: Boolean(c.env.JARVIS_WEBHOOK_SECRET),
       hasAnyUsers: false,
       isInitialAdminClaimed: await repo.isInitialAdminClaimed(),
@@ -470,7 +662,7 @@ app.get('/api/auth/me', async c => {
     authenticated: true,
     user,
     referrer: referrer || null,
-    isOAuthConfigured: Boolean(c.env.DISCORD_CLIENT_ID && c.env.DISCORD_CLIENT_SECRET),
+    isOAuthConfigured: Boolean(c.env.DISCORD_CLIENT_ID && c.env.DISCORD_CLIENT_SECRET && hasValidSecret),
     isBotConfigured: Boolean(c.env.JARVIS_WEBHOOK_SECRET),
     hasAnyUsers: true,
     isInitialAdminClaimed: await repo.isInitialAdminClaimed(),
@@ -484,7 +676,7 @@ app.post('/api/auth/logout', c => {
 });
 
 // -----------------------------------------------------------------------------
-// 3. STATISTIQUES GLOBALES & ESPACE PARRAIN
+// 6. STATISTIQUES GLOBALES & ESPACE PARRAIN (RBAC ET LISTE BLANCHE STRICTS)
 // -----------------------------------------------------------------------------
 
 app.get('/api/stats/overview', async c => {
@@ -495,7 +687,8 @@ app.get('/api/stats/overview', async c => {
     return c.json({ error: 'Session non authentifiée. Veuillez vous connecter via Discord.' }, 401);
   }
 
-  if (user.role === 'PARRAIN') {
+  // Réservé explicitement aux Administrateurs et Responsables
+  if (user.role !== 'ADMINISTRATEUR' && user.role !== 'RESPONSABLE') {
     return c.json({ error: 'Accès réservé exclusivement à la Direction et aux Responsables.' }, 403);
   }
 
@@ -518,16 +711,26 @@ app.get('/api/parrain/dashboard', async c => {
     return c.json({ error: 'Session non authentifiée. Veuillez vous connecter.' }, 401);
   }
 
+  // Le dashboard Parrain est réservé au rôle PARRAIN (ou ADMINISTRATEUR)
+  if (user.role !== 'PARRAIN' && user.role !== 'ADMINISTRATEUR') {
+    return c.json({ error: 'Accès réservé exclusivement aux Parrains autorisés.' }, 403);
+  }
+
   try {
     const dashboard = await repo.getParrainDashboard(user.id);
-    return c.json(dashboard);
+    // Filtrage strict par liste blanche des candidats retournés dans le dashboard parrain
+    const safeCandidates = (dashboard.candidates || []).map(toParrainCandidateView);
+    return c.json({
+      ...dashboard,
+      candidates: safeCandidates,
+    });
   } catch (err: any) {
     return c.json({ error: err.message }, 404);
   }
 });
 
 // -----------------------------------------------------------------------------
-// 4. CANDIDATS & RECRUTEMENT
+// 7. CANDIDATS & RECRUTEMENT
 // -----------------------------------------------------------------------------
 
 app.get('/api/candidates', async c => {
@@ -536,6 +739,10 @@ app.get('/api/candidates', async c => {
 
   if (!user) {
     return c.json({ error: 'Session non authentifiée. Veuillez vous connecter via Discord.' }, 401);
+  }
+
+  if (user.role !== 'ADMINISTRATEUR' && user.role !== 'RESPONSABLE' && user.role !== 'PARRAIN') {
+    return c.json({ error: 'Rôle utilisateur non autorisé.' }, 403);
   }
 
   const isParrainOnly = user.role === 'PARRAIN';
@@ -561,15 +768,12 @@ app.get('/api/candidates', async c => {
     limit,
   });
 
-  // Pour les parrains, masquer les informations confidentielles internes mais conserver le motif de refus transparent
+  // Pour les parrains, construction obligatoire par liste blanche des seuls champs autorisés
   if (isParrainOnly) {
-    result.candidates = result.candidates.map(cand => ({
-      ...cand,
-      decisionByUserId: undefined,
-      decisionByName: undefined,
-      uncertaintyReason: undefined,
-      anomalyReason: cand.hasAnomaly ? 'Anomalie administrative en cours de traitement' : null,
-    }));
+    return c.json({
+      candidates: result.candidates.map(toParrainCandidateView),
+      total: result.total,
+    });
   }
 
   return c.json(result);
@@ -583,31 +787,44 @@ app.get('/api/candidates/:id', async c => {
     return c.json({ error: 'Session non authentifiée. Veuillez vous connecter via Discord.' }, 401);
   }
 
+  if (user.role !== 'ADMINISTRATEUR' && user.role !== 'RESPONSABLE' && user.role !== 'PARRAIN') {
+    return c.json({ error: 'Rôle utilisateur non autorisé.' }, 403);
+  }
+
   const candidate = await repo.getCandidateById(c.req.param('id'));
 
   if (!candidate) {
     return c.json({ error: 'Candidat introuvable' }, 404);
   }
 
-  // Si c'est un parrain, il ne peut voir que ses propres filleuls
+  // Règle d'isolation : un parrain ne peut consulter que ses propres filleuls
   if (user.role === 'PARRAIN' && candidate.referrerDiscordUserId !== user.id) {
     return c.json({ error: 'Accès refusé. Ce candidat n est pas l un de vos filleuls.' }, 403);
   }
 
   const history = await repo.getStatusHistoryForCandidate(candidate.id);
-  // Les parrains ont accès à l'historique transparent et aux motifs de refus, hors notes strictement confidentielles
-  const sanitizedHistory =
-    user.role === 'PARRAIN' ? history.filter(h => !h.isConfidential) : history;
 
-  const sanitizedCandidate = user.role === 'PARRAIN' ? {
-    ...candidate,
-    decisionByUserId: undefined,
-    decisionByName: undefined,
-    uncertaintyReason: undefined,
-    anomalyReason: candidate.hasAnomaly ? 'Anomalie administrative en cours de traitement' : null,
-  } : candidate;
+  // Pour les parrains, filtrage strict par liste blanche (exclusion totale des notes et métadonnées internes)
+  if (user.role === 'PARRAIN') {
+    const sanitizedHistory = history
+      .filter(h => !h.isConfidential)
+      .map(h => ({
+        id: h.id,
+        toStatus: h.toStatus,
+        toAdminStatus: h.toAdminStatus,
+        toOperationalStatus: h.toOperationalStatus,
+        toServer: h.toServer,
+        timestamp: h.timestamp,
+        reason: h.reason,
+      }));
 
-  return c.json({ candidate: sanitizedCandidate, history: sanitizedHistory });
+    return c.json({
+      candidate: toParrainCandidateView(candidate),
+      history: sanitizedHistory,
+    });
+  }
+
+  return c.json({ candidate, history });
 });
 
 app.post('/api/candidates', async c => {
@@ -618,8 +835,8 @@ app.post('/api/candidates', async c => {
     return c.json({ error: 'Session non authentifiée. Veuillez vous connecter.' }, 401);
   }
 
-  if (user.role === 'PARRAIN') {
-    return c.json({ error: 'Accès réservé à la Direction et aux Responsables.' }, 403);
+  if (user.role !== 'ADMINISTRATEUR' && user.role !== 'RESPONSABLE') {
+    return c.json({ error: 'Accès réservé exclusivement à la Direction et aux Responsables.' }, 403);
   }
 
   const body = await c.req.json();
@@ -650,8 +867,8 @@ app.patch('/api/candidates/:id/status', async c => {
     return c.json({ error: 'Session non authentifiée. Veuillez vous connecter.' }, 401);
   }
 
-  if (user.role === 'PARRAIN') {
-    return c.json({ error: 'Accès réservé à la Direction et aux Responsables.' }, 403);
+  if (user.role !== 'ADMINISTRATEUR' && user.role !== 'RESPONSABLE') {
+    return c.json({ error: 'Accès réservé exclusivement à la Direction et aux Responsables.' }, 403);
   }
 
   const body = await c.req.json();
@@ -687,7 +904,7 @@ app.post('/api/candidates/:id/clear-anomaly', async c => {
     return c.json({ error: 'Session non authentifiée. Veuillez vous connecter.' }, 401);
   }
 
-  if (user.role === 'PARRAIN') {
+  if (user.role !== 'ADMINISTRATEUR' && user.role !== 'RESPONSABLE') {
     return c.json({ error: 'Accès réservé à la Direction et aux Responsables.' }, 403);
   }
 
@@ -725,7 +942,7 @@ app.post('/api/candidates/:id/reassign', async c => {
 });
 
 // -----------------------------------------------------------------------------
-// 5. GESTION DES PARRAINS
+// 8. GESTION DES PARRAINS
 // -----------------------------------------------------------------------------
 
 app.get('/api/referrers', async c => {
@@ -734,6 +951,10 @@ app.get('/api/referrers', async c => {
 
   if (!user) {
     return c.json({ error: 'Accès non autorisé. Session requise.' }, 401);
+  }
+
+  if (user.role !== 'ADMINISTRATEUR' && user.role !== 'RESPONSABLE' && user.role !== 'PARRAIN') {
+    return c.json({ error: 'Rôle utilisateur non autorisé.' }, 403);
   }
 
   // Isolation stricte : un parrain ne peut voir que sa propre fiche de parrainage
@@ -793,7 +1014,7 @@ app.patch('/api/referrers/:id/toggle', async c => {
 });
 
 // -----------------------------------------------------------------------------
-// 6. DISCORD SERVERS, ROLE MAPPINGS & BOT JARVIS WEBHOOK
+// 9. SERVEURS DISCORD, ROLE MAPPINGS & BOT JARVIS WEBHOOK
 // -----------------------------------------------------------------------------
 
 app.get('/api/discord/servers', async c => {
@@ -804,7 +1025,7 @@ app.get('/api/discord/servers', async c => {
     return c.json({ error: 'Session non authentifiée. Veuillez vous connecter.' }, 401);
   }
 
-  if (user.role === 'PARRAIN') {
+  if (user.role !== 'ADMINISTRATEUR' && user.role !== 'RESPONSABLE') {
     return c.json({ error: 'Accès réservé à la Direction et aux Responsables.' }, 403);
   }
 
@@ -870,21 +1091,27 @@ app.post('/api/discord/webhook', async c => {
     return c.json({ error: 'Secret JARVIS invalide ou manquant. Requête non autorisée.' }, 401);
   }
 
-  const payload = await c.req.json();
-  const { eventType, guildId, user } = payload || {};
+  const payload = await c.req.json().catch(() => null);
+  if (!payload || typeof payload !== 'object') {
+    return c.json({ error: 'Corps de requête JSON manquant ou invalide.' }, 400);
+  }
 
-  // 2. Protection contre les attaques par rejeu (horodatage + nonce anti-rejeu)
+  const { eventType, guildId, user } = payload;
+
+  // 2. Protection contre les attaques par rejeu : exige systématiquement timestamp et eventId
   const timestampHeader =
-    c.req.header('X-JARVIS-Timestamp') || (payload?.timestamp ? String(payload.timestamp) : null);
+    c.req.header('X-JARVIS-Timestamp') || (payload.timestamp ? String(payload.timestamp) : null);
   const nonceHeader =
-    c.req.header('X-JARVIS-Nonce') || (payload?.eventId ? String(payload.eventId) : null);
+    c.req.header('X-JARVIS-Nonce') || (payload.eventId ? String(payload.eventId) : null);
 
-  const replayValidation = validateWebhookTimestampAndNonce(timestampHeader, nonceHeader);
-  if (!replayValidation.valid) {
+  const replayValidation = validateWebhookTimestampAndEventId(timestampHeader, nonceHeader);
+  if (!replayValidation.valid || !replayValidation.eventId) {
     return c.json({ error: replayValidation.reason }, 400);
   }
 
-  // 3. Validation stricte du schéma
+  const eventId = replayValidation.eventId;
+
+  // 3. Validation stricte du schéma métier
   if (!eventType || typeof eventType !== 'string' || !guildId || !user?.id) {
     return c.json({ error: 'Payload d événement Discord incomplet (eventType, guildId, user.id requis).' }, 400);
   }
@@ -895,10 +1122,10 @@ app.post('/api/discord/webhook', async c => {
   }
 
   const repo = getRepository(c.env);
-  const eventId = nonceHeader || `evt_${Date.now()}_${user.id}_${eventType}`;
 
-  // 4. Verrouillage atomique distribué dans Firestore (anti-rejeu persistant)
-  const lock = await repo.lockWebhookEvent(eventId, Date.now() + 60000);
+  // 4. Verrouillage atomique distribué dans Firestore avec identifiant propriétaire unique
+  const ownerId = crypto.randomUUID();
+  const lock = await repo.lockWebhookEvent(eventId, ownerId, 60000);
   if (!lock.acquired) {
     return c.json({ error: lock.reason || 'Événement webhook déjà traité ou en cours (anti-rejeu).' }, 409);
   }
@@ -914,8 +1141,8 @@ app.post('/api/discord/webhook', async c => {
       details: { eventType, guildId, username: user.username },
     });
 
-    // Marquer l'événement comme COMPLETED dans Firestore
-    await repo.completeWebhookEvent(eventId, {
+    // Finalisation atomique sécurisée par ownerId et updateTime
+    await repo.completeWebhookEvent(eventId, ownerId, {
       eventType,
       guildId,
       userId: user.id,
@@ -923,15 +1150,15 @@ app.post('/api/discord/webhook', async c => {
     });
 
     return c.json({ success: true, message: `Événement ${eventType} traité pour ${user.username} (${user.id})` });
-  } catch (err: any) {
-    // En cas d'échec métier, libérer le verrou pour autoriser une nouvelle tentative
-    await repo.releaseWebhookEvent(eventId);
-    return c.json({ error: `Erreur lors du traitement de l'événement : ${err.message}` }, 500);
+  } catch {
+    // En cas d'échec métier, libérer le verrou uniquement si l'ownerId correspond
+    await repo.releaseWebhookEvent(eventId, ownerId);
+    return c.json({ error: 'Erreur lors du traitement interne de l événement.' }, 500);
   }
 });
 
 // -----------------------------------------------------------------------------
-// 7. UTILISATEURS & AUDIT LOGS
+// 10. UTILISATEURS & AUDIT LOGS
 // -----------------------------------------------------------------------------
 
 app.get('/api/users', async c => {
@@ -959,7 +1186,7 @@ app.patch('/api/users/:id/role', async c => {
   }
 
   if (user.role !== 'ADMINISTRATEUR') {
-    return c.json({ error: 'Accès réservé aux Administrateurs' }, 403);
+    return c.json({ error: 'Accès réservé exclusivement aux Administrateurs' }, 403);
   }
 
   const body = await c.req.json();
@@ -989,7 +1216,7 @@ app.patch('/api/users/:id/status', async c => {
   }
 
   if (user.role !== 'ADMINISTRATEUR') {
-    return c.json({ error: 'Accès réservé aux Administrateurs' }, 403);
+    return c.json({ error: 'Accès réservé exclusivement aux Administrateurs' }, 403);
   }
 
   const body = await c.req.json();
@@ -1024,7 +1251,7 @@ app.get('/api/audit-logs', async c => {
   }
 
   if (user.role !== 'ADMINISTRATEUR') {
-    return c.json({ error: 'Accès réservé aux Administrateurs' }, 403);
+    return c.json({ error: 'Accès réservé exclusivement aux Administrateurs' }, 403);
   }
 
   const limit = Math.min(200, parseInt(c.req.query('limit') || '50', 10));

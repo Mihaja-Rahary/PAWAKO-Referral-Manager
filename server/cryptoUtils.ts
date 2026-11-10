@@ -1,17 +1,17 @@
 /**
  * PAWAKO Referral Manager — Utilitaires Cryptographiques & Sécurité
  * 100% compatibles Node.js (18+) et Cloudflare Workers (Web Crypto API standard).
- * Zéro dépendance externe.
+ * Zéro clé secrète par défaut, zéro fallback prévisible.
  */
 
-// Cache glissant pour la protection contre le rejeu (durée de vie : 15 minutes)
-const consumedNonces = new Map<string, number>();
+// Cache glissant pour la protection contre le rejeu OAuth2 (durée de vie : 15 minutes)
+const consumedOAuthNonces = new Map<string, number>();
 
-function cleanExpiredNonces(): void {
+function cleanExpiredOAuthNonces(): void {
   const now = Date.now();
-  for (const [nonce, expiresAt] of consumedNonces.entries()) {
+  for (const [nonce, expiresAt] of consumedOAuthNonces.entries()) {
     if (now > expiresAt) {
-      consumedNonces.delete(nonce);
+      consumedOAuthNonces.delete(nonce);
     }
   }
 }
@@ -29,11 +29,16 @@ function bufferToHex(buffer: ArrayBuffer): string {
 }
 
 /**
- * Calcule un HMAC-SHA256 standard via Web Crypto
+ * Calcule un HMAC-SHA256 standard via Web Crypto.
+ * Exige strictement une clé non vide d'au moins 32 caractères.
  */
 async function hmacSha256(keyStr: string, messageStr: string): Promise<string> {
+  if (!keyStr || typeof keyStr !== 'string' || keyStr.trim().length < 32) {
+    throw new Error('Secret cryptographique obligatoire manquant ou inférieur à 32 caractères');
+  }
+
   const enc = new TextEncoder();
-  const keyData = enc.encode(keyStr || 'pawako_default_secret_key_2026');
+  const keyData = enc.encode(keyStr.trim());
   const messageData = enc.encode(messageStr);
 
   const cryptoKey = await crypto.subtle.importKey(
@@ -66,7 +71,11 @@ export async function generateSecureOAuthState(
   portal: 'admin' | 'parrain',
   secret: string
 ): Promise<GeneratedOAuthState> {
-  cleanExpiredNonces();
+  if (!secret || typeof secret !== 'string' || secret.trim().length < 32) {
+    throw new Error('SESSION_SECRET obligatoire manquant ou inférieur à 32 caractères');
+  }
+
+  cleanExpiredOAuthNonces();
 
   const nonce = crypto.randomUUID();
   const timestamp = Date.now();
@@ -92,14 +101,18 @@ export interface VerifyOAuthStateResult {
  * 1. Vérifie le format
  * 2. Vérifie la signature HMAC
  * 3. Vérifie l'expiration (< 10 minutes)
- * 4. Empêche la réutilisation (protection anti-rejeu)
+ * 4. Empêche la réutilisation (protection anti-rejeu L1 mémoire + L2 Firestore)
  */
 export async function verifyAndConsumeOAuthState(
   state: string,
   secret: string,
   persistentConsumer?: (nonce: string, expiresAt: number) => Promise<boolean>
 ): Promise<VerifyOAuthStateResult> {
-  cleanExpiredNonces();
+  if (!secret || typeof secret !== 'string' || secret.trim().length < 32) {
+    return { valid: false, reason: 'SESSION_SECRET obligatoire manquant ou inférieur à 32 caractères' };
+  }
+
+  cleanExpiredOAuthNonces();
 
   if (!state || typeof state !== 'string') {
     return { valid: false, reason: 'State OAuth2 manquant' };
@@ -135,7 +148,7 @@ export async function verifyAndConsumeOAuthState(
   }
 
   // Protection contre le rejeu L1 (en mémoire locale de l'isolat)
-  if (consumedNonces.has(nonce)) {
+  if (consumedOAuthNonces.has(nonce)) {
     return { valid: false, reason: 'Tentative de rejeu de state OAuth2 détectée (state déjà consommé en mémoire)' };
   }
 
@@ -148,7 +161,7 @@ export async function verifyAndConsumeOAuthState(
   }
 
   // Marque le nonce comme consommé pendant 15 minutes
-  consumedNonces.set(nonce, now + 900000);
+  consumedOAuthNonces.set(nonce, now + 900000);
 
   return { valid: true, portal, nonce };
 }
@@ -172,6 +185,10 @@ export async function createSignedSessionToken(
   role: string,
   secret: string
 ): Promise<string> {
+  if (!secret || typeof secret !== 'string' || secret.trim().length < 32) {
+    throw new Error('SESSION_SECRET manquant ou inférieur à 32 caractères');
+  }
+
   const issuedAt = Math.floor(Date.now() / 1000);
   const payload = `${userId}.${role}.${issuedAt}`;
   const sig = await hmacSha256(secret, `session:${payload}`);
@@ -186,6 +203,10 @@ export async function verifySignedSessionToken(
   token: string,
   secret: string
 ): Promise<{ valid: boolean; payload?: SessionPayload; reason?: string }> {
+  if (!secret || typeof secret !== 'string' || secret.trim().length < 32) {
+    return { valid: false, reason: 'Configuration de sécurité serveur incomplète (SESSION_SECRET manquant ou insuffisant)' };
+  }
+
   if (!token || typeof token !== 'string') {
     return { valid: false, reason: 'Jeton absent' };
   }
@@ -224,50 +245,73 @@ export async function verifySignedSessionToken(
 }
 
 // =============================================================================
-// 3. PROTECTION ANTI-REJEU POUR WEBHOOKS JARVIS
+// 3. VALIDATION HORODATAGE ET IDENTIFIANT POUR WEBHOOKS JARVIS
 // =============================================================================
 
 export interface WebhookValidationResult {
   valid: boolean;
+  eventId?: string;
+  timestamp?: number;
   reason?: string;
+  error?: string;
 }
 
 /**
- * Valide la fraîcheur et l'unicité d'une requête webhook JARVIS
+ * Valide la présence et la fraîcheur d'un webhook JARVIS.
+ * N'utilise aucune mémoire locale volatile pour l'unicité (déléguée à Firestore).
+ * Exige obligatoirement un timestamp valide dans une fenêtre de 5 minutes et un eventId stable.
  */
-export function validateWebhookTimestampAndNonce(
+export function validateWebhookTimestampAndEventId(
   timestampHeader?: string | null,
-  nonceHeader?: string | null
+  eventIdHeader?: string | null
 ): WebhookValidationResult {
-  cleanExpiredNonces();
+  if (!timestampHeader || !timestampHeader.trim()) {
+    return {
+      valid: false,
+      reason: 'En-tête X-JARVIS-Timestamp manquant (obligatoire)',
+    };
+  }
+
+  if (!eventIdHeader || !eventIdHeader.trim()) {
+    return {
+      valid: false,
+      reason: 'Identifiant d événement unique X-JARVIS-Nonce ou eventId manquant (obligatoire)',
+    };
+  }
+
+  const cleanEventId = eventIdHeader.trim();
+  if (!/^[a-zA-Z0-9_\-:.]{8,128}$/.test(cleanEventId)) {
+    return {
+      valid: false,
+      reason: 'Format d identifiant d événement invalide (8 à 128 caractères alphanumériques requis)',
+    };
+  }
+
+  let ts = parseInt(timestampHeader.trim(), 10);
+  if (isNaN(ts) || ts <= 0) {
+    return {
+      valid: false,
+      reason: 'Format de timestamp webhook invalide',
+    };
+  }
+
+  // Support des timestamps en secondes ou millisecondes
+  if (ts < 10000000000) {
+    ts *= 1000;
+  }
 
   const now = Date.now();
-
-  // Si un timestamp est fourni, vérifier la fenêtre temporelle (+/- 5 minutes)
-  if (timestampHeader) {
-    let ts = parseInt(timestampHeader, 10);
-    // Support des timestamps en secondes ou millisecondes
-    if (ts < 10000000000) ts *= 1000;
-
-    if (isNaN(ts) || Math.abs(now - ts) > 300000) {
-      return {
-        valid: false,
-        reason: 'Requête webhook expirée (délai supérieur à 5 minutes)',
-      };
-    }
+  // Fenêtre stricte de tolérance de 5 minutes (300 000 ms)
+  if (Math.abs(now - ts) > 300000) {
+    return {
+      valid: false,
+      reason: 'Horodatage webhook hors de la fenêtre de tolérance autorisée (5 minutes)',
+    };
   }
 
-  // Si un nonce ou identifiant d'événement est fourni, vérifier qu'il n'a pas été rejoué
-  if (nonceHeader) {
-    if (consumedNonces.has(nonceHeader)) {
-      return {
-        valid: false,
-        reason: 'Requête webhook rejouée déjà traitée (protection anti-rejeu)',
-      };
-    }
-    // Enregistrement du nonce pour 10 minutes
-    consumedNonces.set(nonceHeader, now + 600000);
-  }
-
-  return { valid: true };
+  return {
+    valid: true,
+    eventId: cleanEventId,
+    timestamp: ts,
+  };
 }

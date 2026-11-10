@@ -3,7 +3,8 @@ import crypto from 'crypto';
 import { db } from './db';
 import { discordService } from './discordService';
 import { firestoreService } from './firestore';
-import { User, UserRole, CandidateStatus, AdminStatus, OperationalStatus, VAType, DiscordServerType, DiscordRoleMapping } from './types';
+import { User, UserRole, Candidate, CandidateStatus, AdminStatus, OperationalStatus, VAType, DiscordServerType, DiscordRoleMapping } from './types';
+import { validateWebhookTimestampAndEventId } from './cryptoUtils';
 
 export const apiRouter = Router();
 
@@ -48,6 +49,40 @@ function requireResponsableOrAdmin(req: Request, res: Response, next: NextFuncti
   }
   (req as any).user = user;
   next();
+}
+
+function requireParrainOrAdmin(req: Request, res: Response, next: NextFunction) {
+  const user = getAuthenticatedUser(req);
+  if (!user) {
+    return res.status(401).json({ error: 'Session non authentifiée. Veuillez vous connecter via Discord.' });
+  }
+  if (user.role !== 'ADMINISTRATEUR' && user.role !== 'PARRAIN') {
+    return res.status(403).json({ error: 'Accès réservé exclusivement aux Parrains et Administrateurs PAWAKO.' });
+  }
+  (req as any).user = user;
+  next();
+}
+
+// Fonction positive d'exclusion stricte pour les données visibles par les parrains
+export function toParrainCandidateView(candidate: Candidate) {
+  return {
+    id: candidate.id,
+    discordUserId: candidate.discordUserId,
+    username: candidate.username,
+    displayName: candidate.displayName,
+    avatar: candidate.avatar || null,
+    vaType: candidate.vaType,
+    adminStatus: candidate.adminStatus,
+    operationalStatus: candidate.operationalStatus,
+    status: candidate.status,
+    currentServer: candidate.currentServer,
+    arrivalDate: candidate.arrivalDate,
+    refusalReason: candidate.refusalReason || null,
+    productionDate: candidate.productionDate || null,
+    createdAt: candidate.createdAt,
+    hasAnomaly: !!candidate.hasAnomaly,
+    anomalyReason: candidate.hasAnomaly ? 'Anomalie administrative en cours de traitement' : null,
+  };
 }
 
 // ----------------------------------------------------
@@ -166,16 +201,10 @@ apiRouter.get('/candidates', requireAuth, (req: Request, res: Response) => {
     referrerId: referrerFilter,
   });
 
-  // Pour les parrains, masquer les informations confidentielles internes mais conserver le motif de refus transparent
+  // Liste positive stricte pour les parrains (aucun champ interne confidentiel exposé)
   const safeList = allFiltered.map(c => {
     if (isParrainOnly) {
-      return {
-        ...c,
-        decisionByUserId: undefined,
-        decisionByName: undefined,
-        uncertaintyReason: undefined,
-        anomalyReason: c.hasAnomaly ? 'Anomalie administrative en cours de traitement' : null,
-      };
+      return toParrainCandidateView(c);
     }
     return c;
   });
@@ -215,13 +244,7 @@ apiRouter.get('/candidates/:id', requireAuth, (req: Request, res: Response) => {
   const attributionHistory = isParrainOnly ? [] : db.getReferralAttributionsHistory(candidate.id);
 
   const safeCandidate = isParrainOnly
-    ? {
-        ...candidate,
-        decisionByUserId: undefined,
-        decisionByName: undefined,
-        uncertaintyReason: undefined,
-        anomalyReason: candidate.hasAnomaly ? 'Anomalie administrative en cours de traitement' : null,
-      }
+    ? toParrainCandidateView(candidate)
     : candidate;
 
   res.json({
@@ -426,7 +449,7 @@ apiRouter.post('/referrers', requireAdmin, (req: Request, res: Response) => {
 // 4. PARRAIN PERSONAL PORTAL
 // ----------------------------------------------------
 
-apiRouter.get('/parrain/dashboard', requireAuth, (req: Request, res: Response) => {
+apiRouter.get('/parrain/dashboard', requireParrainOrAdmin, (req: Request, res: Response) => {
   const currentUser: User = (req as any).user;
   const referrer = db.getReferrerByDiscordUserId(currentUser.id);
 
@@ -451,14 +474,8 @@ apiRouter.get('/parrain/dashboard', requireAuth, (req: Request, res: Response) =
   const conversionRate = total > 0 ? Math.round((enProduction / total) * 100) : 0;
   const acceptanceRate = total > 0 ? Math.round(((total - refuses) / total) * 100) : 0;
 
-  // Strictement confidentiel : pas de motifs de refus ni d'identifiants internes
-  const safeCandidates = myCandidates.map(c => ({
-    ...c,
-    decisionByUserId: undefined,
-    decisionByName: undefined,
-    uncertaintyReason: undefined,
-    anomalyReason: c.hasAnomaly ? 'Anomalie administrative en cours de traitement' : null,
-  }));
+  // Liste positive stricte pour le tableau de bord du parrain
+  const safeCandidates = myCandidates.map(c => toParrainCandidateView(c));
 
   res.json({
     referrer,
@@ -549,10 +566,21 @@ apiRouter.post('/discord/webhook', async (req: Request, res: Response) => {
     return res.status(401).json({ error: 'Clé secrète de webhook JARVIS invalide ou non configurée' });
   }
 
+  const timestampHeader = (req.headers['x-jarvis-timestamp'] as string) || '';
   const { eventId, eventType, guildId, user, roles, addedRoleIds, removedRoleIds, inviteCode, vaType, timestamp } = req.body;
+
+  // Validation cryptographique et temporelle anti-rejeu (fenêtre de 5 min)
+  const validation = validateWebhookTimestampAndEventId(timestampHeader, eventId);
+  if (!validation.valid) {
+    return res.status(400).json({ error: validation.reason || validation.error || 'Requête de webhook invalide' });
+  }
 
   if (!eventType || !guildId || !user?.id) {
     return res.status(400).json({ error: 'Payload d événement Discord incomplet (eventType, guildId, user.id requis).' });
+  }
+
+  if (db.isEventProcessed(eventId)) {
+    return res.status(200).json({ success: true, duplicate: true, message: 'Événement déjà traité' });
   }
 
   try {
@@ -567,6 +595,18 @@ apiRouter.post('/discord/webhook', async (req: Request, res: Response) => {
       inviteCode,
       vaType,
       timestamp,
+    });
+
+    db.recordEvent({
+      id: eventId,
+      eventType: eventType as any,
+      serverId: (guildId as any) || 'RECRUTEMENT',
+      guildId,
+      discordUserId: user.id,
+      payload: req.body,
+      processed: true,
+      processedAt: new Date().toISOString(),
+      result: 'PROCESSED',
     });
 
     res.json(result);
@@ -592,12 +632,15 @@ apiRouter.patch('/users/:id/role', requireAdmin, (req: Request, res: Response) =
     return res.status(400).json({ error: 'Rôle invalide' });
   }
 
-  const updated = db.updateUserRole(req.params.id, newRole as UserRole, currentUser.id, currentUser.displayName);
-  if (!updated) {
-    return res.status(404).json({ error: 'Utilisateur introuvable' });
+  try {
+    const updated = db.updateUserRole(req.params.id, newRole as UserRole, currentUser.id, currentUser.displayName);
+    if (!updated) {
+      return res.status(404).json({ error: 'Utilisateur introuvable' });
+    }
+    res.json({ success: true, user: updated });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message || 'Impossible de modifier le rôle utilisateur.' });
   }
-
-  res.json({ success: true, user: updated });
 });
 
 apiRouter.get('/audit-logs', requireAdmin, (req: Request, res: Response) => {

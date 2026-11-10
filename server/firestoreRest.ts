@@ -218,6 +218,9 @@ export function fromFirestoreDocument<T = any>(doc: any): T {
   for (const [k, v] of Object.entries(fields)) {
     data[k] = fromFirestoreValue(v);
   }
+  if (doc.updateTime) {
+    data._updateTime = doc.updateTime;
+  }
   return data as T;
 }
 
@@ -319,10 +322,25 @@ export class FirestoreRestClient {
   }
 
   /**
-   * Supprime un document par son ID
+   * Supprime un document par son ID (supporte les préconditions pour suppression atomique)
    */
-  async deleteDocument(collection: string, docId: string): Promise<boolean> {
-    const url = `${this.baseUrl}/${encodeURIComponent(collection)}/${encodeURIComponent(docId)}`;
+  async deleteDocument(
+    collection: string,
+    docId: string,
+    options?: { precondition?: { exists?: boolean; updateTime?: string } }
+  ): Promise<boolean> {
+    let url = `${this.baseUrl}/${encodeURIComponent(collection)}/${encodeURIComponent(docId)}`;
+    if (options?.precondition) {
+      const params = new URLSearchParams();
+      if (options.precondition.exists !== undefined) {
+        params.set('currentDocument.exists', String(options.precondition.exists));
+      }
+      if (options.precondition.updateTime) {
+        params.set('currentDocument.updateTime', options.precondition.updateTime);
+      }
+      url += `?${params.toString()}`;
+    }
+
     const headers = await this.getHeaders();
     const res = await fetch(url, {
       method: 'DELETE',
