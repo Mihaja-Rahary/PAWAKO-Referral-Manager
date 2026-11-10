@@ -28,7 +28,10 @@ function requireAuth(req: Request, res: Response, next: NextFunction) {
 
 function requireAdmin(req: Request, res: Response, next: NextFunction) {
   const user = getAuthenticatedUser(req);
-  if (!user || user.role !== 'ADMINISTRATEUR') {
+  if (!user) {
+    return res.status(401).json({ error: 'Session non authentifiée. Veuillez vous connecter via Discord.' });
+  }
+  if (user.role !== 'ADMINISTRATEUR') {
     return res.status(403).json({ error: 'Accès réservé exclusivement aux Administrateurs PAWAKO.' });
   }
   (req as any).user = user;
@@ -37,7 +40,10 @@ function requireAdmin(req: Request, res: Response, next: NextFunction) {
 
 function requireResponsableOrAdmin(req: Request, res: Response, next: NextFunction) {
   const user = getAuthenticatedUser(req);
-  if (!user || (user.role !== 'ADMINISTRATEUR' && user.role !== 'RESPONSABLE')) {
+  if (!user) {
+    return res.status(401).json({ error: 'Session non authentifiée. Veuillez vous connecter via Discord.' });
+  }
+  if (user.role !== 'ADMINISTRATEUR' && user.role !== 'RESPONSABLE') {
     return res.status(403).json({ error: 'Accès réservé aux Responsables et Administrateurs PAWAKO.' });
   }
   (req as any).user = user;
@@ -122,9 +128,9 @@ apiRouter.post('/auth/logout', (req: Request, res: Response) => {
 // 2. CANDIDATES (Recrutement et suivi des agents)
 // ----------------------------------------------------
 
-apiRouter.get('/candidates', (req: Request, res: Response) => {
-  const currentUser = getAuthenticatedUser(req);
-  const isParrainOnly = currentUser?.role === 'PARRAIN';
+apiRouter.get('/candidates', requireAuth, (req: Request, res: Response) => {
+  const currentUser: User = (req as any).user;
+  const isParrainOnly = currentUser.role === 'PARRAIN';
 
   const {
     search,
@@ -140,7 +146,7 @@ apiRouter.get('/candidates', (req: Request, res: Response) => {
   } = req.query as Record<string, string>;
 
   let referrerFilter: string | undefined = undefined;
-  if (isParrainOnly && currentUser) {
+  if (isParrainOnly) {
     const referrerProfile = db.getReferrerByDiscordUserId(currentUser.id);
     if (!referrerProfile) {
       return res.json({ candidates: [], total: 0, page: 1, totalPages: 0 });
@@ -160,17 +166,15 @@ apiRouter.get('/candidates', (req: Request, res: Response) => {
     referrerId: referrerFilter,
   });
 
-  // Filtrage strict des informations confidentielles pour les parrains
+  // Pour les parrains, masquer les informations confidentielles internes mais conserver le motif de refus transparent
   const safeList = allFiltered.map(c => {
-    if (isParrainOnly || !currentUser) {
+    if (isParrainOnly) {
       return {
         ...c,
-        // Les motifs de refus restent strictement confidentiels et réservés à la Direction et aux Responsables
-        refusalReason: undefined,
         decisionByUserId: undefined,
         decisionByName: undefined,
         uncertaintyReason: undefined,
-        anomalyReason: undefined,
+        anomalyReason: c.hasAnomaly ? 'Anomalie administrative en cours de traitement' : null,
       };
     }
     return c;
@@ -213,11 +217,10 @@ apiRouter.get('/candidates/:id', requireAuth, (req: Request, res: Response) => {
   const safeCandidate = isParrainOnly
     ? {
         ...candidate,
-        refusalReason: undefined,
         decisionByUserId: undefined,
         decisionByName: undefined,
         uncertaintyReason: undefined,
-        anomalyReason: undefined,
+        anomalyReason: candidate.hasAnomaly ? 'Anomalie administrative en cours de traitement' : null,
       }
     : candidate;
 
@@ -451,11 +454,10 @@ apiRouter.get('/parrain/dashboard', requireAuth, (req: Request, res: Response) =
   // Strictement confidentiel : pas de motifs de refus ni d'identifiants internes
   const safeCandidates = myCandidates.map(c => ({
     ...c,
-    refusalReason: undefined,
     decisionByUserId: undefined,
     decisionByName: undefined,
     uncertaintyReason: undefined,
-    anomalyReason: undefined,
+    anomalyReason: c.hasAnomaly ? 'Anomalie administrative en cours de traitement' : null,
   }));
 
   res.json({
@@ -481,7 +483,7 @@ apiRouter.get('/parrain/dashboard', requireAuth, (req: Request, res: Response) =
 // 5. STATISTICS & OVERVIEW (Strictement calculées depuis les dossiers réels)
 // ----------------------------------------------------
 
-apiRouter.get('/stats/overview', (req: Request, res: Response) => {
+apiRouter.get('/stats/overview', requireResponsableOrAdmin, (req: Request, res: Response) => {
   const stats = db.getOverviewStatistics();
   res.json(stats);
 });
@@ -490,7 +492,7 @@ apiRouter.get('/stats/overview', (req: Request, res: Response) => {
 // 6. DISCORD SERVERS, ROLE MAPPINGS & BOT WEBHOOK
 // ----------------------------------------------------
 
-apiRouter.get('/discord/servers', (req: Request, res: Response) => {
+apiRouter.get('/discord/servers', requireResponsableOrAdmin, (req: Request, res: Response) => {
   const servers = db.getDiscordServers();
   res.json({ servers });
 });

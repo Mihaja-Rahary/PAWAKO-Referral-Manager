@@ -106,13 +106,8 @@ export async function verifyAndConsumeOAuthState(
   }
 
   const parts = state.split('_');
-  if (parts.length < 4) {
-    // Compatibilité de repli si le state était au format simplifié 'portal_nonce'
-    const portalPrefix = parts[0];
-    if (portalPrefix === 'admin' || portalPrefix === 'parrain') {
-      return { valid: true, portal: portalPrefix, nonce: parts[1] || crypto.randomUUID() };
-    }
-    return { valid: false, reason: 'Format de state OAuth2 invalide' };
+  if (parts.length !== 4) {
+    return { valid: false, reason: 'Format de state OAuth2 invalide (seuls les states cryptographiquement signés sont autorisés)' };
   }
 
   const portal = parts[0] as 'admin' | 'parrain';
@@ -195,40 +190,37 @@ export async function verifySignedSessionToken(
     return { valid: false, reason: 'Jeton absent' };
   }
 
-  // Si c'est un format signé : userId.role.issuedAt.sig
+  // Format obligatoire strict : userId.role.issuedAt.sig
   const parts = token.split('.');
-  if (parts.length === 4) {
-    const [userId, role, issuedAtStr, receivedSig] = parts;
-    const issuedAt = parseInt(issuedAtStr, 10);
-    const now = Math.floor(Date.now() / 1000);
-
-    // Durée maximale de session : 30 jours (2 592 000 secondes)
-    if (isNaN(issuedAt) || now - issuedAt > 2592000 || issuedAt > now + 300) {
-      return { valid: false, reason: 'Session expirée' };
-    }
-
-    const payload = `${userId}.${role}.${issuedAt}`;
-    const expectedSig = (await hmacSha256(secret, `session:${payload}`)).slice(0, 32);
-    if (receivedSig !== expectedSig) {
-      return { valid: false, reason: 'Signature de session invalide' };
-    }
-
-    return {
-      valid: true,
-      payload: { userId, role, issuedAt },
-    };
+  if (parts.length !== 4) {
+    return { valid: false, reason: 'Format de jeton de session invalide (jeton HMAC-SHA256 requis)' };
   }
 
-  // Tolérance pour ID Discord direct si environnement de développement interne
-  // (uniquement si snowflake numérique 17-20 chiffres)
-  if (/^\d{17,20}$/.test(token)) {
-    return {
-      valid: true,
-      payload: { userId: token, role: 'UNKNOWN', issuedAt: Math.floor(Date.now() / 1000) },
-    };
+  const [userId, role, issuedAtStr, receivedSig] = parts;
+
+  // Validation de l'identifiant Discord (snowflake numérique 17-20 chiffres)
+  if (!/^\d{17,20}$/.test(userId)) {
+    return { valid: false, reason: 'Identifiant Discord invalide dans le jeton' };
   }
 
-  return { valid: false, reason: 'Format de jeton de session non reconnu' };
+  const issuedAt = parseInt(issuedAtStr, 10);
+  const now = Math.floor(Date.now() / 1000);
+
+  // Durée maximale de session : 30 jours (2 592 000 secondes), rejet des dates futures (> 300s)
+  if (isNaN(issuedAt) || now - issuedAt > 2592000 || issuedAt > now + 300) {
+    return { valid: false, reason: 'Session expirée' };
+  }
+
+  const payload = `${userId}.${role}.${issuedAt}`;
+  const expectedSig = (await hmacSha256(secret, `session:${payload}`)).slice(0, 32);
+  if (receivedSig !== expectedSig) {
+    return { valid: false, reason: 'Signature HMAC de session invalide (jeton falsifié)' };
+  }
+
+  return {
+    valid: true,
+    payload: { userId, role, issuedAt },
+  };
 }
 
 // =============================================================================

@@ -16,6 +16,7 @@ import {
   PawakoRoleType,
   User,
   UserRole,
+  UserStatus,
   VAType,
 } from '../server/types';
 import {
@@ -103,9 +104,15 @@ app.use('*', async (c, next) => {
   return corsHandler(c, next);
 });
 
+function getSessionSecret(env: Env): string {
+  const secret = (env.SESSION_SECRET || env.DISCORD_CLIENT_SECRET || '').trim();
+  if (secret.length >= 32) return secret;
+  return secret || 'pawako_default_secret_key_minimum_32_chars_2026';
+}
+
 // Helper pour extraire et valider l'utilisateur authentifié
 async function getAuthenticatedUser(c: any, repo: FirestoreRepository): Promise<User | null> {
-  const secret = c.env.SESSION_SECRET || c.env.DISCORD_CLIENT_SECRET || 'pawako_session_salt_2026';
+  const secret = getSessionSecret(c.env);
 
   // 1. En-tête Authorization: Bearer <token>
   const authHeader = c.req.header('Authorization') || '';
@@ -482,6 +489,16 @@ app.post('/api/auth/logout', c => {
 
 app.get('/api/stats/overview', async c => {
   const repo = getRepository(c.env);
+  const user = await getAuthenticatedUser(c, repo);
+
+  if (!user) {
+    return c.json({ error: 'Session non authentifiée. Veuillez vous connecter via Discord.' }, 401);
+  }
+
+  if (user.role === 'PARRAIN') {
+    return c.json({ error: 'Accès réservé exclusivement à la Direction et aux Responsables.' }, 403);
+  }
+
   const guildIds = {
     RECRUTEMENT: c.env.DISCORD_RECRUITMENT_GUILD_ID || '',
     FORMATION: c.env.DISCORD_FORMATION_GUILD_ID || '',
@@ -516,7 +533,12 @@ app.get('/api/parrain/dashboard', async c => {
 app.get('/api/candidates', async c => {
   const repo = getRepository(c.env);
   const user = await getAuthenticatedUser(c, repo);
-  const isParrainOnly = user?.role === 'PARRAIN';
+
+  if (!user) {
+    return c.json({ error: 'Session non authentifiée. Veuillez vous connecter via Discord.' }, 401);
+  }
+
+  const isParrainOnly = user.role === 'PARRAIN';
 
   const search = c.req.query('search');
   const vaType = c.req.query('vaType') as VAType | 'ALL' | undefined;
@@ -534,10 +556,21 @@ app.get('/api/candidates', async c => {
     operationalStatus,
     server,
     hasAnomaly,
-    referrerDiscordUserId: isParrainOnly ? user?.id : undefined,
+    referrerDiscordUserId: isParrainOnly ? user.id : undefined,
     page,
     limit,
   });
+
+  // Pour les parrains, masquer les informations confidentielles internes mais conserver le motif de refus transparent
+  if (isParrainOnly) {
+    result.candidates = result.candidates.map(cand => ({
+      ...cand,
+      decisionByUserId: undefined,
+      decisionByName: undefined,
+      uncertaintyReason: undefined,
+      anomalyReason: cand.hasAnomaly ? 'Anomalie administrative en cours de traitement' : null,
+    }));
+  }
 
   return c.json(result);
 });
@@ -545,6 +578,11 @@ app.get('/api/candidates', async c => {
 app.get('/api/candidates/:id', async c => {
   const repo = getRepository(c.env);
   const user = await getAuthenticatedUser(c, repo);
+
+  if (!user) {
+    return c.json({ error: 'Session non authentifiée. Veuillez vous connecter via Discord.' }, 401);
+  }
+
   const candidate = await repo.getCandidateById(c.req.param('id'));
 
   if (!candidate) {
@@ -552,22 +590,35 @@ app.get('/api/candidates/:id', async c => {
   }
 
   // Si c'est un parrain, il ne peut voir que ses propres filleuls
-  if (user?.role === 'PARRAIN' && candidate.referrerDiscordUserId !== user.id) {
+  if (user.role === 'PARRAIN' && candidate.referrerDiscordUserId !== user.id) {
     return c.json({ error: 'Accès refusé. Ce candidat n est pas l un de vos filleuls.' }, 403);
   }
 
   const history = await repo.getStatusHistoryForCandidate(candidate.id);
+  // Les parrains ont accès à l'historique transparent et aux motifs de refus, hors notes strictement confidentielles
   const sanitizedHistory =
-    user?.role === 'PARRAIN' ? history.filter(h => !h.isConfidential) : history;
+    user.role === 'PARRAIN' ? history.filter(h => !h.isConfidential) : history;
 
-  return c.json({ candidate, history: sanitizedHistory });
+  const sanitizedCandidate = user.role === 'PARRAIN' ? {
+    ...candidate,
+    decisionByUserId: undefined,
+    decisionByName: undefined,
+    uncertaintyReason: undefined,
+    anomalyReason: candidate.hasAnomaly ? 'Anomalie administrative en cours de traitement' : null,
+  } : candidate;
+
+  return c.json({ candidate: sanitizedCandidate, history: sanitizedHistory });
 });
 
 app.post('/api/candidates', async c => {
   const repo = getRepository(c.env);
   const user = await getAuthenticatedUser(c, repo);
 
-  if (!user || user.role === 'PARRAIN') {
+  if (!user) {
+    return c.json({ error: 'Session non authentifiée. Veuillez vous connecter.' }, 401);
+  }
+
+  if (user.role === 'PARRAIN') {
     return c.json({ error: 'Accès réservé à la Direction et aux Responsables.' }, 403);
   }
 
@@ -595,12 +646,16 @@ app.patch('/api/candidates/:id/status', async c => {
   const repo = getRepository(c.env);
   const user = await getAuthenticatedUser(c, repo);
 
-  if (!user || user.role === 'PARRAIN') {
+  if (!user) {
+    return c.json({ error: 'Session non authentifiée. Veuillez vous connecter.' }, 401);
+  }
+
+  if (user.role === 'PARRAIN') {
     return c.json({ error: 'Accès réservé à la Direction et aux Responsables.' }, 403);
   }
 
   const body = await c.req.json();
-  const { newAdminStatus, newOperationalStatus, notes, refusalReason } = body;
+  const { newAdminStatus, newOperationalStatus, notes, refusalReason, isConfidential } = body;
 
   if (!notes || typeof notes !== 'string' || notes.trim().length === 0) {
     return c.json({ error: 'Un motif d audit tracé (notes) est strictement obligatoire.' }, 400);
@@ -612,6 +667,7 @@ app.patch('/api/candidates/:id/status', async c => {
       newOperationalStatus,
       notes,
       refusalReason,
+      isConfidential: Boolean(isConfidential),
       actorUserId: user.id,
       actorName: user.displayName,
       actorSource: user.role === 'ADMINISTRATEUR' ? 'MANUAL_ADMIN' : 'MANUAL_RESPONSABLE',
@@ -627,7 +683,11 @@ app.post('/api/candidates/:id/clear-anomaly', async c => {
   const repo = getRepository(c.env);
   const user = await getAuthenticatedUser(c, repo);
 
-  if (!user || user.role === 'PARRAIN') {
+  if (!user) {
+    return c.json({ error: 'Session non authentifiée. Veuillez vous connecter.' }, 401);
+  }
+
+  if (user.role === 'PARRAIN') {
     return c.json({ error: 'Accès réservé à la Direction et aux Responsables.' }, 403);
   }
 
@@ -639,7 +699,11 @@ app.post('/api/candidates/:id/reassign', async c => {
   const repo = getRepository(c.env);
   const user = await getAuthenticatedUser(c, repo);
 
-  if (!user || user.role !== 'ADMINISTRATEUR') {
+  if (!user) {
+    return c.json({ error: 'Session non authentifiée. Veuillez vous connecter.' }, 401);
+  }
+
+  if (user.role !== 'ADMINISTRATEUR') {
     return c.json({ error: 'Seuls les Administrateurs peuvent réattribuer un parrain.' }, 403);
   }
 
@@ -686,8 +750,12 @@ app.post('/api/referrers', async c => {
   const repo = getRepository(c.env);
   const user = await getAuthenticatedUser(c, repo);
 
-  if (!user || user.role !== 'ADMINISTRATEUR') {
-    return c.json({ error: 'Accès réservé aux Administrateurs' }, 403);
+  if (!user) {
+    return c.json({ error: 'Session non authentifiée.' }, 401);
+  }
+
+  if (user.role !== 'ADMINISTRATEUR') {
+    return c.json({ error: 'Accès réservé exclusivement aux Administrateurs' }, 403);
   }
 
   const body = await c.req.json();
@@ -712,7 +780,11 @@ app.patch('/api/referrers/:id/toggle', async c => {
   const repo = getRepository(c.env);
   const user = await getAuthenticatedUser(c, repo);
 
-  if (!user || user.role !== 'ADMINISTRATEUR') {
+  if (!user) {
+    return c.json({ error: 'Session non authentifiée.' }, 401);
+  }
+
+  if (user.role !== 'ADMINISTRATEUR') {
     return c.json({ error: 'Accès réservé aux Administrateurs' }, 403);
   }
 
@@ -726,6 +798,16 @@ app.patch('/api/referrers/:id/toggle', async c => {
 
 app.get('/api/discord/servers', async c => {
   const repo = getRepository(c.env);
+  const user = await getAuthenticatedUser(c, repo);
+
+  if (!user) {
+    return c.json({ error: 'Session non authentifiée. Veuillez vous connecter.' }, 401);
+  }
+
+  if (user.role === 'PARRAIN') {
+    return c.json({ error: 'Accès réservé à la Direction et aux Responsables.' }, 403);
+  }
+
   const guildIds = {
     RECRUTEMENT: c.env.DISCORD_RECRUITMENT_GUILD_ID || '',
     FORMATION: c.env.DISCORD_FORMATION_GUILD_ID || '',
@@ -740,7 +822,11 @@ app.get('/api/discord/role-mappings', async c => {
   const repo = getRepository(c.env);
   const user = await getAuthenticatedUser(c, repo);
 
-  if (!user || (user.role !== 'ADMINISTRATEUR' && user.role !== 'RESPONSABLE')) {
+  if (!user) {
+    return c.json({ error: 'Session non authentifiée.' }, 401);
+  }
+
+  if (user.role !== 'ADMINISTRATEUR' && user.role !== 'RESPONSABLE') {
     return c.json({ error: 'Accès réservé aux Responsables et Administrateurs' }, 403);
   }
 
@@ -752,7 +838,11 @@ app.put('/api/discord/role-mappings', async c => {
   const repo = getRepository(c.env);
   const user = await getAuthenticatedUser(c, repo);
 
-  if (!user || user.role !== 'ADMINISTRATEUR') {
+  if (!user) {
+    return c.json({ error: 'Session non authentifiée.' }, 401);
+  }
+
+  if (user.role !== 'ADMINISTRATEUR') {
     return c.json({ error: 'Seuls les Administrateurs peuvent modifier les correspondances de rôles' }, 403);
   }
 
@@ -805,18 +895,39 @@ app.post('/api/discord/webhook', async c => {
   }
 
   const repo = getRepository(c.env);
+  const eventId = nonceHeader || `evt_${Date.now()}_${user.id}_${eventType}`;
 
-  // Journalisation de l'événement dans Firestore
-  await repo.logAudit({
-    action: `DISCORD_EVENT_${eventType}`,
-    actorUserId: 'BOT_JARVIS',
-    actorName: 'Passerelle Bot JARVIS',
-    targetType: 'DISCORD',
-    targetId: user.id,
-    details: { eventType, guildId, username: user.username },
-  });
+  // 4. Verrouillage atomique distribué dans Firestore (anti-rejeu persistant)
+  const lock = await repo.lockWebhookEvent(eventId, Date.now() + 60000);
+  if (!lock.acquired) {
+    return c.json({ error: lock.reason || 'Événement webhook déjà traité ou en cours (anti-rejeu).' }, 409);
+  }
 
-  return c.json({ success: true, message: `Événement ${eventType} traité pour ${user.username} (${user.id})` });
+  try {
+    // Journalisation de l'événement dans Firestore
+    await repo.logAudit({
+      action: `DISCORD_EVENT_${eventType}`,
+      actorUserId: 'BOT_JARVIS',
+      actorName: 'Passerelle Bot JARVIS',
+      targetType: 'DISCORD',
+      targetId: user.id,
+      details: { eventType, guildId, username: user.username },
+    });
+
+    // Marquer l'événement comme COMPLETED dans Firestore
+    await repo.completeWebhookEvent(eventId, {
+      eventType,
+      guildId,
+      userId: user.id,
+      username: user.username,
+    });
+
+    return c.json({ success: true, message: `Événement ${eventType} traité pour ${user.username} (${user.id})` });
+  } catch (err: any) {
+    // En cas d'échec métier, libérer le verrou pour autoriser une nouvelle tentative
+    await repo.releaseWebhookEvent(eventId);
+    return c.json({ error: `Erreur lors du traitement de l'événement : ${err.message}` }, 500);
+  }
 });
 
 // -----------------------------------------------------------------------------
@@ -827,7 +938,11 @@ app.get('/api/users', async c => {
   const repo = getRepository(c.env);
   const user = await getAuthenticatedUser(c, repo);
 
-  if (!user || user.role !== 'ADMINISTRATEUR') {
+  if (!user) {
+    return c.json({ error: 'Session non authentifiée.' }, 401);
+  }
+
+  if (user.role !== 'ADMINISTRATEUR') {
     return c.json({ error: 'Accès réservé exclusivement aux Administrateurs' }, 403);
   }
 
@@ -839,7 +954,11 @@ app.patch('/api/users/:id/role', async c => {
   const repo = getRepository(c.env);
   const user = await getAuthenticatedUser(c, repo);
 
-  if (!user || user.role !== 'ADMINISTRATEUR') {
+  if (!user) {
+    return c.json({ error: 'Session non authentifiée.' }, 401);
+  }
+
+  if (user.role !== 'ADMINISTRATEUR') {
     return c.json({ error: 'Accès réservé aux Administrateurs' }, 403);
   }
 
@@ -850,15 +969,61 @@ app.patch('/api/users/:id/role', async c => {
     return c.json({ error: 'Rôle invalide' }, 400);
   }
 
-  const updated = await repo.updateUserRole(c.req.param('id'), newRole as UserRole, user.id, user.displayName);
-  return c.json({ success: true, user: updated });
+  try {
+    const updated = await repo.updateUserRole(c.req.param('id'), newRole as UserRole, user.id, user.displayName);
+    if (!updated) {
+      return c.json({ error: 'Utilisateur introuvable' }, 404);
+    }
+    return c.json({ success: true, user: updated });
+  } catch (err: any) {
+    return c.json({ error: err.message }, 400);
+  }
+});
+
+app.patch('/api/users/:id/status', async c => {
+  const repo = getRepository(c.env);
+  const user = await getAuthenticatedUser(c, repo);
+
+  if (!user) {
+    return c.json({ error: 'Session non authentifiée.' }, 401);
+  }
+
+  if (user.role !== 'ADMINISTRATEUR') {
+    return c.json({ error: 'Accès réservé aux Administrateurs' }, 403);
+  }
+
+  const body = await c.req.json();
+  const { newStatus } = body;
+
+  if (!newStatus || !['ACTIVE', 'SUSPENDED', 'PENDING_APPROVAL'].includes(newStatus)) {
+    return c.json({ error: 'Statut invalide (ACTIVE, SUSPENDED, PENDING_APPROVAL attendu)' }, 400);
+  }
+
+  try {
+    const updated = await repo.updateUserStatus(
+      c.req.param('id'),
+      newStatus as UserStatus,
+      user.id,
+      user.displayName
+    );
+    if (!updated) {
+      return c.json({ error: 'Utilisateur introuvable' }, 404);
+    }
+    return c.json({ success: true, user: updated });
+  } catch (err: any) {
+    return c.json({ error: err.message }, 400);
+  }
 });
 
 app.get('/api/audit-logs', async c => {
   const repo = getRepository(c.env);
   const user = await getAuthenticatedUser(c, repo);
 
-  if (!user || user.role !== 'ADMINISTRATEUR') {
+  if (!user) {
+    return c.json({ error: 'Session non authentifiée.' }, 401);
+  }
+
+  if (user.role !== 'ADMINISTRATEUR') {
     return c.json({ error: 'Accès réservé aux Administrateurs' }, 403);
   }
 

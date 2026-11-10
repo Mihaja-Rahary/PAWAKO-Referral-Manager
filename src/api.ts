@@ -9,6 +9,7 @@ import {
   ReferralAttributionHistoryEntry,
   User,
   UserRole,
+  UserStatus,
   VAType,
   DiscordServerInfo,
   DiscordRoleMapping,
@@ -355,6 +356,14 @@ export const api = {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ newRole }),
+    });
+  },
+
+  async updateUserStatus(userId: string, newStatus: UserStatus): Promise<{ success: boolean; user: User }> {
+    return request(`/api/users/${userId}/status`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ newStatus }),
     });
   },
 

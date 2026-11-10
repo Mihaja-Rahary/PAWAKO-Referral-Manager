@@ -8,6 +8,7 @@ import { FirestoreRestClient } from './firestoreRest';
 import {
   User,
   UserRole,
+  UserStatus,
   Referrer,
   Candidate,
   StatusHistoryEntry,
@@ -145,6 +146,65 @@ export class FirestoreRepository {
       return true;
     } catch {
       return false;
+    }
+  }
+
+  /**
+   * Tente d'acquérir atomiquement un verrou de traitement d'événement Webhook dans Firestore.
+   * Empêche deux instances Worker de traiter simultanément le même événement.
+   */
+  async lockWebhookEvent(eventId: string, expiresAt: number): Promise<{ acquired: boolean; reason?: string }> {
+    try {
+      const existing = await this.client.getDocument<{ status: string; expiresAt: number }>('pawako_consumed_webhooks', eventId);
+      if (existing) {
+        if (existing.status === 'COMPLETED') {
+          return { acquired: false, reason: 'Événement webhook déjà traité avec succès (anti-rejeu).' };
+        }
+        // Si encore en cours de traitement et non expiré (< 60 secondes)
+        if (existing.status === 'PROCESSING' && existing.expiresAt > Date.now()) {
+          return { acquired: false, reason: 'Événement webhook en cours de traitement par une autre instance.' };
+        }
+      }
+
+      await this.client.setDocument(
+        'pawako_consumed_webhooks',
+        eventId,
+        {
+          eventId,
+          status: 'PROCESSING',
+          lockedAt: new Date().toISOString(),
+          expiresAt,
+        },
+        { precondition: { exists: false } }
+      );
+      return { acquired: true };
+    } catch {
+      // Précondition échouée : document créé simultanément par une autre instance
+      return { acquired: false, reason: 'Conflit d écriture concurrent sur l événement webhook.' };
+    }
+  }
+
+  /**
+   * Marque définitivement l'événement Webhook comme COMPLETED après succès du traitement métier.
+   */
+  async completeWebhookEvent(eventId: string, details?: Record<string, any>): Promise<void> {
+    await this.client.setDocument('pawako_consumed_webhooks', eventId, {
+      eventId,
+      status: 'COMPLETED',
+      completedAt: new Date().toISOString(),
+      expiresAt: Date.now() + 86400000, // Conservation 24h avant purge automatique
+      details: details || {},
+    });
+  }
+
+  /**
+   * Libère le verrou en cas d'échec du traitement métier afin de permettre une nouvelle tentative.
+   */
+  async releaseWebhookEvent(eventId: string): Promise<void> {
+    try {
+      await this.client.deleteDocument('pawako_consumed_webhooks', eventId);
+    } catch {
+      // Ignoré si déjà nettoyé
     }
   }
 
@@ -310,6 +370,39 @@ export class FirestoreRepository {
       targetType: 'USER',
       targetId: userId,
       details: { newRole },
+    });
+
+    return user;
+  }
+
+  async updateUserStatus(
+    userId: string,
+    newStatus: UserStatus,
+    actorId: string,
+    actorName: string
+  ): Promise<User | null> {
+    const user = await this.getUserById(userId);
+    if (!user) return null;
+
+    // Protection : interdire la désactivation ou suspension du dernier administrateur actif
+    if (user.role === 'ADMINISTRATEUR' && newStatus !== 'ACTIVE') {
+      const allUsers = await this.getUsers();
+      const activeAdmins = allUsers.filter(u => u.role === 'ADMINISTRATEUR' && u.status === 'ACTIVE' && u.id !== userId);
+      if (activeAdmins.length === 0) {
+        throw new Error('Impossible de désactiver ou suspendre le dernier administrateur actif du système.');
+      }
+    }
+
+    user.status = newStatus;
+    await this.client.setDocument('pawako_users', userId, user);
+
+    await this.logAudit({
+      action: 'USER_STATUS_CHANGE',
+      actorUserId: actorId,
+      actorName,
+      targetType: 'USER',
+      targetId: userId,
+      details: { newStatus },
     });
 
     return user;
@@ -572,6 +665,7 @@ export class FirestoreRepository {
       actorUserId: string;
       actorName: string;
       actorSource?: StatusHistoryEntry['authorSource'];
+      isConfidential?: boolean;
     }
   ): Promise<Candidate | null> {
     const candidate = await this.getCandidateById(candidateId);
@@ -621,7 +715,7 @@ export class FirestoreRepository {
       authorName: params.actorName,
       authorSource: params.actorSource || 'MANUAL_ADMIN',
       reason: params.notes,
-      isConfidential: candidate.adminStatus === 'REFUSE',
+      isConfidential: Boolean(params.isConfidential),
     });
 
     return candidate;
