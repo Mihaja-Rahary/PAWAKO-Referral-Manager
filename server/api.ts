@@ -53,9 +53,10 @@ apiRouter.get('/auth/url', (req: Request, res: Response) => {
   const redirectUri = `${appUrl}/auth/callback`;
   const portal = req.query.portal === 'parrain' ? 'parrain' : 'admin';
 
-  // Génération d'un jeton d'état cryptographique anti-CSRF
-  const state = crypto.randomBytes(16).toString('hex');
-  res.cookie('oauth_state', state, {
+  // Génération d'un jeton d'état cryptographique anti-CSRF avec encodage de la porte d'entrée
+  const stateNonce = crypto.randomBytes(16).toString('hex');
+  const state = `${portal}_${stateNonce}`;
+  res.cookie('oauth_state', stateNonce, {
     httpOnly: true,
     secure: true,
     sameSite: 'none',
@@ -536,10 +537,14 @@ apiRouter.post('/discord/sync-members', requireResponsableOrAdmin, async (req: R
 // Véritable Webhook sécurisé pour la passerelle Bot JARVIS
 apiRouter.post('/discord/webhook', async (req: Request, res: Response) => {
   const secret = req.headers['x-jarvis-secret'];
-  const expectedSecret = process.env.JARVIS_WEBHOOK_SECRET;
+  const expectedSecret = (
+    process.env.JARVIS_WEBHOOK_SECRET ||
+    process.env.DISCORD_BOT_WEBHOOK_SECRET ||
+    ''
+  ).trim();
 
-  if (expectedSecret && secret !== expectedSecret) {
-    return res.status(401).json({ error: 'Clé secrète de webhook JARVIS invalide' });
+  if (!expectedSecret || secret !== expectedSecret) {
+    return res.status(401).json({ error: 'Clé secrète de webhook JARVIS invalide ou non configurée' });
   }
 
   const { eventId, eventType, guildId, user, roles, addedRoleIds, removedRoleIds, inviteCode, vaType, timestamp } = req.body;

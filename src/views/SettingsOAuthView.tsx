@@ -687,14 +687,14 @@ Body:
 
               <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-2">
                 <div className="font-bold text-slate-900 flex items-center gap-1.5 text-xs">
-                  <span className="w-2 h-2 rounded-full bg-sky-500" />
-                  3. Backend Express : Hébergement Gratuit Dédié
+                  <span className="w-2 h-2 rounded-full bg-orange-500" />
+                  3. Backend API : Cloudflare Workers (pawako-api sur workers.dev)
                 </div>
                 <p className="text-[11px] text-slate-600 leading-relaxed">
-                  Le serveur Express existant s'exécute sur une offre gratuite (Render Web Service, Railway, Fly.io, ou Koyeb) sans exiger le plan Firebase Blaze. Gère le webhook JARVIS, l'OAuth2 Discord et les sessions sécurisées.
+                  Worker autonome ultra-rapide sur l'offre gratuite Cloudflare Workers (100 000 requêtes/jour gratuites), sans abonnement ni domaine personnalisé. Utilise l'API REST Firestore sans dépendance gRPC native.
                 </p>
                 <div className="pt-2 text-[10px] text-slate-500 font-mono">
-                  Démarrage : <code className="text-slate-800 font-semibold">npm start (tsx server.ts)</code>
+                  Déploiement : <code className="text-slate-800 font-semibold">npm run deploy:worker</code>
                 </div>
               </div>
 
@@ -704,7 +704,7 @@ Body:
                   4. Portes d'Entrée Séparées : /admin/login & /parrain/login
                 </div>
                 <p className="text-[11px] text-slate-600 leading-relaxed">
-                  Parcours de connexion et contrôles d'autorisation hermétiques. Les parrains accèdent exclusivement à leur propre tableau de bord. La Direction pilote l'ensemble des 4 serveurs Discord.
+                  Parcours de connexion et contrôles d'autorisation hermétiques avec état Discord OAuth2 sécurisé (<code className="text-slate-800 font-semibold">admin_*</code> / <code className="text-slate-800 font-semibold">parrain_*</code>). Les parrains n'ont accès qu'à leurs propres filleuls.
                 </p>
                 <div className="pt-2 text-[10px] text-slate-500 font-mono">
                   URLs : <code className="text-slate-800 font-semibold">/admin/login</code> & <code className="text-slate-800 font-semibold">/parrain/login</code>

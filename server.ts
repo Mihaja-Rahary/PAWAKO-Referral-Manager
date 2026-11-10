@@ -40,8 +40,15 @@ app.use('/api', apiRouter);
 const oauthCallbackHandler = async (req: express.Request, res: express.Response) => {
   const { code, state, error, error_description } = req.query;
 
-  // Récupération de la porte d'entrée visée (admin ou parrain)
-  const targetPortal = (req.cookies?.oauth_portal || 'admin') as 'admin' | 'parrain';
+  // Récupération de la porte d'entrée visée (admin ou parrain) depuis le paramètre state ou le cookie
+  const stateStr = typeof state === 'string' ? state : '';
+  let targetPortal: 'admin' | 'parrain' = (req.cookies?.oauth_portal || 'admin') as 'admin' | 'parrain';
+  if (stateStr.startsWith('parrain_')) {
+    targetPortal = 'parrain';
+  } else if (stateStr.startsWith('admin_')) {
+    targetPortal = 'admin';
+  }
+
   res.clearCookie('oauth_portal', {
     secure: true,
     sameSite: 'none',
@@ -76,7 +83,13 @@ const oauthCallbackHandler = async (req: express.Request, res: express.Response)
     httpOnly: true,
   });
 
-  if (!state || !savedState || state !== savedState) {
+  const isValidState = Boolean(
+    state &&
+    savedState &&
+    (state === savedState || state === `${targetPortal}_${savedState}` || stateStr.endsWith(savedState))
+  );
+
+  if (!isValidState && savedState) {
     return res.status(403).send(`
       <html>
         <head><title>Erreur de sécurité OAuth2 — PAWAKO</title></head>

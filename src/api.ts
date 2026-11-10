@@ -12,8 +12,100 @@ import {
   VAType,
   DiscordServerInfo,
   DiscordRoleMapping,
-  AuditLog
+  AuditLog,
 } from './types';
+
+// Base URL de l'API : Cloudflare Worker (ex: https://pawako-api.<subdomain>.workers.dev) ou même origine en local
+const API_BASE = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '');
+
+// Synchronisation automatique de la session depuis le fragment d'URL (#), les query params, ou postMessage
+if (typeof window !== 'undefined') {
+  // 1. Extraction sécurisée depuis le fragment d'URL (Hash)
+  const hashString = window.location.hash.replace(/^#/, '');
+  const hashParams = new URLSearchParams(hashString);
+  const urlParams = new URLSearchParams(window.location.search);
+
+  const sessionToken =
+    hashParams.get('sessionToken') ||
+    hashParams.get('token') ||
+    hashParams.get('session') ||
+    urlParams.get('sessionToken') ||
+    urlParams.get('token') ||
+    urlParams.get('session');
+
+  if (sessionToken) {
+    localStorage.setItem('pawako_session_token', sessionToken);
+    localStorage.setItem('pawako_user_id', sessionToken);
+
+    // Nettoie immédiatement l'URL (hash et search) sans recharger la page
+    urlParams.delete('sessionToken');
+    urlParams.delete('token');
+    urlParams.delete('session');
+    const newSearch = urlParams.toString();
+    const newUrl = window.location.pathname + (newSearch ? `?${newSearch}` : '');
+    window.history.replaceState({}, '', newUrl);
+  }
+
+  // 2. Écoute les événements d'authentification émis par le popup OAuth Discord avec validation d'origine stricte
+  window.addEventListener('message', (ev: MessageEvent) => {
+    // Vérification de l'origine : seul le backend autorisé ou l'origine courante est accepté
+    const trustedBackendOrigin = API_BASE ? new URL(API_BASE).origin : window.location.origin;
+    if (ev.origin !== trustedBackendOrigin && ev.origin !== window.location.origin) {
+      return;
+    }
+
+    if (ev.data && ev.data.type === 'OAUTH_AUTH_SUCCESS') {
+      const token = ev.data.token || ev.data.userId;
+      if (token && typeof token === 'string') {
+        localStorage.setItem('pawako_session_token', token);
+        localStorage.setItem('pawako_user_id', ev.data.userId || token);
+      }
+    }
+  });
+}
+
+function getHeaders(customHeaders?: HeadersInit): Headers {
+  const headers = new Headers(customHeaders || {});
+  if (typeof window !== 'undefined') {
+    const sessionToken = localStorage.getItem('pawako_session_token') || localStorage.getItem('pawako_user_id');
+    if (sessionToken) {
+      if (!headers.has('Authorization')) {
+        headers.set('Authorization', `Bearer ${sessionToken}`);
+      }
+      if (!headers.has('X-Pawako-Session')) {
+        headers.set('X-Pawako-Session', sessionToken);
+      }
+      if (!headers.has('X-Pawako-User-Id')) {
+        headers.set('X-Pawako-User-Id', sessionToken);
+      }
+    }
+  }
+  return headers;
+}
+
+async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
+  const url = `${API_BASE}${path}`;
+  const headers = getHeaders(options.headers);
+
+  const res = await fetch(url, {
+    ...options,
+    credentials: 'include',
+    headers,
+  });
+
+  if (!res.ok) {
+    let errMsg = `Erreur HTTP ${res.status}`;
+    try {
+      const errJson = await res.json();
+      errMsg = errJson.error || errMsg;
+    } catch {
+      // ignore
+    }
+    throw new Error(errMsg);
+  }
+
+  return res.json();
+}
 
 export const api = {
   // Auth
@@ -25,8 +117,7 @@ export const api = {
     isBotConfigured: boolean;
     isInitialAdminClaimed?: boolean;
   }> {
-    const res = await fetch('/api/auth/me');
-    return res.json();
+    return request('/api/auth/me');
   },
 
   async getOAuthUrl(portal: 'admin' | 'parrain' = 'admin'): Promise<{
@@ -36,15 +127,18 @@ export const api = {
     redirectUri: string;
     appUrl: string;
   }> {
-    const res = await fetch(`/api/auth/url?portal=${portal}`);
-    return res.json();
+    return request(`/api/auth/url?portal=${portal}`);
   },
 
   async logout(): Promise<void> {
-    await fetch('/api/auth/logout', { method: 'POST' });
+    if (typeof window !== 'undefined') {
+      localStorage.removeItem('pawako_session_token');
+      localStorage.removeItem('pawako_user_id');
+    }
+    await request('/api/auth/logout', { method: 'POST' });
   },
 
-  // Firestore Management (Plan Spark)
+  // Firestore Management (Plan Spark / Workers)
   async getFirestoreStatus(): Promise<{
     isConfigured: boolean;
     isConnected: boolean;
@@ -53,13 +147,11 @@ export const api = {
     storageMode: 'firestore' | 'local';
     error: string | null;
   }> {
-    const res = await fetch('/api/admin/firestore/status');
-    return res.json();
+    return request('/api/admin/firestore/status');
   },
 
   async createFirestoreBackup(): Promise<{ success: boolean; backupPath: string; message: string }> {
-    const res = await fetch('/api/admin/firestore/backup', { method: 'POST' });
-    return res.json();
+    return request('/api/admin/firestore/backup', { method: 'POST' });
   },
 
   async migrateToFirestore(): Promise<{
@@ -68,12 +160,11 @@ export const api = {
     details: Record<string, number>;
     message: string;
   }> {
-    const res = await fetch('/api/admin/firestore/migrate', {
+    return request('/api/admin/firestore/migrate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ confirm: true }),
     });
-    return res.json();
   },
 
   // Candidates
@@ -107,9 +198,7 @@ export const api = {
     if (params?.page) query.set('page', params.page.toString());
     if (params?.limit) query.set('limit', params.limit.toString());
 
-    const res = await fetch(`/api/candidates?${query.toString()}`);
-    if (!res.ok) throw new Error((await res.json()).error || 'Erreur lors du chargement des candidats');
-    return res.json();
+    return request(`/api/candidates?${query.toString()}`);
   },
 
   async getCandidate(id: string): Promise<{
@@ -117,9 +206,7 @@ export const api = {
     statusHistory: StatusHistoryEntry[];
     attributionHistory: ReferralAttributionHistoryEntry[];
   }> {
-    const res = await fetch(`/api/candidates/${id}`);
-    if (!res.ok) throw new Error((await res.json()).error || 'Erreur lors du chargement du dossier');
-    return res.json();
+    return request(`/api/candidates/${id}`);
   },
 
   async createCandidate(payload: {
@@ -129,13 +216,11 @@ export const api = {
     vaType: VAType;
     inviteCodeUsed?: string;
   }): Promise<{ success: boolean; candidate: Candidate; isNew: boolean; edgeCase: string | null }> {
-    const res = await fetch('/api/candidates', {
+    return request('/api/candidates', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
-    if (!res.ok) throw new Error((await res.json()).error || 'Erreur lors de la création');
-    return res.json();
   },
 
   async updateCandidateStatus(
@@ -148,26 +233,22 @@ export const api = {
       notes?: string;
     }
   ): Promise<{ success: boolean; candidate: Candidate }> {
-    const res = await fetch(`/api/candidates/${candidateId}/status`, {
+    return request(`/api/candidates/${candidateId}/status`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
-    if (!res.ok) throw new Error((await res.json()).error || 'Erreur lors de la mise à jour du statut');
-    return res.json();
   },
 
   async reassignReferrer(
     candidateId: string,
     payload: { newReferrerId: string; reason: string }
   ): Promise<{ success: boolean; candidate: Candidate }> {
-    const res = await fetch(`/api/candidates/${candidateId}/referrer`, {
+    return request(`/api/candidates/${candidateId}/referrer`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
-    if (!res.ok) throw new Error((await res.json()).error || 'Erreur lors de la réattribution');
-    return res.json();
   },
 
   async updateCandidateVAType(
@@ -175,33 +256,27 @@ export const api = {
     newVaType: VAType,
     reason: string
   ): Promise<{ success: boolean; candidate: Candidate }> {
-    const res = await fetch(`/api/candidates/${candidateId}/va-type`, {
+    return request(`/api/candidates/${candidateId}/va-type`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ newVaType, reason }),
     });
-    if (!res.ok) throw new Error((await res.json()).error || 'Erreur lors du changement de type VA');
-    return res.json();
   },
 
   async clearCandidateAnomaly(
     candidateId: string,
     resolutionNotes: string
   ): Promise<{ success: boolean; candidate: Candidate }> {
-    const res = await fetch(`/api/candidates/${candidateId}/clear-anomaly`, {
+    return request(`/api/candidates/${candidateId}/clear-anomaly`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ resolutionNotes }),
     });
-    if (!res.ok) throw new Error((await res.json()).error || 'Erreur lors de la résolution de l anomalie');
-    return res.json();
   },
 
   // Referrers
   async getReferrers(): Promise<{ referrers: Referrer[] }> {
-    const res = await fetch('/api/referrers');
-    if (!res.ok) throw new Error('Erreur lors du chargement des parrains');
-    return res.json();
+    return request('/api/referrers');
   },
 
   async createReferrer(payload: {
@@ -209,13 +284,15 @@ export const api = {
     inviteCode?: string;
     notes?: string;
   }): Promise<{ success: boolean; referrer: Referrer }> {
-    const res = await fetch('/api/referrers', {
+    return request('/api/referrers', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
-    if (!res.ok) throw new Error((await res.json()).error || 'Erreur création parrain');
-    return res.json();
+  },
+
+  async toggleReferrer(id: string): Promise<{ success: boolean; referrer: Referrer }> {
+    return request(`/api/referrers/${id}/toggle`, { method: 'PATCH' });
   },
 
   // Parrain Personal Space
@@ -228,7 +305,6 @@ export const api = {
       refuses: number;
       enFormation: number;
       enSimulation: number;
-      valides: number;
       enProduction: number;
       abandonnes: number;
       conversionRate: number;
@@ -236,72 +312,54 @@ export const api = {
     };
     candidates: Candidate[];
   }> {
-    const res = await fetch('/api/parrain/dashboard');
-    if (!res.ok) throw new Error((await res.json()).error || 'Erreur chargement espace parrain');
-    return res.json();
+    return request('/api/parrain/dashboard');
   },
 
   // Stats
   async getOverviewStats(): Promise<OverviewStatistics> {
-    const res = await fetch('/api/stats/overview');
-    if (!res.ok) throw new Error('Erreur lors du chargement des statistiques');
-    return res.json();
+    return request('/api/stats/overview');
   },
 
   // Discord Servers & Role Mappings
   async getDiscordServers(): Promise<{ servers: DiscordServerInfo[] }> {
-    const res = await fetch('/api/discord/servers');
-    if (!res.ok) throw new Error('Erreur serveurs Discord');
-    return res.json();
+    return request('/api/discord/servers');
   },
 
   async getRoleMappings(): Promise<{ mappings: DiscordRoleMapping[] }> {
-    const res = await fetch('/api/discord/role-mappings');
-    if (!res.ok) throw new Error('Erreur chargement des correspondances de rôles');
-    return res.json();
+    return request('/api/discord/role-mappings');
   },
 
   async updateRoleMappings(mappings: DiscordRoleMapping[]): Promise<{ success: boolean; mappings: DiscordRoleMapping[] }> {
-    const res = await fetch('/api/discord/role-mappings', {
+    return request('/api/discord/role-mappings', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ mappings }),
     });
-    if (!res.ok) throw new Error((await res.json()).error || 'Erreur sauvegarde des rôles');
-    return res.json();
   },
 
   async syncServerMembers(serverId: string, members: any[]): Promise<{ success: boolean; synchronizedCount: number; anomaliesCount: number }> {
-    const res = await fetch('/api/discord/sync-members', {
+    return request('/api/discord/sync-members', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ serverId, members }),
     });
-    if (!res.ok) throw new Error((await res.json()).error || 'Erreur lors de la synchronisation des membres');
-    return res.json();
   },
 
   // Users & Permissions
   async getUsers(): Promise<{ users: User[] }> {
-    const res = await fetch('/api/users');
-    if (!res.ok) throw new Error('Erreur utilisateurs');
-    return res.json();
+    return request('/api/users');
   },
 
   async updateUserRole(userId: string, newRole: UserRole): Promise<{ success: boolean; user: User }> {
-    const res = await fetch(`/api/users/${userId}/role`, {
+    return request(`/api/users/${userId}/role`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ newRole }),
     });
-    if (!res.ok) throw new Error('Erreur mise à jour rôle');
-    return res.json();
   },
 
   // Audit Logs
   async getAuditLogs(limit = 100): Promise<{ auditLogs: AuditLog[] }> {
-    const res = await fetch(`/api/audit-logs?limit=${limit}`);
-    if (!res.ok) throw new Error('Erreur chargement logs');
-    return res.json();
+    return request(`/api/audit-logs?limit=${limit}`);
   },
 };

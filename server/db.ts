@@ -252,7 +252,11 @@ class DatabaseService {
   }
 
   public getInitialAdminConfiguredId(): string {
-    return (process.env.PAWAKO_INITIAL_ADMIN_DISCORD_ID || '').trim();
+    return (
+      process.env.INITIAL_ADMIN_DISCORD_ID ||
+      process.env.PAWAKO_INITIAL_ADMIN_DISCORD_ID ||
+      ''
+    ).trim();
   }
 
   public getAllData(): DatabaseSchema {
@@ -276,7 +280,7 @@ class DatabaseService {
     if (!configuredAdminId && !this.isInitialAdminClaimed()) {
       return {
         authorized: false,
-        reason: 'La variable serveur PAWAKO_INITIAL_ADMIN_DISCORD_ID n est pas configurée. Aucun administrateur initial n est défini.',
+        reason: 'La variable serveur INITIAL_ADMIN_DISCORD_ID (ou PAWAKO_INITIAL_ADMIN_DISCORD_ID) n est pas configurée. Aucun administrateur initial n est défini.',
       };
     }
 
