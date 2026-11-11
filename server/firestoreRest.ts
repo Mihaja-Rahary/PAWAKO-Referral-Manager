@@ -260,10 +260,17 @@ export class FirestoreRestClient {
   }
 
   /**
-   * Récupère un document par sa collection et son ID
+   * Récupère un document par sa collection et son ID, avec support optionnel d'une transaction REST
    */
-  async getDocument<T = any>(collection: string, docId: string): Promise<T | null> {
-    const url = `${this.baseUrl}/${encodeURIComponent(collection)}/${encodeURIComponent(docId)}`;
+  async getDocument<T = any>(
+    collection: string,
+    docId: string,
+    options?: { transaction?: string }
+  ): Promise<(T & { _updateTime?: string }) | null> {
+    let url = `${this.baseUrl}/${encodeURIComponent(collection)}/${encodeURIComponent(docId)}`;
+    if (options?.transaction) {
+      url += `?transaction=${encodeURIComponent(options.transaction)}`;
+    }
     const headers = await this.getHeaders();
     const res = await fetch(url, { headers });
 
@@ -276,7 +283,28 @@ export class FirestoreRestClient {
     }
 
     const doc = await res.json();
-    return fromFirestoreDocument<T>(doc);
+    return fromFirestoreDocument<T>(doc) as (T & { _updateTime?: string });
+  }
+
+  /**
+   * Démarre une transaction Firestore REST native
+   */
+  async beginTransaction(): Promise<string> {
+    const url = `https://firestore.googleapis.com/v1/projects/${this.projectId}/databases/${this.databaseId}/documents:beginTransaction`;
+    const headers = await this.getHeaders();
+    const res = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ options: { readWrite: {} } }),
+    });
+
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`Firestore beginTransaction a échoué (${res.status}): ${err}`);
+    }
+
+    const data = (await res.json()) as { transaction: string };
+    return data.transaction;
   }
 
   /**
@@ -417,6 +445,58 @@ export class FirestoreRestClient {
         const err = await res.text();
         throw new Error(`Firestore BATCH commit a échoué (${res.status}): ${err}`);
       }
+    }
+  }
+
+  /**
+   * Effectue un commit atomique de documents avec support de transaction et préconditions.
+   */
+  async commit(params: {
+    transaction?: string;
+    writes: Array<{
+      collection: string;
+      docId: string;
+      data: Record<string, any>;
+      precondition?: { exists?: boolean; updateTime?: string };
+    }>;
+  }): Promise<void> {
+    if (params.writes.length === 0) return;
+    const url = `https://firestore.googleapis.com/v1/projects/${this.projectId}/databases/${this.databaseId}/documents:commit`;
+    const headers = await this.getHeaders();
+
+    const firestoreWrites = params.writes.map(w => {
+      const writeObj: any = {
+        update: {
+          name: `${this.baseUrl}/${encodeURIComponent(w.collection)}/${encodeURIComponent(w.docId)}`,
+          fields: toFirestoreDocument(w.data).fields,
+        },
+      };
+      if (w.precondition) {
+        writeObj.currentDocument = {};
+        if (w.precondition.exists !== undefined) {
+          writeObj.currentDocument.exists = w.precondition.exists;
+        }
+        if (w.precondition.updateTime) {
+          writeObj.currentDocument.updateTime = w.precondition.updateTime;
+        }
+      }
+      return writeObj;
+    });
+
+    const body: Record<string, any> = { writes: firestoreWrites };
+    if (params.transaction) {
+      body.transaction = params.transaction;
+    }
+
+    const res = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
+    });
+
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`Firestore COMMIT a échoué (${res.status}): ${err}`);
     }
   }
 }

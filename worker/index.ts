@@ -47,6 +47,8 @@ export interface Env {
   DISCORD_FORMATION_GUILD_ID?: string;
   DISCORD_CHATTING_PRODUCTION_GUILD_ID?: string;
   DISCORD_INSTAGRAM_PRODUCTION_GUILD_ID?: string;
+  ENVIRONMENT?: string;
+  NODE_ENV?: string;
 }
 
 const app = new Hono<{ Bindings: Env }>();
@@ -108,23 +110,34 @@ app.use('*', async (c, next) => {
   }
 
   const frontendUrl = (c.env.FRONTEND_URL || '').trim();
-  let configuredFrontendOrigin = '';
+  let configuredFrontendOrigin: string | null = null;
   if (frontendUrl) {
     try {
-      configuredFrontendOrigin = new URL(frontendUrl).origin;
+      const parsed = new URL(frontendUrl);
+      if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+        configuredFrontendOrigin = parsed.origin;
+      }
     } catch {
-      configuredFrontendOrigin = frontendUrl;
+      configuredFrontendOrigin = null;
     }
   }
 
-  // Origines autorisées : strictement l'URL frontend configurée, ou localhost en développement
-  const isDevOrigin =
-    origin === 'http://localhost:3000' ||
-    origin === 'http://127.0.0.1:3000' ||
-    origin === 'http://localhost:5173' ||
-    origin === 'http://127.0.0.1:5173';
+  // Vérification explicite du mode développement
+  const isDevelopment = c.env.ENVIRONMENT === 'development' || c.env.NODE_ENV === 'development';
 
-  const isAllowedOrigin = (configuredFrontendOrigin && origin === configuredFrontendOrigin) || isDevOrigin;
+  let isAllowedOrigin = false;
+  if (isDevelopment) {
+    const isLocalhost =
+      origin === 'http://localhost:3000' ||
+      origin === 'http://127.0.0.1:3000' ||
+      origin === 'http://localhost:5173' ||
+      origin === 'http://127.0.0.1:5173';
+    isAllowedOrigin = isLocalhost || Boolean(configuredFrontendOrigin && origin === configuredFrontendOrigin);
+  } else {
+    // En production : exclusivement l'origine exacte configurée dans FRONTEND_URL.
+    // Si FRONTEND_URL est absent ou invalide, tout accès CORS est strictement refusé.
+    isAllowedOrigin = Boolean(configuredFrontendOrigin && origin === configuredFrontendOrigin);
+  }
 
   // Traitement des requêtes pré-vol (OPTIONS)
   if (c.req.method === 'OPTIONS') {
@@ -1142,17 +1155,26 @@ app.post('/api/discord/webhook', async c => {
     });
 
     // Finalisation atomique sécurisée par ownerId et updateTime
-    await repo.completeWebhookEvent(eventId, ownerId, {
+    const finalized = await repo.completeWebhookEvent(eventId, ownerId, {
       eventType,
       guildId,
       userId: user.id,
       username: user.username,
     });
 
+    if (!finalized) {
+      // Le verrou n'a pas pu être confirmé (ex: expiré et repris ou conflit concurrent)
+      // Ne jamais retourner success: true si la finalisation du verrou n'a pas été confirmée
+      await repo.releaseWebhookEvent(eventId, ownerId);
+      return c.json({ error: 'Échec de la confirmation de finalisation du verrou webhook.' }, 500);
+    }
+
     return c.json({ success: true, message: `Événement ${eventType} traité pour ${user.username} (${user.id})` });
-  } catch {
-    // En cas d'échec métier, libérer le verrou uniquement si l'ownerId correspond
-    await repo.releaseWebhookEvent(eventId, ownerId);
+  } catch (err: any) {
+    // En cas d'échec métier ou exception, libérer le verrou uniquement avec l'ownerId correspondant
+    try {
+      await repo.releaseWebhookEvent(eventId, ownerId);
+    } catch {}
     return c.json({ error: 'Erreur lors du traitement interne de l événement.' }, 500);
   }
 });

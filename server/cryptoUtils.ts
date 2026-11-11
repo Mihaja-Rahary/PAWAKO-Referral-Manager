@@ -4,18 +4,6 @@
  * Zéro clé secrète par défaut, zéro fallback prévisible.
  */
 
-// Cache glissant pour la protection contre le rejeu OAuth2 (durée de vie : 15 minutes)
-const consumedOAuthNonces = new Map<string, number>();
-
-function cleanExpiredOAuthNonces(): void {
-  const now = Date.now();
-  for (const [nonce, expiresAt] of consumedOAuthNonces.entries()) {
-    if (now > expiresAt) {
-      consumedOAuthNonces.delete(nonce);
-    }
-  }
-}
-
 /**
  * Encode un buffer en chaîne hexadécimale
  */
@@ -75,8 +63,6 @@ export async function generateSecureOAuthState(
     throw new Error('SESSION_SECRET obligatoire manquant ou inférieur à 32 caractères');
   }
 
-  cleanExpiredOAuthNonces();
-
   const nonce = crypto.randomUUID();
   const timestamp = Date.now();
   const message = `${portal}:${nonce}:${timestamp}`;
@@ -101,18 +87,21 @@ export interface VerifyOAuthStateResult {
  * 1. Vérifie le format
  * 2. Vérifie la signature HMAC
  * 3. Vérifie l'expiration (< 10 minutes)
- * 4. Empêche la réutilisation (protection anti-rejeu L1 mémoire + L2 Firestore)
+ * 4. Empêche la réutilisation via consommation persistante OBLIGATOIRE dans Firestore (aucun cache mémoire)
+ * En cas d'indisponibilité de Firestore, refuse systématiquement l'authentification.
  */
 export async function verifyAndConsumeOAuthState(
   state: string,
   secret: string,
-  persistentConsumer?: (nonce: string, expiresAt: number) => Promise<boolean>
+  persistentConsumer: (nonce: string, expiresAt: number) => Promise<boolean>
 ): Promise<VerifyOAuthStateResult> {
   if (!secret || typeof secret !== 'string' || secret.trim().length < 32) {
     return { valid: false, reason: 'SESSION_SECRET obligatoire manquant ou inférieur à 32 caractères' };
   }
 
-  cleanExpiredOAuthNonces();
+  if (!persistentConsumer || typeof persistentConsumer !== 'function') {
+    return { valid: false, reason: 'Consommateur persistant Firestore obligatoire manquant' };
+  }
 
   if (!state || typeof state !== 'string') {
     return { valid: false, reason: 'State OAuth2 manquant' };
@@ -147,21 +136,15 @@ export async function verifyAndConsumeOAuthState(
     return { valid: false, reason: 'Signature HMAC du state OAuth2 invalide (CSRF suspecté)' };
   }
 
-  // Protection contre le rejeu L1 (en mémoire locale de l'isolat)
-  if (consumedOAuthNonces.has(nonce)) {
-    return { valid: false, reason: 'Tentative de rejeu de state OAuth2 détectée (state déjà consommé en mémoire)' };
-  }
-
-  // Protection contre le rejeu L2 (persistante multi-instances via Firestore)
-  if (persistentConsumer) {
+  // Consommation persistante obligatoire dans Firestore
+  try {
     const isFresh = await persistentConsumer(nonce, now + 900000);
     if (!isFresh) {
       return { valid: false, reason: 'Tentative de rejeu de state OAuth2 détectée (state déjà consommé dans Firestore)' };
     }
+  } catch (err: any) {
+    return { valid: false, reason: `Échec de la validation persistante du state OAuth2 (Firestore indisponible : ${err?.message || 'erreur'})` };
   }
-
-  // Marque le nonce comme consommé pendant 15 minutes
-  consumedOAuthNonces.set(nonce, now + 900000);
 
   return { valid: true, portal, nonce };
 }

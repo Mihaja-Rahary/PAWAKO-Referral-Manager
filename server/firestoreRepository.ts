@@ -425,74 +425,128 @@ export class FirestoreRepository {
   }
 
   /**
-   * Met à jour de façon atomique la liste des administrateurs actifs dans pawako_metadata/system.
-   * Utilise une précondition Firestore sur _updateTime pour empêcher toute course concurrente
-   * qui tenterait de supprimer ou suspendre simultanément le dernier administrateur.
+   * Exécute une mutation atomique d'un utilisateur et de l'état système des administrateurs actifs.
+   * Utilise une transaction Firestore REST native avec vérification de non-vacance du dernier admin
+   * et commit atomique garantissant l'intégrité conjointe des deux documents.
    */
-  private async syncActiveAdminState(
-    targetUserId: string,
-    action: 'ADD' | 'REMOVE'
-  ): Promise<void> {
+  private async executeAtomicAdminUserMutation(
+    userId: string,
+    mutate: (user: User, currentAdmins: string[]) => { updatedUser: User; newAdmins: string[] }
+  ): Promise<User | null> {
     const maxRetries = 3;
+    let lastError: Error | null = null;
+
     for (let attempt = 0; attempt < maxRetries; attempt++) {
-      const meta = await this.client.getDocument<{
-        initialAdminClaimed?: boolean;
-        initialAdminClaimedAt?: string | null;
-        initialAdminDiscordUserId?: string | null;
-        activeAdminDiscordUserIds?: string[];
-        _updateTime?: string;
-      }>('pawako_metadata', 'system');
-
-      let currentAdmins: string[] = Array.isArray(meta?.activeAdminDiscordUserIds)
-        ? meta.activeAdminDiscordUserIds
-        : [];
-
-      // Si le tableau n'est pas encore initialisé dans les métadonnées, le synchroniser depuis la collection users
-      if (currentAdmins.length === 0) {
-        const allUsers = await this.getUsers();
-        currentAdmins = allUsers
-          .filter(u => u.role === 'ADMINISTRATEUR' && u.status === 'ACTIVE')
-          .map(u => u.id);
-        if (currentAdmins.length === 0 && meta?.initialAdminDiscordUserId) {
-          currentAdmins = [meta.initialAdminDiscordUserId];
-        }
-      }
-
-      let updatedAdmins: string[];
-      if (action === 'REMOVE') {
-        const remaining = currentAdmins.filter(id => id !== targetUserId);
-        if (remaining.length === 0) {
-          throw new Error('Opération impossible : vous ne pouvez ni rétrograder ni désactiver le dernier administrateur actif du système.');
-        }
-        updatedAdmins = remaining;
-      } else {
-        updatedAdmins = Array.from(new Set([...currentAdmins, targetUserId]));
-      }
-
       try {
-        const updatePayload = {
-          initialAdminClaimed: Boolean(meta?.initialAdminClaimed),
-          initialAdminClaimedAt: meta?.initialAdminClaimedAt || null,
-          initialAdminDiscordUserId: meta?.initialAdminDiscordUserId || null,
-          activeAdminDiscordUserIds: updatedAdmins,
-          lastUpdated: new Date().toISOString(),
-        };
+        // 1. Démarrage d'une transaction Firestore REST native
+        const transaction = await this.client.beginTransaction();
 
-        if (meta?._updateTime) {
-          await this.client.setDocument('pawako_metadata', 'system', updatePayload, {
-            precondition: { updateTime: meta._updateTime },
-          });
-        } else {
-          await this.client.setDocument('pawako_metadata', 'system', updatePayload);
+        // 2. Lecture du document utilisateur dans la transaction
+        const user = await this.client.getDocument<User>('pawako_users', userId, { transaction });
+        if (!user) {
+          return null;
         }
-        return; // Succès atomique
+
+        // 3. Lecture du document d'état système des métadonnées dans la transaction
+        const meta = await this.client.getDocument<{
+          initialAdminClaimed?: boolean;
+          initialAdminClaimedAt?: string | null;
+          initialAdminDiscordUserId?: string | null;
+          activeAdminDiscordUserIds?: string[];
+          _updateTime?: string;
+        }>('pawako_metadata', 'system', { transaction });
+
+        let currentAdmins: string[] = Array.isArray(meta?.activeAdminDiscordUserIds)
+          ? [...meta.activeAdminDiscordUserIds]
+          : [];
+
+        // Si le document système n'est pas encore initialisé, peupler depuis la collection users
+        if (currentAdmins.length === 0) {
+          const allUsers = await this.getUsers();
+          currentAdmins = allUsers
+            .filter(u => u.role === 'ADMINISTRATEUR' && u.status === 'ACTIVE')
+            .map(u => u.id);
+          if (currentAdmins.length === 0 && meta?.initialAdminDiscordUserId) {
+            currentAdmins = [meta.initialAdminDiscordUserId];
+          }
+        }
+
+        // 4. Calcul de la mutation
+        const { updatedUser, newAdmins } = mutate(user, currentAdmins);
+
+        // Si l'utilisateur était un admin actif et ne l'est plus, vérifier qu'il reste au moins 1 admin actif
+        const wasActiveAdmin = user.role === 'ADMINISTRATEUR' && user.status === 'ACTIVE';
+        const willBeActiveAdmin = updatedUser.role === 'ADMINISTRATEUR' && updatedUser.status === 'ACTIVE';
+        if (wasActiveAdmin && !willBeActiveAdmin) {
+          if (newAdmins.length === 0) {
+            throw new Error('Action refusée : impossible de rétrograder ou désactiver le dernier administrateur actif du système.');
+          }
+        }
+
+        // 5. Préparation des écritures atomiques avec préconditions
+        const writes: Array<{
+          collection: string;
+          docId: string;
+          data: Record<string, any>;
+          precondition?: { exists?: boolean; updateTime?: string };
+        }> = [];
+
+        // Écriture du document utilisateur avec précondition updateTime
+        writes.push({
+          collection: 'pawako_users',
+          docId: userId,
+          data: updatedUser,
+          precondition: user._updateTime ? { updateTime: user._updateTime } : undefined,
+        });
+
+        // Écriture du document de métadonnées système si la liste d'admins a changé ou si le document n'existait pas
+        const adminsChanged =
+          newAdmins.length !== currentAdmins.length ||
+          newAdmins.some((id, idx) => id !== currentAdmins[idx]);
+
+        if (adminsChanged || !meta) {
+          const updateMetaPayload = {
+            initialAdminClaimed: Boolean(meta?.initialAdminClaimed),
+            initialAdminClaimedAt: meta?.initialAdminClaimedAt || null,
+            initialAdminDiscordUserId: meta?.initialAdminDiscordUserId || null,
+            activeAdminDiscordUserIds: newAdmins,
+            lastUpdated: new Date().toISOString(),
+          };
+
+          writes.push({
+            collection: 'pawako_metadata',
+            docId: 'system',
+            data: updateMetaPayload,
+            precondition: meta?._updateTime
+              ? { updateTime: meta._updateTime }
+              : meta === null
+              ? { exists: false }
+              : undefined,
+          });
+        }
+
+        // 6. Commit transactionnel atomique unique dans Firestore
+        await this.client.commit({
+          transaction,
+          writes,
+        });
+
+        return updatedUser;
       } catch (err: any) {
+        lastError = err;
+        // Si l'erreur est un refus explicite de rétrogradation du dernier admin, remonter directement
+        if (err.message && err.message.includes('dernier administrateur actif')) {
+          throw err;
+        }
+
         if (attempt === maxRetries - 1) {
-          throw new Error(`Conflit d écriture concurrent sur la vérification de l administrateur : ${err.message}`);
+          throw new Error(`Conflit concurrent lors de la mise à jour atomique de l administrateur : ${err.message}`);
         }
         await new Promise(r => setTimeout(r, 60 * (attempt + 1)));
       }
     }
+
+    throw lastError || new Error('Échec de la transaction atomique.');
   }
 
   async updateUserRole(
@@ -501,33 +555,37 @@ export class FirestoreRepository {
     actorId: string,
     actorName: string
   ): Promise<User | null> {
-    const user = await this.getUserById(userId);
-    if (!user) return null;
+    const updatedUser = await this.executeAtomicAdminUserMutation(userId, (user, currentAdmins) => {
+      let newAdmins = [...currentAdmins];
+      const isCurrentlyActiveAdmin = user.role === 'ADMINISTRATEUR' && user.status === 'ACTIVE';
+      const willBeActiveAdmin = newRole === 'ADMINISTRATEUR' && user.status === 'ACTIVE';
 
-    // Protection atomique : synchroniser l'état des administrateurs actifs
-    if (user.role === 'ADMINISTRATEUR' && newRole !== 'ADMINISTRATEUR') {
-      if (user.status === 'ACTIVE') {
-        await this.syncActiveAdminState(userId, 'REMOVE');
+      if (isCurrentlyActiveAdmin && !willBeActiveAdmin) {
+        newAdmins = currentAdmins.filter(id => id !== userId);
+      } else if (!isCurrentlyActiveAdmin && willBeActiveAdmin) {
+        newAdmins = Array.from(new Set([...currentAdmins, userId]));
       }
-    } else if (user.role !== 'ADMINISTRATEUR' && newRole === 'ADMINISTRATEUR') {
-      if (user.status === 'ACTIVE') {
-        await this.syncActiveAdminState(userId, 'ADD');
-      }
-    }
 
-    user.role = newRole;
-    await this.client.setDocument('pawako_users', userId, user);
+      const updated: User = {
+        ...user,
+        role: newRole,
+      };
 
-    await this.logAudit({
-      action: 'USER_ROLE_CHANGE',
-      actorUserId: actorId,
-      actorName,
-      targetType: 'USER',
-      targetId: userId,
-      details: { newRole },
+      return { updatedUser: updated, newAdmins };
     });
 
-    return user;
+    if (updatedUser) {
+      await this.logAudit({
+        action: 'USER_ROLE_CHANGE',
+        actorUserId: actorId,
+        actorName,
+        targetType: 'USER',
+        targetId: userId,
+        details: { newRole },
+      });
+    }
+
+    return updatedUser;
   }
 
   async updateUserStatus(
@@ -536,31 +594,37 @@ export class FirestoreRepository {
     actorId: string,
     actorName: string
   ): Promise<User | null> {
-    const user = await this.getUserById(userId);
-    if (!user) return null;
+    const updatedUser = await this.executeAtomicAdminUserMutation(userId, (user, currentAdmins) => {
+      let newAdmins = [...currentAdmins];
+      const isCurrentlyActiveAdmin = user.role === 'ADMINISTRATEUR' && user.status === 'ACTIVE';
+      const willBeActiveAdmin = user.role === 'ADMINISTRATEUR' && newStatus === 'ACTIVE';
 
-    // Protection atomique : synchroniser l'état des administrateurs actifs lors de suspension/réactivation
-    if (user.role === 'ADMINISTRATEUR') {
-      if (user.status === 'ACTIVE' && newStatus !== 'ACTIVE') {
-        await this.syncActiveAdminState(userId, 'REMOVE');
-      } else if (user.status !== 'ACTIVE' && newStatus === 'ACTIVE') {
-        await this.syncActiveAdminState(userId, 'ADD');
+      if (isCurrentlyActiveAdmin && !willBeActiveAdmin) {
+        newAdmins = currentAdmins.filter(id => id !== userId);
+      } else if (!isCurrentlyActiveAdmin && willBeActiveAdmin) {
+        newAdmins = Array.from(new Set([...currentAdmins, userId]));
       }
-    }
 
-    user.status = newStatus;
-    await this.client.setDocument('pawako_users', userId, user);
+      const updated: User = {
+        ...user,
+        status: newStatus,
+      };
 
-    await this.logAudit({
-      action: 'USER_STATUS_CHANGE',
-      actorUserId: actorId,
-      actorName,
-      targetType: 'USER',
-      targetId: userId,
-      details: { newStatus },
+      return { updatedUser: updated, newAdmins };
     });
 
-    return user;
+    if (updatedUser) {
+      await this.logAudit({
+        action: 'USER_STATUS_CHANGE',
+        actorUserId: actorId,
+        actorName,
+        targetType: 'USER',
+        targetId: userId,
+        details: { newStatus },
+      });
+    }
+
+    return updatedUser;
   }
 
   // --- PARRAINS (REFERRERS) ---
