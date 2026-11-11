@@ -17,53 +17,8 @@ import {
 } from './types';
 
 // Base URL de l'API : Cloudflare Worker (ex: https://pawako-api.<subdomain>.workers.dev) ou même origine en local
+// Base URL de l'API : Cloudflare Worker (ex: https://pawako-referral-manager.pawako-saas.workers.dev) ou vide en local
 const API_BASE = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '');
-
-// Synchronisation automatique de la session depuis le fragment d'URL (#), les query params, ou postMessage
-if (typeof window !== 'undefined') {
-  // 1. Extraction sécurisée depuis le fragment d'URL (Hash)
-  const hashString = window.location.hash.replace(/^#/, '');
-  const hashParams = new URLSearchParams(hashString);
-  const urlParams = new URLSearchParams(window.location.search);
-
-  const sessionToken =
-    hashParams.get('sessionToken') ||
-    hashParams.get('token') ||
-    hashParams.get('session') ||
-    urlParams.get('sessionToken') ||
-    urlParams.get('token') ||
-    urlParams.get('session');
-
-  if (sessionToken) {
-    localStorage.setItem('pawako_session_token', sessionToken);
-    localStorage.setItem('pawako_user_id', sessionToken);
-
-    // Nettoie immédiatement l'URL (hash et search) sans recharger la page
-    urlParams.delete('sessionToken');
-    urlParams.delete('token');
-    urlParams.delete('session');
-    const newSearch = urlParams.toString();
-    const newUrl = window.location.pathname + (newSearch ? `?${newSearch}` : '');
-    window.history.replaceState({}, '', newUrl);
-  }
-
-  // 2. Écoute les événements d'authentification émis par le popup OAuth Discord avec validation d'origine stricte
-  window.addEventListener('message', (ev: MessageEvent) => {
-    // Vérification de l'origine : seul le backend autorisé ou l'origine courante est accepté
-    const trustedBackendOrigin = API_BASE ? new URL(API_BASE).origin : window.location.origin;
-    if (ev.origin !== trustedBackendOrigin && ev.origin !== window.location.origin) {
-      return;
-    }
-
-    if (ev.data && ev.data.type === 'OAUTH_AUTH_SUCCESS') {
-      const token = ev.data.token || ev.data.userId;
-      if (token && typeof token === 'string') {
-        localStorage.setItem('pawako_session_token', token);
-        localStorage.setItem('pawako_user_id', ev.data.userId || token);
-      }
-    }
-  });
-}
 
 function getHeaders(customHeaders?: HeadersInit): Headers {
   const headers = new Headers(customHeaders || {});

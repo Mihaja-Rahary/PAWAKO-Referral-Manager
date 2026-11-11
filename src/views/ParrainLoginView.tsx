@@ -6,15 +6,19 @@ interface Props {
   onBackToPortal: () => void;
   onNavigateToAdminLogin: () => void;
   isOAuthConfigured: boolean;
+  externalError?: string | null;
 }
 
 export const ParrainLoginView: React.FC<Props> = ({
   onBackToPortal,
   onNavigateToAdminLogin,
   isOAuthConfigured,
+  externalError,
 }) => {
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  const displayError = externalError || errorMessage;
 
   const handleDiscordParrainLogin = async () => {
     try {
@@ -103,10 +107,10 @@ export const ParrainLoginView: React.FC<Props> = ({
           </div>
 
           {/* Error Message */}
-          {errorMessage && (
+          {displayError && (
             <div className="p-3.5 bg-rose-50 border border-rose-200 rounded-xl flex items-start gap-2.5 text-xs text-rose-800">
               <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
-              <div className="leading-relaxed">{errorMessage}</div>
+              <div className="leading-relaxed">{displayError}</div>
             </div>
           )}
 

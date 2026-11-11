@@ -593,10 +593,9 @@ const handleAuthCallback = async (c: any) => {
                 type: 'OAUTH_AUTH_SUCCESS',
                 portal: ${JSON.stringify(portal)},
                 role: ${JSON.stringify(user.role)},
-                userId: ${JSON.stringify(user.id)},
-                token: ${JSON.stringify(signedToken)}
+                userId: ${JSON.stringify(user.id)}
               };
-              const redirectUrl = ${JSON.stringify(`${portalDestUrl}#sessionToken=${signedToken}&session=${user.id}`)};
+              const redirectUrl = ${JSON.stringify(portalDestUrl)};
               if (window.opener) {
                 window.opener.postMessage(payload, targetOrigin);
                 window.close();
@@ -604,7 +603,7 @@ const handleAuthCallback = async (c: any) => {
                 window.location.replace(redirectUrl);
               }
             } catch (e) {
-              window.location.replace(${JSON.stringify(`${portalDestUrl}#sessionToken=${signedToken}&session=${user.id}`)});
+              window.location.replace(${JSON.stringify(portalDestUrl)});
             }
           </script>
         </body>

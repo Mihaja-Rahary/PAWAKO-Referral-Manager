@@ -106,28 +106,72 @@ export default function App() {
     loadAuthAndGlobals();
   }, [loadAuthAndGlobals, refreshTrigger]);
 
-  // Listen for popup OAuth messages from Discord
+  const [oauthError, setOauthError] = useState<string | null>(null);
+
+  // Listen for popup OAuth messages from Discord with strict origin validation
   useEffect(() => {
-    const handleMessage = (event: MessageEvent) => {
-      const origin = event.origin;
-      if (
-        !origin.endsWith('.run.app') &&
-        !origin.includes('localhost') &&
-        !origin.includes('web.app') &&
-        !origin.includes('firebaseapp.com')
-      ) {
+    const handleMessage = async (event: MessageEvent) => {
+      // 1. Validation de la charge utile (objet non-null requis)
+      if (!event.data || typeof event.data !== 'object') {
         return;
       }
-      if (event.data?.type === 'OAUTH_AUTH_SUCCESS') {
-        loadAuthAndGlobals();
-        triggerRefresh();
-        if (event.data.portal === 'admin') {
-          navigate('/admin');
-        } else if (event.data.portal === 'parrain') {
-          navigate('/parrain');
+
+      // 2. Construction de l'ensemble d'origines strictement autorisées
+      const allowedOrigins = new Set<string>();
+
+      // Origine du frontend courant (Firebase Hosting ou domaine hôte)
+      if (typeof window !== 'undefined' && window.location.origin) {
+        allowedOrigins.add(window.location.origin);
+      }
+
+      // Origine exacte issue de VITE_API_BASE_URL (ex: https://pawako-referral-manager.pawako-saas.workers.dev)
+      const rawApiBase = import.meta.env.VITE_API_BASE_URL;
+      if (rawApiBase && typeof rawApiBase === 'string') {
+        try {
+          const apiOrigin = new URL(rawApiBase).origin;
+          allowedOrigins.add(apiOrigin);
+        } catch {
+          // Ignorer si URL invalide
         }
       }
+
+      // Origines locales autorisées EXCLUSIVEMENT en développement
+      if (import.meta.env.DEV) {
+        allowedOrigins.add('http://localhost:3000');
+        allowedOrigins.add('http://127.0.0.1:3000');
+        allowedOrigins.add('http://localhost:5173');
+        allowedOrigins.add('http://127.0.0.1:5173');
+      }
+
+      // 3. Contrôle strict de l'origine : refus catégorique de toute origine inconnue (pas de .includes() ou .endsWith())
+      if (!allowedOrigins.has(event.origin)) {
+        return;
+      }
+
+      // 4. Validation stricte du type d'événement
+      const eventType = (event.data as { type?: string }).type;
+      if (eventType !== 'OAUTH_AUTH_SUCCESS' && eventType !== 'OAUTH_AUTH_FAILED') {
+        return;
+      }
+
+      if (eventType === 'OAUTH_AUTH_SUCCESS') {
+        setOauthError(null);
+        await loadAuthAndGlobals();
+        triggerRefresh();
+        const portal = (event.data as { portal?: string }).portal;
+        if (portal === 'parrain') {
+          navigate('/parrain');
+        } else {
+          navigate('/admin');
+        }
+      } else if (eventType === 'OAUTH_AUTH_FAILED') {
+        const errorMsg =
+          (event.data as { error?: string }).error ||
+          'Authentification Discord échouée ou refusée.';
+        setOauthError(errorMsg);
+      }
     };
+
     window.addEventListener('message', handleMessage);
     return () => window.removeEventListener('message', handleMessage);
   }, [loadAuthAndGlobals, triggerRefresh, navigate]);
@@ -213,9 +257,16 @@ export default function App() {
     }
     return (
       <AdminLoginView
-        onBackToPortal={() => navigate('/')}
-        onNavigateToParrainLogin={() => navigate('/parrain/login')}
+        onBackToPortal={() => {
+          setOauthError(null);
+          navigate('/');
+        }}
+        onNavigateToParrainLogin={() => {
+          setOauthError(null);
+          navigate('/parrain/login');
+        }}
         isOAuthConfigured={isOAuthConfigured}
+        externalError={oauthError}
       />
     );
   }
@@ -228,9 +279,16 @@ export default function App() {
     }
     return (
       <ParrainLoginView
-        onBackToPortal={() => navigate('/')}
-        onNavigateToAdminLogin={() => navigate('/admin/login')}
+        onBackToPortal={() => {
+          setOauthError(null);
+          navigate('/');
+        }}
+        onNavigateToAdminLogin={() => {
+          setOauthError(null);
+          navigate('/admin/login');
+        }}
         isOAuthConfigured={isOAuthConfigured}
+        externalError={oauthError}
       />
     );
   }
