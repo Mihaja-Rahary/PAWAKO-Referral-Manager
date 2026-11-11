@@ -51,7 +51,7 @@ app.use((req, res, next) => {
     res.header('Access-Control-Allow-Origin', origin);
     res.header('Access-Control-Allow-Credentials', 'true');
     res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
-    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, X-JARVIS-Secret, X-Pawako-User-Id, X-JARVIS-Timestamp');
+    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, X-JARVIS-Secret, X-JARVIS-Timestamp');
     if (req.method === 'OPTIONS') {
       return res.sendStatus(204);
     }

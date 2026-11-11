@@ -151,7 +151,7 @@ app.use('*', async (c, next) => {
         'Access-Control-Allow-Credentials': 'true',
         'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
         'Access-Control-Allow-Headers':
-          'Origin, Content-Type, Accept, Authorization, X-JARVIS-Secret, X-JARVIS-Timestamp, X-JARVIS-Nonce, X-Pawako-Session, X-Pawako-User-Id',
+          'Origin, Content-Type, Accept, Authorization, X-JARVIS-Secret, X-JARVIS-Timestamp, X-JARVIS-Nonce',
         'Access-Control-Max-Age': '86400',
       },
     });
@@ -169,7 +169,7 @@ app.use('*', async (c, next) => {
 });
 
 // Helper pour extraire et valider l'utilisateur authentifié
-async function getAuthenticatedUser(c: any, repo: FirestoreRepository): Promise<User | null> {
+export async function getAuthenticatedUser(c: any, repo: FirestoreRepository): Promise<User | null> {
   let secret: string;
   try {
     secret = getValidatedSessionSecret(c.env);
@@ -178,23 +178,11 @@ async function getAuthenticatedUser(c: any, repo: FirestoreRepository): Promise<
     return null;
   }
 
-  // 1. En-tête Authorization: Bearer <token>
-  const authHeader = c.req.header('Authorization') || '';
-  let token = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : null;
-
-  // 2. En-tête personnalisé X-Pawako-Session ou X-Pawako-User-Id
-  if (!token) {
-    token = c.req.header('X-Pawako-Session') || c.req.header('X-Pawako-User-Id') || null;
-  }
-
-  // 3. Cookie pawako_session
-  if (!token) {
-    const cookieHeader = c.req.header('Cookie') || '';
-    const match = cookieHeader.match(/pawako_session=([^;]+)/);
-    if (match) {
-      token = match[1];
-    }
-  }
+  // Authentification EXCLUSIVE par cookie HttpOnly sécurisé pawako_session
+  // Les en-têtes Authorization, X-Pawako-Session ou X-Pawako-User-Id sont formellement refusés comme moyen d'authentification
+  const cookieHeader = c.req.header('Cookie') || '';
+  const match = cookieHeader.match(/pawako_session=([^;]+)/);
+  const token = match ? match[1].trim() : null;
 
   if (!token || typeof token !== 'string') {
     return null;
@@ -656,6 +644,13 @@ app.get('/api/auth/me', async c => {
     hasValidSecret = false;
   }
 
+  let isClaimed = false;
+  try {
+    isClaimed = await repo.isInitialAdminClaimed();
+  } catch {
+    isClaimed = false;
+  }
+
   if (!user) {
     return c.json({
       authenticated: false,
@@ -664,11 +659,16 @@ app.get('/api/auth/me', async c => {
       isOAuthConfigured: Boolean(c.env.DISCORD_CLIENT_ID && c.env.DISCORD_CLIENT_SECRET && hasValidSecret),
       isBotConfigured: Boolean(c.env.JARVIS_WEBHOOK_SECRET),
       hasAnyUsers: false,
-      isInitialAdminClaimed: await repo.isInitialAdminClaimed(),
+      isInitialAdminClaimed: isClaimed,
     });
   }
 
-  const referrer = await repo.getReferrerByDiscordUserId(user.id);
+  let referrer: any = null;
+  try {
+    referrer = await repo.getReferrerByDiscordUserId(user.id);
+  } catch {
+    referrer = null;
+  }
 
   return c.json({
     authenticated: true,
@@ -677,7 +677,7 @@ app.get('/api/auth/me', async c => {
     isOAuthConfigured: Boolean(c.env.DISCORD_CLIENT_ID && c.env.DISCORD_CLIENT_SECRET && hasValidSecret),
     isBotConfigured: Boolean(c.env.JARVIS_WEBHOOK_SECRET),
     hasAnyUsers: true,
-    isInitialAdminClaimed: await repo.isInitialAdminClaimed(),
+    isInitialAdminClaimed: isClaimed,
   });
 });
 

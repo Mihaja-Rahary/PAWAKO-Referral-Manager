@@ -10,7 +10,7 @@ export const apiRouter = Router();
 
 // Middleware pour extraire l'utilisateur authentifié depuis le cookie de session sécurisé
 export function getAuthenticatedUser(req: Request): User | null {
-  const sessionUserId = req.cookies?.pawako_session || req.headers['x-pawako-user-id'];
+  const sessionUserId = req.cookies?.pawako_session;
   if (!sessionUserId || typeof sessionUserId !== 'string') {
     return null;
   }

@@ -21,22 +21,7 @@ import {
 const API_BASE = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '');
 
 function getHeaders(customHeaders?: HeadersInit): Headers {
-  const headers = new Headers(customHeaders || {});
-  if (typeof window !== 'undefined') {
-    const sessionToken = localStorage.getItem('pawako_session_token') || localStorage.getItem('pawako_user_id');
-    if (sessionToken) {
-      if (!headers.has('Authorization')) {
-        headers.set('Authorization', `Bearer ${sessionToken}`);
-      }
-      if (!headers.has('X-Pawako-Session')) {
-        headers.set('X-Pawako-Session', sessionToken);
-      }
-      if (!headers.has('X-Pawako-User-Id')) {
-        headers.set('X-Pawako-User-Id', sessionToken);
-      }
-    }
-  }
-  return headers;
+  return new Headers(customHeaders || {});
 }
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
@@ -87,10 +72,6 @@ export const api = {
   },
 
   async logout(): Promise<void> {
-    if (typeof window !== 'undefined') {
-      localStorage.removeItem('pawako_session_token');
-      localStorage.removeItem('pawako_user_id');
-    }
     await request('/api/auth/logout', { method: 'POST' });
   },
 
