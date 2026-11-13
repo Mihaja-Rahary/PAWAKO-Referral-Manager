@@ -88,6 +88,47 @@ function getRepository(env: Env): FirestoreRepository {
   return new FirestoreRepository(createFirestoreClient(env));
 }
 
+export interface WorkerFirestoreDiagnosticResult {
+  ok: boolean;
+  probeTarget: string;
+  stage: 'CONFIG' | 'GOOGLE_OAUTH2' | 'FIRESTORE_API' | 'OK';
+  classification:
+    | 'AUTHENTICATED_OK'
+    | 'DOCUMENT_ABSENT'
+    | 'DATABASE_OR_PROJECT_NOT_FOUND'
+    | 'PERMISSION_DENIED'
+    | 'GOOGLE_AUTH_ERROR'
+    | 'CONFIG_ERROR'
+    | 'NETWORK_ERROR'
+    | 'FIRESTORE_ERROR';
+  category?: string;
+  httpStatus?: number | null;
+  firestoreStatus?: string | null;
+  diagnosticCode: string;
+  message: string;
+  projectId: string;
+  databaseId: string;
+}
+
+/**
+ * Utilitaire de diagnostic Firestore du Worker :
+ * sonde en lecture seule la collection racine `pawako_metadata` (pageSize=1)
+ * au lieu d'un document spécifique, afin de différencier :
+ * - 200 / 404 document absent (connexion base OK)
+ * - 404 base/projet inexistant
+ * - 401 / 403 / 500+ (authentification Google, permissions IAM ou indisponibilité)
+ */
+export async function runFirestoreRootCollectionDiagnostic(
+  env: Env
+): Promise<WorkerFirestoreDiagnosticResult> {
+  const client = createFirestoreClient(env);
+  const result = await client.diagnoseFirestoreConnection();
+  return {
+    ...result,
+    probeTarget: 'root_collection:pawako_metadata?pageSize=1',
+  };
+}
+
 // -----------------------------------------------------------------------------
 // 1. GESTION STRICTE DU SECRET DE SESSION (AUCUN FALLBACK PRÉVISIBLE)
 // -----------------------------------------------------------------------------
@@ -307,7 +348,6 @@ app.get('/health', c => {
 });
 
 app.get('/api/health', async c => {
-  const client = createFirestoreClient(c.env);
   const rawProjectId =
     (c.env.FIREBASE_PROJECT_ID || '').trim().replace(/^["']|["']$/g, '') ||
     'gen-lang-client-0255826431';
@@ -335,12 +375,14 @@ app.get('/api/health', async c => {
     oauthRedirectUriValid = false;
   }
 
-  const deepCheck =
-    c.req.query('check') === 'firestore' ||
-    c.req.query('deep') === '1' ||
-    c.req.query('deep') === 'true';
+  const skipConnectivityCheck =
+    c.req.query('shallow') === '1' ||
+    c.req.query('shallow') === 'true' ||
+    c.req.query('check') === 'config';
 
-  const connectivity = deepCheck ? await client.diagnoseFirestoreConnection() : undefined;
+  const connectivity = skipConnectivityCheck
+    ? undefined
+    : await runFirestoreRootCollectionDiagnostic(c.env);
   const httpStatus = connectivity && !connectivity.ok ? 503 : 200;
 
   return c.json(
