@@ -1,6 +1,6 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "pawako-api",
+  "name": "referral-manager",
   "main": "worker/index.ts",
   "compatibility_date": "2024-11-01",
   "compatibility_flags": [
@@ -10,7 +10,7 @@
   "vars": {
     "FIREBASE_PROJECT_ID": "gen-lang-client-0255826431",
     "FIREBASE_DATABASE_ID": "ai-studio-pawakoreferralma-1d4a1a22-a715-4552-b717-2e03e349fbee",
-    "FRONTEND_URL": "https://gen-lang-client-0255826431.web.app",
+    "FRONTEND_URL": "https://pawako-referral-manager.pages.dev",
     "DISCORD_RECRUITMENT_GUILD_ID": "",
     "DISCORD_FORMATION_GUILD_ID": "",
     "DISCORD_CHATTING_PRODUCTION_GUILD_ID": "",

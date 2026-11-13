@@ -249,7 +249,7 @@ export function toParrainCandidateView(c: Candidate): ParrainCandidateView {
 app.get('/health', c => {
   return c.json({
     status: 'ok',
-    worker: 'pawako-api',
+    worker: 'referral-manager',
     runtime: 'Cloudflare Workers (Edge)',
     timestamp: new Date().toISOString(),
   });
@@ -259,7 +259,7 @@ app.get('/api/health', c => {
   const projectId = c.env.FIREBASE_PROJECT_ID || 'gen-lang-client-0255826431';
   return c.json({
     status: 'ok',
-    worker: 'pawako-api',
+    worker: 'referral-manager',
     firestore: {
       projectId,
       hasServiceAccount: Boolean(c.env.FIREBASE_CLIENT_EMAIL && c.env.FIREBASE_PRIVATE_KEY),
@@ -355,12 +355,12 @@ const handleAuthCallback = async (c: any) => {
       ? 'parrain'
       : 'admin';
 
-  const frontendUrl = c.env.FRONTEND_URL?.trim() || 'https://gen-lang-client-0255826431.web.app';
+  const frontendUrl = c.env.FRONTEND_URL?.trim() || 'https://pawako-referral-manager.pages.dev';
   let targetOrigin = '';
   try {
     targetOrigin = new URL(frontendUrl).origin;
   } catch {
-    targetOrigin = 'https://gen-lang-client-0255826431.web.app';
+    targetOrigin = 'https://pawako-referral-manager.pages.dev';
   }
 
   const portalLoginUrl = `${frontendUrl}/${portal}/login`;
