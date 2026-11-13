@@ -7,7 +7,7 @@
  */
 
 import { Hono } from 'hono';
-import { FirestoreRestClient } from '../server/firestoreRest';
+import { FirestoreRestClient, FirestoreRestError } from '../server/firestoreRest';
 import { FirestoreRepository } from '../server/firestoreRepository';
 import {
   AdminStatus,
@@ -294,6 +294,10 @@ app.get('/api/auth/url', async c => {
   try {
     signingSecret = getValidatedSessionSecret(c.env);
   } catch (err: any) {
+    console.error('[OAuth2 Auth URL][CONFIG_ERROR]', {
+      reason: 'MISSING_OR_INVALID_SESSION_SECRET',
+      message: err?.message || 'SESSION_SECRET invalide',
+    });
     return c.json({ error: err.message }, 500);
   }
 
@@ -307,11 +311,15 @@ app.get('/api/auth/url', async c => {
   try {
     redirectUri = getDiscordRedirectUri(c.env, c.req.url);
   } catch (err: any) {
+    console.error('[OAuth2 Auth URL][CONFIG_ERROR]', {
+      reason: 'INVALID_DISCORD_REDIRECT_URI',
+      message: err?.message || 'DISCORD_REDIRECT_URI invalide',
+    });
     return c.json({ error: err.message }, 500);
   }
 
   // Le state est cryptographiquement aléatoire, signé en HMAC et protégé contre le rejeu
-  const { state } = await generateSecureOAuthState(portal, signingSecret);
+  const { state, nonce } = await generateSecureOAuthState(portal, signingSecret);
 
   const isConfigured = Boolean(clientId && clientSecret);
   const discordUrl = isConfigured
@@ -319,6 +327,12 @@ app.get('/api/auth/url', async c => {
         redirectUri
       )}&response_type=code&scope=identify&state=${encodeURIComponent(state)}`
     : '';
+
+  console.info('[OAuth2 Auth URL] State generated', {
+    portal,
+    noncePrefix: nonce.slice(0, 8),
+    isConfigured,
+  });
 
   return c.json(
     {
@@ -340,7 +354,11 @@ const handleAuthCallback = async (c: any) => {
   let signingSecret: string;
   try {
     signingSecret = getValidatedSessionSecret(c.env);
-  } catch {
+  } catch (err: any) {
+    console.error('[OAuth2 Callback][TECHNICAL_ERROR]', {
+      failureCode: 'MISSING_SECRET',
+      message: err?.message || 'SESSION_SECRET manquant',
+    });
     return c.html(`
       <!DOCTYPE html>
       <html>
@@ -359,24 +377,13 @@ const handleAuthCallback = async (c: any) => {
   const state = c.req.query('state') || '';
   const error = c.req.query('error');
 
-  const repo = getRepository(c.env);
-
-  // Validation cryptographique stricte du state OAuth2 et protection contre le rejeu distribué (Firestore)
-  const stateCheck = await verifyAndConsumeOAuthState(state, signingSecret, (nonce, exp) =>
-    repo.consumeOAuthNonce(nonce, exp)
-  );
-
-  // Détection du portail visé depuis le state vérifié ou le cookie
+  // Détection préliminaire du portail visé depuis le state ou le cookie (avant consommation atomique)
   const cookieHeader = c.req.header('Cookie') || '';
   const cookiePortalMatch = cookieHeader.match(/(?:^|;\s*)oauth_portal=([^;]+)/);
   const portalFromCookie = cookiePortalMatch ? cookiePortalMatch[1] : null;
 
   let portal: 'admin' | 'parrain' =
-    stateCheck.valid && stateCheck.portal
-      ? stateCheck.portal
-      : portalFromCookie === 'parrain' || state.startsWith('parrain_')
-      ? 'parrain'
-      : 'admin';
+    portalFromCookie === 'parrain' || state.startsWith('parrain_') ? 'parrain' : 'admin';
 
   const frontendUrl = c.env.FRONTEND_URL?.trim() || 'https://pawako-referral-manager.pages.dev';
   let targetOrigin = '';
@@ -386,10 +393,17 @@ const handleAuthCallback = async (c: any) => {
     targetOrigin = 'https://pawako-referral-manager.pages.dev';
   }
 
-  const portalLoginUrl = `${targetOrigin}/${portal}/login`;
-  const portalDestUrl = `${targetOrigin}/${portal}`;
+  let portalLoginUrl = `${targetOrigin}/${portal}/login`;
+  let portalDestUrl = `${targetOrigin}/${portal}`;
 
+  // Vérifier d'abord l'annulation Discord ou l'absence de code avant de consommer le nonce dans Firestore
   if (error || !code) {
+    console.warn('[OAuth2 Callback][CANCELLED_OR_MISSING_CODE]', {
+      portal,
+      hasCode: Boolean(code),
+      hasState: Boolean(state),
+      discordError: error || null,
+    });
     return c.html(`
       <!DOCTYPE html>
       <html>
@@ -417,8 +431,83 @@ const handleAuthCallback = async (c: any) => {
     `, 400);
   }
 
-  // Échec de validation du state (CSRF ou Rejeu)
+  const repo = getRepository(c.env);
+
+  // Validation cryptographique stricte du state OAuth2 et consommation atomique dans Firestore
+  const stateCheck = await verifyAndConsumeOAuthState(state, signingSecret, (nonce, exp) =>
+    repo.consumeOAuthNonce(nonce, exp)
+  );
+
+  if (stateCheck.portal) {
+    portal = stateCheck.portal;
+    portalLoginUrl = `${targetOrigin}/${portal}/login`;
+    portalDestUrl = `${targetOrigin}/${portal}`;
+  }
+
+  // Échec de validation du state : distinguer erreur technique Firestore (503) et échec de sécurité/authentification (403)
   if (!stateCheck.valid) {
+    const noncePrefix = stateCheck.nonce ? stateCheck.nonce.slice(0, 8) : null;
+
+    if (stateCheck.errorCategory === 'TECHNICAL_ERROR') {
+      console.error('[OAuth2 Callback][TECHNICAL_ERROR]', {
+        failureCode: stateCheck.failureCode || 'FIRESTORE_ERROR',
+        portal,
+        noncePrefix,
+        reason: stateCheck.reason || 'Erreur technique Firestore',
+        diagnostics: stateCheck.diagnostics || null,
+      });
+
+      const techErrorMessage =
+        'Erreur technique serveur lors de la vérification OAuth2 (service Firestore temporairement indisponible ou mal configuré).';
+
+      return c.html(`
+        <!DOCTYPE html>
+        <html>
+          <head><title>Erreur Technique OAuth2 — PAWAKO</title></head>
+          <body style="font-family: system-ui, sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; background: #0f172a; color: white;">
+            <div style="background: #1e293b; padding: 32px; border-radius: 14px; border: 1px solid #f59e0b; text-align: center; max-width: 460px;">
+              <div style="width: 48px; height: 48px; background: rgba(245,158,11,0.2); color: #fbbf24; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 16px auto; font-size: 24px;">!</div>
+              <h3 style="margin: 0 0 8px 0; color: #fbbf24;">Erreur technique temporaire</h3>
+              <p style="color: #cbd5e1; font-size: 13px; line-height: 1.5;">${escapeHtml(techErrorMessage)}</p>
+              <p style="color: #94a3b8; font-size: 11px; margin-top: 8px;">Code : ${escapeHtml(stateCheck.failureCode || 'FIRESTORE_ERROR')}</p>
+              <button id="btn-back" style="background: #334155; color: white; border: none; padding: 9px 18px; border-radius: 8px; cursor: pointer; font-size: 13px; margin-top: 14px;">Retour à la connexion</button>
+            </div>
+            <script>
+              const targetOrigin = ${JSON.stringify(targetOrigin)};
+              const loginUrl = ${JSON.stringify(portalLoginUrl)};
+              const failureCode = ${JSON.stringify(stateCheck.failureCode || 'FIRESTORE_ERROR')};
+              const errorMessage = ${JSON.stringify(techErrorMessage)};
+              document.getElementById('btn-back').addEventListener('click', function() {
+                if (window.opener) {
+                  window.opener.postMessage({ type: 'OAUTH_AUTH_FAILED', category: 'TECHNICAL_ERROR', code: failureCode, error: errorMessage }, targetOrigin);
+                  window.close();
+                } else {
+                  window.location.href = loginUrl;
+                }
+              });
+            </script>
+          </body>
+        </html>
+      `, 503);
+    }
+
+    console.warn('[OAuth2 Callback][AUTH_FAILURE]', {
+      failureCode: stateCheck.failureCode || 'INVALID_STATE',
+      portal,
+      noncePrefix,
+      reason: stateCheck.reason || 'Validation de state échouée',
+      diagnostics: stateCheck.diagnostics || null,
+    });
+
+    let authErrorMessage = 'La validation de sécurité a échoué (jeton OAuth2 invalide).';
+    if (stateCheck.failureCode === 'STATE_EXPIRED') {
+      authErrorMessage = 'La session de connexion Discord a expiré (> 10 minutes). Veuillez réessayer.';
+    } else if (stateCheck.failureCode === 'REPLAY_DETECTED') {
+      authErrorMessage = 'Ce jeton de connexion Discord a déjà été utilisé (rejeu bloqué). Veuillez relancer la connexion.';
+    } else if (stateCheck.failureCode === 'INVALID_HMAC') {
+      authErrorMessage = 'Signature de sécurité OAuth2 invalide. Veuillez relancer la connexion depuis PAWAKO.';
+    }
+
     return c.html(`
       <!DOCTYPE html>
       <html>
@@ -427,15 +516,18 @@ const handleAuthCallback = async (c: any) => {
           <div style="background: #1e293b; padding: 32px; border-radius: 14px; border: 1px solid #dc2626; text-align: center; max-width: 440px;">
             <div style="width: 48px; height: 48px; background: rgba(220,38,38,0.2); color: #f87171; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 16px auto; font-size: 24px;">✕</div>
             <h3 style="margin: 0 0 8px 0; color: #f87171;">Échec de sécurité OAuth2</h3>
-            <p style="color: #cbd5e1; font-size: 13px;">La validation de sécurité a échoué (session expirée ou tentative de rejeu détectée).</p>
+            <p style="color: #cbd5e1; font-size: 13px; line-height: 1.5;">${escapeHtml(authErrorMessage)}</p>
+            <p style="color: #94a3b8; font-size: 11px; margin-top: 8px;">Code : ${escapeHtml(stateCheck.failureCode || 'AUTH_FAILURE')}</p>
             <button id="btn-back" style="background: #334155; color: white; border: none; padding: 9px 18px; border-radius: 8px; cursor: pointer; font-size: 13px; margin-top: 14px;">Retour à la connexion</button>
           </div>
           <script>
             const targetOrigin = ${JSON.stringify(targetOrigin)};
             const loginUrl = ${JSON.stringify(portalLoginUrl)};
+            const failureCode = ${JSON.stringify(stateCheck.failureCode || 'AUTH_FAILURE')};
+            const errorMessage = ${JSON.stringify(authErrorMessage)};
             document.getElementById('btn-back').addEventListener('click', function() {
               if (window.opener) {
-                window.opener.postMessage({ type: 'OAUTH_AUTH_FAILED', error: 'Échec de sécurité OAuth2' }, targetOrigin);
+                window.opener.postMessage({ type: 'OAUTH_AUTH_FAILED', category: 'AUTH_FAILURE', code: failureCode, error: errorMessage }, targetOrigin);
                 window.close();
               } else {
                 window.location.href = loginUrl;
@@ -625,7 +717,14 @@ const handleAuthCallback = async (c: any) => {
         'Set-Cookie': sessionCookie,
       }
     );
-  } catch {
+  } catch (err: any) {
+    console.error('[OAuth2 Callback][PROCESSING_ERROR]', {
+      portal,
+      isFirestoreError: err instanceof FirestoreRestError,
+      firestoreCategory: err instanceof FirestoreRestError ? err.category : null,
+      status: err instanceof FirestoreRestError ? err.status ?? null : null,
+      message: err?.message || 'Erreur inconnue lors du callback Discord',
+    });
     return c.html(`
       <!DOCTYPE html>
       <html>

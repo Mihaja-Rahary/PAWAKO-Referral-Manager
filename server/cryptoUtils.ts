@@ -91,41 +91,108 @@ export async function generateSecureOAuthState(
   return { state, portal, nonce };
 }
 
+export type OAuthStateErrorCategory = 'AUTH_FAILURE' | 'TECHNICAL_ERROR';
+
+export type OAuthStateFailureCode =
+  | 'MISSING_SECRET'
+  | 'MISSING_CONSUMER'
+  | 'MISSING_STATE'
+  | 'INVALID_FORMAT'
+  | 'INVALID_PORTAL'
+  | 'INVALID_NONCE'
+  | 'INVALID_TIMESTAMP'
+  | 'STATE_EXPIRED'
+  | 'CLOCK_SKEW'
+  | 'INVALID_HMAC'
+  | 'REPLAY_DETECTED'
+  | 'FIRESTORE_ERROR';
+
+export interface PersistentNonceConsumerResult {
+  consumed: boolean;
+  reason?: 'REPLAY' | 'INVALID_NONCE' | 'TECHNICAL_ERROR';
+  errorCode?: string;
+  detail?: string;
+}
+
+export type PersistentNonceConsumer = (
+  nonce: string,
+  expiresAt: number
+) => Promise<boolean | PersistentNonceConsumerResult>;
+
 export interface VerifyOAuthStateResult {
   valid: boolean;
   portal?: 'admin' | 'parrain';
   nonce?: string;
+  errorCategory?: OAuthStateErrorCategory;
+  failureCode?: OAuthStateFailureCode;
   reason?: string;
+  diagnostics?: Record<string, string | number | boolean | null>;
 }
 
 /**
  * Valide strictement le state reçu au callback OAuth2 :
- * 1. Vérifie le format
- * 2. Vérifie la signature HMAC
- * 3. Vérifie l'expiration (< 10 minutes)
- * 4. Empêche la réutilisation via consommation persistante OBLIGATOIRE dans Firestore (aucun cache mémoire)
- * En cas d'indisponibilité de Firestore, refuse systématiquement l'authentification.
+ * 1. Vérifie la présence de SESSION_SECRET et du consommateur persistant
+ * 2. Vérifie le format strict (${portal}_${nonce}_${timestamp}_${sig})
+ * 3. Vérifie la signature HMAC en temps constant avant l'horodatage et Firestore
+ * 4. Vérifie l'expiration (< 10 minutes) et le décalage horloge
+ * 5. Consomme le nonce atomiquement dans Firestore en distinguant rejeu et erreur technique
  */
 export async function verifyAndConsumeOAuthState(
   state: string,
   secret: string,
-  persistentConsumer: (nonce: string, expiresAt: number) => Promise<boolean>
+  persistentConsumer: PersistentNonceConsumer
 ): Promise<VerifyOAuthStateResult> {
   if (!secret || typeof secret !== 'string' || secret.trim().length < 32) {
-    return { valid: false, reason: 'SESSION_SECRET obligatoire manquant ou inférieur à 32 caractères' };
+    console.error('[OAuth2 State Validation][TECHNICAL_ERROR]', {
+      failureCode: 'MISSING_SECRET',
+    });
+    return {
+      valid: false,
+      errorCategory: 'TECHNICAL_ERROR',
+      failureCode: 'MISSING_SECRET',
+      reason: 'SESSION_SECRET obligatoire manquant ou inférieur à 32 caractères',
+    };
   }
 
   if (!persistentConsumer || typeof persistentConsumer !== 'function') {
-    return { valid: false, reason: 'Consommateur persistant Firestore obligatoire manquant' };
+    console.error('[OAuth2 State Validation][TECHNICAL_ERROR]', {
+      failureCode: 'MISSING_CONSUMER',
+    });
+    return {
+      valid: false,
+      errorCategory: 'TECHNICAL_ERROR',
+      failureCode: 'MISSING_CONSUMER',
+      reason: 'Consommateur persistant Firestore obligatoire manquant',
+    };
   }
 
-  if (!state || typeof state !== 'string') {
-    return { valid: false, reason: 'State OAuth2 manquant' };
+  if (!state || typeof state !== 'string' || !state.trim()) {
+    console.warn('[OAuth2 State Validation][AUTH_FAILURE]', {
+      failureCode: 'MISSING_STATE',
+    });
+    return {
+      valid: false,
+      errorCategory: 'AUTH_FAILURE',
+      failureCode: 'MISSING_STATE',
+      reason: 'State OAuth2 manquant',
+    };
   }
 
-  const parts = state.split('_');
-  if (parts.length !== 4) {
-    return { valid: false, reason: 'Format de state OAuth2 invalide (seuls les states cryptographiquement signés sont autorisés)' };
+  const trimmedState = state.trim();
+  const parts = trimmedState.split('_');
+  if (parts.length !== 4 || parts.some(p => !p)) {
+    console.warn('[OAuth2 State Validation][AUTH_FAILURE]', {
+      failureCode: 'INVALID_FORMAT',
+      partsCount: parts.length,
+      stateLength: trimmedState.length,
+    });
+    return {
+      valid: false,
+      errorCategory: 'AUTH_FAILURE',
+      failureCode: 'INVALID_FORMAT',
+      reason: 'Format de state OAuth2 invalide (seuls les states cryptographiquement signés sont autorisés)',
+      diagnostics: { partsCount: parts.length, stateLength: trimmedState.length },
+    };
   }
 
   const portal = parts[0] as 'admin' | 'parrain';
@@ -134,32 +201,215 @@ export async function verifyAndConsumeOAuthState(
   const receivedSig = parts[3];
 
   if (portal !== 'admin' && portal !== 'parrain') {
-    return { valid: false, reason: 'Portail OAuth2 inconnu' };
+    console.warn('[OAuth2 State Validation][AUTH_FAILURE]', {
+      failureCode: 'INVALID_PORTAL',
+      portalPreview: String(portal).slice(0, 16),
+    });
+    return {
+      valid: false,
+      errorCategory: 'AUTH_FAILURE',
+      failureCode: 'INVALID_PORTAL',
+      reason: 'Portail OAuth2 inconnu',
+    };
+  }
+
+  if (!/^[a-zA-Z0-9-]{8,128}$/.test(nonce)) {
+    console.warn('[OAuth2 State Validation][AUTH_FAILURE]', {
+      failureCode: 'INVALID_NONCE',
+      portal,
+      nonceLength: nonce.length,
+    });
+    return {
+      valid: false,
+      portal,
+      errorCategory: 'AUTH_FAILURE',
+      failureCode: 'INVALID_NONCE',
+      reason: 'Format de nonce OAuth2 invalide',
+    };
+  }
+
+  if (!/^[1-9]\d{9,15}$/.test(timestampStr)) {
+    console.warn('[OAuth2 State Validation][AUTH_FAILURE]', {
+      failureCode: 'INVALID_TIMESTAMP',
+      portal,
+      noncePrefix: nonce.slice(0, 8),
+    });
+    return {
+      valid: false,
+      portal,
+      nonce,
+      errorCategory: 'AUTH_FAILURE',
+      failureCode: 'INVALID_TIMESTAMP',
+      reason: 'Horodatage du state OAuth2 invalide',
+    };
   }
 
   const timestamp = parseInt(timestampStr, 10);
-  const now = Date.now();
-
-  // Expiration après 10 minutes max (600 000 ms)
-  if (isNaN(timestamp) || now - timestamp > 600000 || timestamp > now + 60000) {
-    return { valid: false, reason: 'State OAuth2 expiré (> 10 minutes)' };
+  if (!Number.isFinite(timestamp)) {
+    console.warn('[OAuth2 State Validation][AUTH_FAILURE]', {
+      failureCode: 'INVALID_TIMESTAMP',
+      portal,
+      noncePrefix: nonce.slice(0, 8),
+    });
+    return {
+      valid: false,
+      portal,
+      nonce,
+      errorCategory: 'AUTH_FAILURE',
+      failureCode: 'INVALID_TIMESTAMP',
+      reason: 'Horodatage du state OAuth2 non numérique',
+    };
   }
 
-  // Vérification de la signature HMAC (temps constant)
+  // Vérification de la signature HMAC (temps constant) AVANT l'expiration et Firestore
+  // Cela évite qu'un state falsifié ou signé avec un autre secret soit classé comme expiré ou rejoué
   const message = `${portal}:${nonce}:${timestamp}`;
   const expectedSig = (await hmacSha256(secret, message)).slice(0, 16);
   if (!constantTimeEqual(receivedSig, expectedSig)) {
-    return { valid: false, reason: 'Signature HMAC du state OAuth2 invalide (CSRF suspecté)' };
+    console.warn('[OAuth2 State Validation][AUTH_FAILURE]', {
+      failureCode: 'INVALID_HMAC',
+      portal,
+      noncePrefix: nonce.slice(0, 8),
+      receivedSigLength: receivedSig.length,
+    });
+    return {
+      valid: false,
+      portal,
+      nonce,
+      errorCategory: 'AUTH_FAILURE',
+      failureCode: 'INVALID_HMAC',
+      reason: 'Signature HMAC du state OAuth2 invalide (secret modifié ou tentative CSRF)',
+      diagnostics: { receivedSigLength: receivedSig.length },
+    };
   }
 
-  // Consommation persistante obligatoire dans Firestore
+  const now = Date.now();
+  const ageMs = now - timestamp;
+
+  // Expiration après 10 minutes max (600 000 ms)
+  if (ageMs > 600000) {
+    console.warn('[OAuth2 State Validation][AUTH_FAILURE]', {
+      failureCode: 'STATE_EXPIRED',
+      portal,
+      noncePrefix: nonce.slice(0, 8),
+      ageMs,
+      maxAgeMs: 600000,
+    });
+    return {
+      valid: false,
+      portal,
+      nonce,
+      errorCategory: 'AUTH_FAILURE',
+      failureCode: 'STATE_EXPIRED',
+      reason: 'State OAuth2 expiré (> 10 minutes)',
+      diagnostics: { ageMs, maxAgeMs: 600000 },
+    };
+  }
+
+  // Tolérance maximale de dérive horloge future : 60 secondes (60 000 ms)
+  if (timestamp > now + 60000) {
+    const skewMs = timestamp - now;
+    console.warn('[OAuth2 State Validation][AUTH_FAILURE]', {
+      failureCode: 'CLOCK_SKEW',
+      portal,
+      noncePrefix: nonce.slice(0, 8),
+      skewMs,
+    });
+    return {
+      valid: false,
+      portal,
+      nonce,
+      errorCategory: 'AUTH_FAILURE',
+      failureCode: 'CLOCK_SKEW',
+      reason: 'Horodatage du state OAuth2 invalide (horloge future détectée)',
+      diagnostics: { skewMs },
+    };
+  }
+
+  // Consommation atomique persistante obligatoire dans Firestore
   try {
-    const isFresh = await persistentConsumer(nonce, now + 900000);
-    if (!isFresh) {
-      return { valid: false, reason: 'Tentative de rejeu de state OAuth2 détectée (state déjà consommé dans Firestore)' };
+    const consumeOutcome = await persistentConsumer(nonce, now + 900000);
+    const normalized: PersistentNonceConsumerResult =
+      typeof consumeOutcome === 'boolean'
+        ? { consumed: consumeOutcome, reason: consumeOutcome ? undefined : 'REPLAY' }
+        : consumeOutcome;
+
+    if (!normalized.consumed) {
+      if (normalized.reason === 'TECHNICAL_ERROR') {
+        console.error('[OAuth2 State Validation][TECHNICAL_ERROR]', {
+          failureCode: 'FIRESTORE_ERROR',
+          portal,
+          noncePrefix: nonce.slice(0, 8),
+          errorCode: normalized.errorCode || null,
+          detail: normalized.detail || null,
+        });
+        return {
+          valid: false,
+          portal,
+          nonce,
+          errorCategory: 'TECHNICAL_ERROR',
+          failureCode: 'FIRESTORE_ERROR',
+          reason:
+            normalized.detail ||
+            'Échec technique Firestore lors de la consommation atomique du state OAuth2',
+          diagnostics: {
+            errorCode: normalized.errorCode || 'FIRESTORE_ERROR',
+          },
+        };
+      }
+
+      if (normalized.reason === 'INVALID_NONCE') {
+        console.warn('[OAuth2 State Validation][AUTH_FAILURE]', {
+          failureCode: 'INVALID_NONCE',
+          portal,
+          noncePrefix: nonce.slice(0, 8),
+        });
+        return {
+          valid: false,
+          portal,
+          nonce,
+          errorCategory: 'AUTH_FAILURE',
+          failureCode: 'INVALID_NONCE',
+          reason: normalized.detail || 'Format de nonce OAuth2 invalide',
+        };
+      }
+
+      console.warn('[OAuth2 State Validation][AUTH_FAILURE]', {
+        failureCode: 'REPLAY_DETECTED',
+        portal,
+        noncePrefix: nonce.slice(0, 8),
+        errorCode: normalized.errorCode || null,
+      });
+      return {
+        valid: false,
+        portal,
+        nonce,
+        errorCategory: 'AUTH_FAILURE',
+        failureCode: 'REPLAY_DETECTED',
+        reason: 'Tentative de rejeu de state OAuth2 détectée (state déjà consommé dans Firestore)',
+        diagnostics: {
+          errorCode: normalized.errorCode || 'ALREADY_CONSUMED',
+        },
+      };
     }
   } catch (err: any) {
-    return { valid: false, reason: `Échec de la validation persistante du state OAuth2 (Firestore indisponible : ${err?.message || 'erreur'})` };
+    console.error('[OAuth2 State Validation][TECHNICAL_ERROR]', {
+      failureCode: 'FIRESTORE_ERROR',
+      portal,
+      noncePrefix: nonce.slice(0, 8),
+      message: err?.message || 'Erreur inattendue',
+    });
+    return {
+      valid: false,
+      portal,
+      nonce,
+      errorCategory: 'TECHNICAL_ERROR',
+      failureCode: 'FIRESTORE_ERROR',
+      reason: `Échec de la validation persistante du state OAuth2 (Firestore indisponible : ${err?.message || 'erreur'})`,
+      diagnostics: {
+        errorCode: 'CONSUMER_EXCEPTION',
+      },
+    };
   }
 
   return { valid: true, portal, nonce };

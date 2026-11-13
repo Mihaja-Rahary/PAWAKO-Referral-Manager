@@ -11,6 +11,121 @@ export interface FirestoreRestConfig {
   privateKey?: string;
 }
 
+export type FirestoreErrorCategory =
+  | 'CONFIG'
+  | 'AUTH'
+  | 'PRECONDITION'
+  | 'NOT_FOUND'
+  | 'PERMISSION'
+  | 'RATE_LIMIT'
+  | 'TRANSIENT'
+  | 'NETWORK'
+  | 'UNKNOWN';
+
+export class FirestoreRestError extends Error {
+  public readonly status?: number;
+  public readonly firestoreStatus?: string;
+  public readonly operation: string;
+  public readonly category: FirestoreErrorCategory;
+
+  constructor(
+    message: string,
+    options: {
+      status?: number;
+      firestoreStatus?: string;
+      operation: string;
+      category: FirestoreErrorCategory;
+      cause?: unknown;
+    }
+  ) {
+    super(message);
+    this.name = 'FirestoreRestError';
+    this.status = options.status;
+    this.firestoreStatus = options.firestoreStatus;
+    this.operation = options.operation;
+    this.category = options.category;
+    if (options.cause !== undefined) {
+      (this as { cause?: unknown }).cause = options.cause;
+    }
+  }
+
+  /**
+   * Indique un conflit atomique attendu (document déjà existant ou précondition non satisfaite)
+   */
+  get isPreconditionConflict(): boolean {
+    return (
+      this.category === 'PRECONDITION' ||
+      this.status === 409 ||
+      this.status === 412 ||
+      this.firestoreStatus === 'ALREADY_EXISTS' ||
+      this.firestoreStatus === 'FAILED_PRECONDITION'
+    );
+  }
+}
+
+function classifyFirestoreHttpError(status: number, firestoreStatus?: string): FirestoreErrorCategory {
+  if (
+    status === 409 ||
+    status === 412 ||
+    firestoreStatus === 'ALREADY_EXISTS' ||
+    firestoreStatus === 'FAILED_PRECONDITION'
+  ) {
+    return 'PRECONDITION';
+  }
+  if (status === 401 || firestoreStatus === 'UNAUTHENTICATED') {
+    return 'AUTH';
+  }
+  if (status === 403 || firestoreStatus === 'PERMISSION_DENIED') {
+    return 'PERMISSION';
+  }
+  if (status === 404 || firestoreStatus === 'NOT_FOUND') {
+    return 'NOT_FOUND';
+  }
+  if (status === 429 || firestoreStatus === 'RESOURCE_EXHAUSTED') {
+    return 'RATE_LIMIT';
+  }
+  if (
+    status >= 500 ||
+    firestoreStatus === 'UNAVAILABLE' ||
+    firestoreStatus === 'DEADLINE_EXCEEDED' ||
+    firestoreStatus === 'ABORTED' ||
+    firestoreStatus === 'INTERNAL'
+  ) {
+    return 'TRANSIENT';
+  }
+  return 'UNKNOWN';
+}
+
+function buildFirestoreHttpError(operation: string, status: number, rawBody: string): FirestoreRestError {
+  let firestoreStatus: string | undefined;
+  let safeApiMessage = '';
+
+  try {
+    const parsed = JSON.parse(rawBody) as {
+      error?: { status?: string; message?: string };
+    };
+    if (parsed?.error?.status && typeof parsed.error.status === 'string') {
+      firestoreStatus = parsed.error.status;
+    }
+    if (parsed?.error?.message && typeof parsed.error.message === 'string') {
+      safeApiMessage = parsed.error.message.slice(0, 240);
+    }
+  } catch {
+    safeApiMessage = rawBody.replace(/\s+/g, ' ').trim().slice(0, 200);
+  }
+
+  const category = classifyFirestoreHttpError(status, firestoreStatus);
+  const statusLabel = firestoreStatus ? `${status}/${firestoreStatus}` : `${status}`;
+  const detail = safeApiMessage ? `: ${safeApiMessage}` : '';
+
+  return new FirestoreRestError(`Firestore ${operation} a échoué (${statusLabel})${detail}`, {
+    status,
+    firestoreStatus,
+    operation,
+    category,
+  });
+}
+
 // Cache du token d'accès Google OAuth2 indexé par clientEmail
 let cachedToken: { clientEmail: string; accessToken: string; expiresAt: number } | null = null;
 let inFlightTokenPromise: Promise<string> | null = null;
@@ -29,13 +144,15 @@ function normalizePrivateKeyPem(rawPem: string): string {
   pem = pem.replace(/\\n/g, '\n').replace(/\r\n/g, '\n');
 
   if (pem.includes('BEGIN RSA PRIVATE KEY')) {
-    throw new Error(
-      'Format FIREBASE_PRIVATE_KEY invalide : clé PKCS#8 (-----BEGIN PRIVATE KEY-----) requise.'
+    throw new FirestoreRestError(
+      'Format FIREBASE_PRIVATE_KEY invalide : clé PKCS#8 (-----BEGIN PRIVATE KEY-----) requise.',
+      { operation: 'CONFIG', category: 'CONFIG' }
     );
   }
   if (!pem.includes('-----BEGIN PRIVATE KEY-----') || !pem.includes('-----END PRIVATE KEY-----')) {
-    throw new Error(
-      'Format FIREBASE_PRIVATE_KEY invalide : en-têtes PEM PKCS#8 manquants.'
+    throw new FirestoreRestError(
+      'Format FIREBASE_PRIVATE_KEY invalide : en-têtes PEM PKCS#8 manquants.',
+      { operation: 'CONFIG', category: 'CONFIG' }
     );
   }
   return pem;
@@ -52,7 +169,10 @@ function pemToArrayBuffer(pem: string): ArrayBuffer {
     .replace(/[\r\n\s]/g, '');
 
   if (!cleanPem) {
-    throw new Error('FIREBASE_PRIVATE_KEY vide après normalisation PEM.');
+    throw new FirestoreRestError('FIREBASE_PRIVATE_KEY vide après normalisation PEM.', {
+      operation: 'CONFIG',
+      category: 'CONFIG',
+    });
   }
 
   try {
@@ -62,8 +182,12 @@ function pemToArrayBuffer(pem: string): ArrayBuffer {
       bytes[i] = binaryString.charCodeAt(i);
     }
     return bytes.buffer;
-  } catch {
-    throw new Error('FIREBASE_PRIVATE_KEY invalide : encodage Base64 PKCS#8 corrompu.');
+  } catch (err) {
+    throw new FirestoreRestError('FIREBASE_PRIVATE_KEY invalide : encodage Base64 PKCS#8 corrompu.', {
+      operation: 'CONFIG',
+      category: 'CONFIG',
+      cause: err,
+    });
   }
 }
 
@@ -94,10 +218,16 @@ async function getGoogleAccessToken(clientEmail: string, privateKeyPem: string):
   const cleanKey = (privateKeyPem || '').trim();
 
   if (!cleanEmail || !cleanEmail.includes('@')) {
-    throw new Error('Authentification Firebase impossible : FIREBASE_CLIENT_EMAIL manquant ou invalide.');
+    throw new FirestoreRestError(
+      'Authentification Firebase impossible : FIREBASE_CLIENT_EMAIL manquant ou invalide.',
+      { operation: 'AUTH_TOKEN', category: 'CONFIG' }
+    );
   }
   if (!cleanKey) {
-    throw new Error('Authentification Firebase impossible : FIREBASE_PRIVATE_KEY manquant.');
+    throw new FirestoreRestError(
+      'Authentification Firebase impossible : FIREBASE_PRIVATE_KEY manquant.',
+      { operation: 'AUTH_TOKEN', category: 'CONFIG' }
+    );
   }
 
   const now = Math.floor(Date.now() / 1000);
@@ -148,8 +278,11 @@ async function getGoogleAccessToken(clientEmail: string, privateKeyPem: string):
           false,
           ['sign']
         );
-      } catch {
-        throw new Error('Clé privée Firebase (FIREBASE_PRIVATE_KEY) incompatible avec la signature RS256 PKCS#8.');
+      } catch (err) {
+        throw new FirestoreRestError(
+          'Clé privée Firebase (FIREBASE_PRIVATE_KEY) incompatible avec la signature RS256 PKCS#8.',
+          { operation: 'AUTH_TOKEN', category: 'CONFIG', cause: err }
+        );
       }
 
       const encoder = new TextEncoder();
@@ -163,14 +296,23 @@ async function getGoogleAccessToken(clientEmail: string, privateKeyPem: string):
       const jwt = `${message}.${signature}`;
 
       // Échange du JWT contre un access token
-      const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({
-          grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
-          assertion: jwt,
-        }),
-      });
+      let tokenRes: Response;
+      try {
+        tokenRes = await fetch('https://oauth2.googleapis.com/token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({
+            grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
+            assertion: jwt,
+          }),
+        });
+      } catch (err: any) {
+        cachedToken = null;
+        throw new FirestoreRestError(
+          `Erreur réseau lors de l'authentification Google OAuth2 Firestore : ${err?.message || 'connexion impossible'}`,
+          { operation: 'AUTH_TOKEN', category: 'NETWORK', cause: err }
+        );
+      }
 
       if (!tokenRes.ok) {
         let errorCode = 'unknown_error';
@@ -181,15 +323,24 @@ async function getGoogleAccessToken(clientEmail: string, privateKeyPem: string):
           // Ne jamais exposer le corps brut en cas d'erreur de format
         }
         cachedToken = null;
-        throw new Error(
-          `Échec de l'authentification Google OAuth2 Firestore (HTTP ${tokenRes.status}, code: ${errorCode}). Vérifiez FIREBASE_CLIENT_EMAIL et FIREBASE_PRIVATE_KEY.`
+        throw new FirestoreRestError(
+          `Échec de l'authentification Google OAuth2 Firestore (HTTP ${tokenRes.status}, code: ${errorCode}). Vérifiez FIREBASE_CLIENT_EMAIL et FIREBASE_PRIVATE_KEY.`,
+          {
+            operation: 'AUTH_TOKEN',
+            status: tokenRes.status,
+            firestoreStatus: errorCode,
+            category: 'AUTH',
+          }
         );
       }
 
       const tokenData = (await tokenRes.json()) as { access_token?: string; expires_in?: number };
       if (!tokenData?.access_token) {
         cachedToken = null;
-        throw new Error('Réponse OAuth2 Google invalide : access_token absent.');
+        throw new FirestoreRestError('Réponse OAuth2 Google invalide : access_token absent.', {
+          operation: 'AUTH_TOKEN',
+          category: 'AUTH',
+        });
       }
 
       const ttl = Number(tokenData.expires_in) > 0 ? Number(tokenData.expires_in) : 3600;
@@ -317,8 +468,9 @@ export class FirestoreRestClient {
 
   private async getHeaders(): Promise<HeadersInit> {
     if (!this.clientEmail || !this.privateKey) {
-      throw new Error(
-        'Configuration Firestore incomplète : les secrets FIREBASE_CLIENT_EMAIL et FIREBASE_PRIVATE_KEY sont obligatoires.'
+      throw new FirestoreRestError(
+        'Configuration Firestore incomplète : les secrets FIREBASE_CLIENT_EMAIL et FIREBASE_PRIVATE_KEY sont obligatoires.',
+        { operation: 'CONFIG', category: 'CONFIG' }
       );
     }
 
@@ -328,6 +480,17 @@ export class FirestoreRestClient {
       Accept: 'application/json',
       Authorization: `Bearer ${token}`,
     };
+  }
+
+  private async executeFetch(operation: string, url: string, init: RequestInit): Promise<Response> {
+    try {
+      return await fetch(url, init);
+    } catch (err: any) {
+      throw new FirestoreRestError(
+        `Erreur réseau Firestore (${operation}) : ${err?.message || 'connexion impossible'}`,
+        { operation, category: 'NETWORK', cause: err }
+      );
+    }
   }
 
   /**
@@ -343,18 +506,18 @@ export class FirestoreRestClient {
       url += `?transaction=${encodeURIComponent(options.transaction)}`;
     }
     const headers = await this.getHeaders();
-    const res = await fetch(url, { headers });
+    const res = await this.executeFetch(`GET ${collection}/${docId}`, url, { headers });
 
     if (res.status === 404) {
       return null;
     }
     if (!res.ok) {
       const err = await res.text();
-      throw new Error(`Firestore GET ${collection}/${docId} a échoué (${res.status}): ${err}`);
+      throw buildFirestoreHttpError(`GET ${collection}/${docId}`, res.status, err);
     }
 
     const doc = await res.json();
-    return fromFirestoreDocument<T>(doc) as (T & { _updateTime?: string });
+    return fromFirestoreDocument<T>(doc) as T & { _updateTime?: string };
   }
 
   /**
@@ -363,7 +526,7 @@ export class FirestoreRestClient {
   async beginTransaction(): Promise<string> {
     const url = `https://firestore.googleapis.com/v1/projects/${this.projectId}/databases/${this.databaseId}/documents:beginTransaction`;
     const headers = await this.getHeaders();
-    const res = await fetch(url, {
+    const res = await this.executeFetch('BEGIN_TRANSACTION', url, {
       method: 'POST',
       headers,
       body: JSON.stringify({ options: { readWrite: {} } }),
@@ -371,7 +534,7 @@ export class FirestoreRestClient {
 
     if (!res.ok) {
       const err = await res.text();
-      throw new Error(`Firestore beginTransaction a échoué (${res.status}): ${err}`);
+      throw buildFirestoreHttpError('BEGIN_TRANSACTION', res.status, err);
     }
 
     const data = (await res.json()) as { transaction: string };
@@ -405,7 +568,7 @@ export class FirestoreRestClient {
     const headers = await this.getHeaders();
     const body = JSON.stringify(toFirestoreDocument(data));
 
-    const res = await fetch(url, {
+    const res = await this.executeFetch(`SET ${collection}/${docId}`, url, {
       method: 'PATCH',
       headers,
       body,
@@ -413,7 +576,7 @@ export class FirestoreRestClient {
 
     if (!res.ok) {
       const err = await res.text();
-      throw new Error(`Firestore SET ${collection}/${docId} a échoué (${res.status}): ${err}`);
+      throw buildFirestoreHttpError(`SET ${collection}/${docId}`, res.status, err);
     }
 
     const doc = await res.json();
@@ -441,7 +604,7 @@ export class FirestoreRestClient {
     }
 
     const headers = await this.getHeaders();
-    const res = await fetch(url, {
+    const res = await this.executeFetch(`DELETE ${collection}/${docId}`, url, {
       method: 'DELETE',
       headers,
     });
@@ -450,7 +613,7 @@ export class FirestoreRestClient {
       return true;
     }
     const err = await res.text();
-    throw new Error(`Firestore DELETE ${collection}/${docId} a échoué (${res.status}): ${err}`);
+    throw buildFirestoreHttpError(`DELETE ${collection}/${docId}`, res.status, err);
   }
 
   /**
@@ -466,12 +629,12 @@ export class FirestoreRestClient {
       if (pageToken) {
         url += `&pageToken=${encodeURIComponent(pageToken)}`;
       }
-      const res = await fetch(url, { headers });
+      const res = await this.executeFetch(`LIST ${collection}`, url, { headers });
 
       if (!res.ok) {
         if (res.status === 404) return allDocuments;
         const err = await res.text();
-        throw new Error(`Firestore LIST ${collection} a échoué (${res.status}): ${err}`);
+        throw buildFirestoreHttpError(`LIST ${collection}`, res.status, err);
       }
 
       const data = (await res.json()) as { documents?: any[]; nextPageToken?: string };
@@ -506,7 +669,7 @@ export class FirestoreRestClient {
         },
       }));
 
-      const res = await fetch(url, {
+      const res = await this.executeFetch('BATCH_COMMIT', url, {
         method: 'POST',
         headers,
         body: JSON.stringify({ writes: firestoreWrites }),
@@ -514,7 +677,7 @@ export class FirestoreRestClient {
 
       if (!res.ok) {
         const err = await res.text();
-        throw new Error(`Firestore BATCH commit a échoué (${res.status}): ${err}`);
+        throw buildFirestoreHttpError('BATCH_COMMIT', res.status, err);
       }
     }
   }
@@ -559,7 +722,7 @@ export class FirestoreRestClient {
       body.transaction = params.transaction;
     }
 
-    const res = await fetch(url, {
+    const res = await this.executeFetch('COMMIT', url, {
       method: 'POST',
       headers,
       body: JSON.stringify(body),
@@ -567,7 +730,7 @@ export class FirestoreRestClient {
 
     if (!res.ok) {
       const err = await res.text();
-      throw new Error(`Firestore COMMIT a échoué (${res.status}): ${err}`);
+      throw buildFirestoreHttpError('COMMIT', res.status, err);
     }
   }
 }

@@ -4,7 +4,7 @@
  * Conçu pour s'exécuter dans Cloudflare Workers et dans le serveur Express.
  */
 
-import { FirestoreRestClient } from './firestoreRest';
+import { FirestoreRestClient, FirestoreRestError } from './firestoreRest';
 import {
   User,
   UserRole,
@@ -124,15 +124,28 @@ export class FirestoreRepository {
   }
 
   /**
-   * Consomme atomiquement un nonce OAuth2 dans Firestore.
-   * Empêche le rejeu entre toutes les instances Cloudflare Workers distribuées dans le monde.
+   * Consomme atomiquement un nonce OAuth2 dans Firestore via une écriture conditionnelle unique (exists=false).
+   * Distingue strictement un rejeu légitime (conflit atomique 409/412) d'une erreur technique Firestore.
    */
-  async consumeOAuthNonce(nonce: string, expiresAt: number): Promise<boolean> {
+  async consumeOAuthNonce(
+    nonce: string,
+    expiresAt: number
+  ): Promise<{
+    consumed: boolean;
+    reason?: 'REPLAY' | 'INVALID_NONCE' | 'TECHNICAL_ERROR';
+    errorCode?: string;
+    detail?: string;
+  }> {
+    if (!nonce || typeof nonce !== 'string' || !/^[a-zA-Z0-9-]{8,128}$/.test(nonce)) {
+      return {
+        consumed: false,
+        reason: 'INVALID_NONCE',
+        errorCode: 'INVALID_NONCE',
+        detail: 'Format de nonce OAuth2 invalide.',
+      };
+    }
+
     try {
-      const existing = await this.client.getDocument('pawako_consumed_nonces', nonce);
-      if (existing) {
-        return false;
-      }
       await this.client.setDocument(
         'pawako_consumed_nonces',
         nonce,
@@ -143,9 +156,41 @@ export class FirestoreRepository {
         },
         { precondition: { exists: false } }
       );
-      return true;
-    } catch {
-      return false;
+      return { consumed: true };
+    } catch (err: any) {
+      if (err instanceof FirestoreRestError && err.isPreconditionConflict) {
+        return {
+          consumed: false,
+          reason: 'REPLAY',
+          errorCode: err.firestoreStatus || `HTTP_${err.status || 409}`,
+          detail: 'Nonce OAuth2 déjà consommé dans Firestore.',
+        };
+      }
+
+      const firestoreErr = err instanceof FirestoreRestError ? err : null;
+      const errorCode = firestoreErr
+        ? firestoreErr.firestoreStatus || firestoreErr.category
+        : 'UNEXPECTED_ERROR';
+      const statusSuffix = firestoreErr?.status ? ` (HTTP ${firestoreErr.status})` : '';
+      const safeDetail = `${firestoreErr?.operation || 'SET'} ${errorCode}${statusSuffix}: ${
+        err?.message || 'Erreur Firestore inconnue'
+      }`;
+
+      console.error('[Firestore][consumeOAuthNonce] Technical Firestore failure', {
+        noncePrefix: nonce.slice(0, 8),
+        category: firestoreErr?.category || 'UNKNOWN',
+        operation: firestoreErr?.operation || 'SET',
+        status: firestoreErr?.status ?? null,
+        firestoreStatus: firestoreErr?.firestoreStatus ?? null,
+        message: err?.message || 'Unknown error',
+      });
+
+      return {
+        consumed: false,
+        reason: 'TECHNICAL_ERROR',
+        errorCode,
+        detail: safeDetail,
+      };
     }
   }
 
