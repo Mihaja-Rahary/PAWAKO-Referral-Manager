@@ -598,11 +598,21 @@ export class FirestoreRestClient {
 
   /**
    * Diagnostic en lecture seule de la configuration, de l'authentification Google JWT RS256
-   * et de l'accessibilité réelle de la base Cloud Firestore (sans jamais exposer de secret).
+   * et de l'accessibilité réelle de la base Cloud Firestore (sans jamais exposer de secret
+   * et sans dépendre de l'existence préalable du document pawako_metadata/system).
    */
   async diagnoseFirestoreConnection(): Promise<{
     ok: boolean;
     stage: 'CONFIG' | 'GOOGLE_OAUTH2' | 'FIRESTORE_API' | 'OK';
+    classification:
+      | 'AUTHENTICATED_OK'
+      | 'DOCUMENT_ABSENT'
+      | 'DATABASE_OR_PROJECT_NOT_FOUND'
+      | 'PERMISSION_DENIED'
+      | 'GOOGLE_AUTH_ERROR'
+      | 'CONFIG_ERROR'
+      | 'NETWORK_ERROR'
+      | 'FIRESTORE_ERROR';
     category?: FirestoreErrorCategory;
     httpStatus?: number | null;
     firestoreStatus?: string | null;
@@ -615,6 +625,7 @@ export class FirestoreRestClient {
       return {
         ok: false,
         stage: 'CONFIG',
+        classification: 'CONFIG_ERROR',
         category: 'CONFIG',
         diagnosticCode: 'MISSING_PROJECT_ID',
         message: 'FIREBASE_PROJECT_ID manquant.',
@@ -627,6 +638,7 @@ export class FirestoreRestClient {
       return {
         ok: false,
         stage: 'CONFIG',
+        classification: 'CONFIG_ERROR',
         category: 'CONFIG',
         diagnosticCode: this.clientEmail ? 'INVALID_CLIENT_EMAIL' : 'MISSING_CLIENT_EMAIL',
         message: 'FIREBASE_CLIENT_EMAIL manquant ou invalide.',
@@ -640,6 +652,7 @@ export class FirestoreRestClient {
       return {
         ok: false,
         stage: 'CONFIG',
+        classification: 'CONFIG_ERROR',
         category: 'CONFIG',
         diagnosticCode: keyDiag.code,
         message: keyDiag.detail,
@@ -653,10 +666,19 @@ export class FirestoreRestClient {
       token = await getGoogleAccessToken(this.clientEmail, this.privateKey || '');
     } catch (err: any) {
       const fErr = err instanceof FirestoreRestError ? err : null;
+      const category = fErr?.category || 'AUTH';
+      const classification =
+        category === 'CONFIG'
+          ? 'CONFIG_ERROR'
+          : category === 'NETWORK'
+            ? 'NETWORK_ERROR'
+            : 'GOOGLE_AUTH_ERROR';
+
       return {
         ok: false,
-        stage: fErr?.category === 'CONFIG' ? 'CONFIG' : 'GOOGLE_OAUTH2',
-        category: fErr?.category || 'AUTH',
+        stage: category === 'CONFIG' ? 'CONFIG' : 'GOOGLE_OAUTH2',
+        classification,
+        category,
         httpStatus: fErr?.status ?? null,
         firestoreStatus: fErr?.firestoreStatus ?? null,
         diagnosticCode: fErr?.firestoreStatus || fErr?.category || 'AUTH_TOKEN_FAILED',
@@ -666,9 +688,11 @@ export class FirestoreRestClient {
       };
     }
 
-    const probeUrl = `${this.baseUrl}/pawako_metadata/system`;
+    // Sonde en lecture seule sur la collection (pageSize=1) : vérifie l'accès authentifié réel
+    // à la base Firestore sans créer de données ni exiger l'existence de pawako_metadata/system.
+    const probeUrl = `${this.baseUrl}/pawako_metadata?pageSize=1`;
     try {
-      const res = await this.executeFetch('DIAGNOSE_GET pawako_metadata/system', probeUrl, {
+      const res = await this.executeFetch('DIAGNOSE_LIST pawako_metadata', probeUrl, {
         headers: {
           Accept: 'application/json',
           Authorization: `Bearer ${token}`,
@@ -679,10 +703,12 @@ export class FirestoreRestClient {
         return {
           ok: true,
           stage: 'OK',
+          classification: 'AUTHENTICATED_OK',
           httpStatus: res.status,
           firestoreStatus: 'OK',
           diagnosticCode: 'FIRESTORE_CONNECTED',
-          message: 'Connexion Google OAuth2 RS256 et lecture Firestore REST vérifiées.',
+          message:
+            'Connexion Google OAuth2 RS256 et accès authentifié en lecture seule à la base Firestore vérifiés.',
           projectId: this.projectId,
           databaseId: this.databaseId,
         };
@@ -693,23 +719,45 @@ export class FirestoreRestClient {
         return {
           ok: true,
           stage: 'OK',
+          classification: 'DOCUMENT_ABSENT',
           httpStatus: 404,
           firestoreStatus: 'DOC_NOT_FOUND_DB_OK',
-          diagnosticCode: 'FIRESTORE_CONNECTED_EMPTY_META',
-          message: 'Connexion Google OAuth2 RS256 et accès base Firestore vérifiés (document système non encore créé).',
+          diagnosticCode: 'FIRESTORE_CONNECTED_DOCUMENT_ABSENT',
+          message:
+            'Connexion Google OAuth2 RS256 et base Firestore vérifiées (document/ressource absent, base accessible).',
           projectId: this.projectId,
           databaseId: this.databaseId,
         };
       }
 
-      const fErr = buildFirestoreHttpError('DIAGNOSE_GET pawako_metadata/system', res.status, rawErr);
+      const fErr = buildFirestoreHttpError('DIAGNOSE_LIST pawako_metadata', res.status, rawErr);
+      let classification:
+        | 'DATABASE_OR_PROJECT_NOT_FOUND'
+        | 'PERMISSION_DENIED'
+        | 'GOOGLE_AUTH_ERROR'
+        | 'NETWORK_ERROR'
+        | 'FIRESTORE_ERROR' = 'FIRESTORE_ERROR';
+      let diagnosticCode = fErr.firestoreStatus || fErr.category;
+
+      if (fErr.category === 'NOT_FOUND') {
+        classification = 'DATABASE_OR_PROJECT_NOT_FOUND';
+        diagnosticCode = 'DATABASE_OR_PROJECT_NOT_FOUND';
+      } else if (fErr.category === 'PERMISSION') {
+        classification = 'PERMISSION_DENIED';
+      } else if (fErr.category === 'AUTH') {
+        classification = 'GOOGLE_AUTH_ERROR';
+      } else if (fErr.category === 'NETWORK') {
+        classification = 'NETWORK_ERROR';
+      }
+
       return {
         ok: false,
         stage: 'FIRESTORE_API',
+        classification,
         category: fErr.category,
         httpStatus: fErr.status ?? res.status,
         firestoreStatus: fErr.firestoreStatus ?? null,
-        diagnosticCode: fErr.firestoreStatus || fErr.category,
+        diagnosticCode,
         message: fErr.message,
         projectId: this.projectId,
         databaseId: this.databaseId,
@@ -719,6 +767,7 @@ export class FirestoreRestClient {
       return {
         ok: false,
         stage: 'FIRESTORE_API',
+        classification: 'NETWORK_ERROR',
         category: fErr?.category || 'NETWORK',
         httpStatus: fErr?.status ?? null,
         firestoreStatus: fErr?.firestoreStatus ?? null,
