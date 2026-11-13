@@ -302,10 +302,34 @@ function bufferToBase64Url(buf: ArrayBuffer): string {
 }
 
 function isMissingDatabaseOrProject404(rawBody: string): boolean {
-  const lower = (rawBody || '').toLowerCase();
-  if (!lower) return false;
-  if (lower.includes('database') && lower.includes('does not exist')) return true;
-  if (lower.includes('project') && (lower.includes('does not exist') || lower.includes('not found'))) {
+  if (!rawBody) return false;
+
+  let message = rawBody;
+  try {
+    const parsed = JSON.parse(rawBody) as { error?: { message?: string } };
+    if (parsed?.error?.message && typeof parsed.error.message === 'string') {
+      message = parsed.error.message;
+    }
+  } catch {
+    // Corps brut non JSON conservé tel quel
+  }
+
+  const normalized = message.replace(/\s+/g, ' ').trim().toLowerCase();
+  if (!normalized) return false;
+
+  // Cas normal Firestore REST d'un document absent :
+  // Document "projects/<id>/databases/<db>/documents/<col>/<doc>" not found.
+  if (/^document\s+["']?projects\/[^/]+\/databases\/[^/]+\/documents\//i.test(normalized)) {
+    return false;
+  }
+
+  if (/\bdatabase\b.*\b(does not exist|not found)\b/i.test(normalized)) {
+    return true;
+  }
+  if (/\b(the\s+)?project\s+["']?[a-z0-9_.:-]+["']?\s+(does not exist|not found)\b/i.test(normalized)) {
+    return true;
+  }
+  if (/\bthe\s+project\b.*\b(does not exist|not found)\b/i.test(normalized)) {
     return true;
   }
   return false;
