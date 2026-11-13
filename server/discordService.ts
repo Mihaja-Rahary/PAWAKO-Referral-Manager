@@ -12,14 +12,12 @@ export interface DiscordOAuthUser {
 export class DiscordService {
   private clientId: string;
   private clientSecret: string;
-  private botToken: string;
   private webhookSecret: string;
 
   constructor() {
-    this.clientId = process.env.DISCORD_CLIENT_ID || '';
-    this.clientSecret = process.env.DISCORD_CLIENT_SECRET || '';
-    this.botToken = process.env.DISCORD_BOT_TOKEN || '';
-    this.webhookSecret = process.env.JARVIS_WEBHOOK_SECRET || '';
+    this.clientId = (process.env.DISCORD_CLIENT_ID || '').trim();
+    this.clientSecret = (process.env.DISCORD_CLIENT_SECRET || '').trim();
+    this.webhookSecret = (process.env.JARVIS_WEBHOOK_SECRET || '').trim();
   }
 
   isOAuthConfigured(): boolean {
@@ -27,7 +25,7 @@ export class DiscordService {
   }
 
   isBotConfigured(): boolean {
-    return Boolean(this.botToken);
+    return Boolean(this.webhookSecret);
   }
 
   getOAuthUrl(redirectUri: string, state?: string): { url: string; isConfigured: boolean } {

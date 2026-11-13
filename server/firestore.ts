@@ -49,7 +49,7 @@ class FirestoreService {
       isConfigured,
       isConnected: Boolean(this.firestoreInstance && !this.lastError),
       projectId,
-      clientEmail: clientEmail ? `${clientEmail.slice(0, 10)}...` : null,
+      clientEmail: null,
       storageMode,
       error: this.lastError,
     };

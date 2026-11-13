@@ -136,8 +136,9 @@ export const SettingsOAuthView: React.FC = () => {
   };
 
   const currentOrigin = typeof window !== 'undefined' ? window.location.origin : '';
-  const devCallback = oauthInfo?.redirectUri || `${currentOrigin}/auth/callback`;
-  const webhookUrl = `${currentOrigin}/api/discord/webhook`;
+  const apiBase = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '');
+  const devCallback = oauthInfo?.redirectUri || `${apiBase || currentOrigin}/auth/callback`;
+  const webhookUrl = `${apiBase || currentOrigin}/api/discord/webhook`;
 
   const serverSections: { id: DiscordServerType; title: string; roles: PawakoRoleType[] }[] = [
     {
@@ -398,24 +399,44 @@ export const SettingsOAuthView: React.FC = () => {
                     <td className="p-2.5 font-sans text-slate-500 dark:text-[#9d93b8]">Serveur Prod VA Instagram</td>
                   </tr>
                   <tr>
-                    <td className="p-2.5 font-bold text-slate-900 dark:text-[#f4f1fa]">PAWAKO_INITIAL_ADMIN_DISCORD_ID</td>
-                    <td className="p-2.5 font-sans text-slate-500 dark:text-[#9d93b8]">Discord ID du 1er Administrateur</td>
+                    <td className="p-2.5 font-bold text-slate-900 dark:text-[#f4f1fa]">INITIAL_ADMIN_DISCORD_ID</td>
+                    <td className="p-2.5 font-sans text-slate-500 dark:text-[#9d93b8]">Secret Worker — Discord ID du 1er Administrateur</td>
                   </tr>
                   <tr>
                     <td className="p-2.5 font-bold text-slate-900 dark:text-[#f4f1fa]">JARVIS_WEBHOOK_SECRET</td>
-                    <td className="p-2.5 font-sans text-slate-500 dark:text-[#9d93b8]">Secret Webhook (X-JARVIS-Secret)</td>
+                    <td className="p-2.5 font-sans text-slate-500 dark:text-[#9d93b8]">Secret Worker — Secret Webhook (X-JARVIS-Secret)</td>
                   </tr>
                   <tr>
                     <td className="p-2.5 font-bold text-slate-900 dark:text-[#f4f1fa]">DISCORD_CLIENT_ID</td>
-                    <td className="p-2.5 font-sans text-slate-500 dark:text-[#9d93b8]">Client ID OAuth2</td>
+                    <td className="p-2.5 font-sans text-slate-500 dark:text-[#9d93b8]">Secret Worker — Client ID OAuth2</td>
                   </tr>
                   <tr>
                     <td className="p-2.5 font-bold text-slate-900 dark:text-[#f4f1fa]">DISCORD_CLIENT_SECRET</td>
-                    <td className="p-2.5 font-sans text-slate-500 dark:text-[#9d93b8]">Secret OAuth2</td>
+                    <td className="p-2.5 font-sans text-slate-500 dark:text-[#9d93b8]">Secret Worker — Secret OAuth2</td>
                   </tr>
                   <tr>
-                    <td className="p-2.5 font-bold text-slate-900 dark:text-[#f4f1fa]">DISCORD_BOT_TOKEN</td>
-                    <td className="p-2.5 font-sans text-slate-500 dark:text-[#9d93b8]">Token Bot Discord</td>
+                    <td className="p-2.5 font-bold text-slate-900 dark:text-[#f4f1fa]">SESSION_SECRET</td>
+                    <td className="p-2.5 font-sans text-slate-500 dark:text-[#9d93b8]">Secret Worker — Signature HMAC-SHA256 des sessions et states</td>
+                  </tr>
+                  <tr>
+                    <td className="p-2.5 font-bold text-slate-900 dark:text-[#f4f1fa]">FIREBASE_CLIENT_EMAIL</td>
+                    <td className="p-2.5 font-sans text-slate-500 dark:text-[#9d93b8]">Secret Worker — Compte de service Firebase REST</td>
+                  </tr>
+                  <tr>
+                    <td className="p-2.5 font-bold text-slate-900 dark:text-[#f4f1fa]">FIREBASE_PRIVATE_KEY</td>
+                    <td className="p-2.5 font-sans text-slate-500 dark:text-[#9d93b8]">Secret Worker — Clé privée RS256 PKCS#8 Firebase</td>
+                  </tr>
+                  <tr>
+                    <td className="p-2.5 font-bold text-slate-900 dark:text-[#f4f1fa]">FRONTEND_URL</td>
+                    <td className="p-2.5 font-sans text-slate-500 dark:text-[#9d93b8]">Variable Worker — Origine Cloudflare Pages autorisée</td>
+                  </tr>
+                  <tr>
+                    <td className="p-2.5 font-bold text-slate-900 dark:text-[#f4f1fa]">DISCORD_REDIRECT_URI</td>
+                    <td className="p-2.5 font-sans text-slate-500 dark:text-[#9d93b8]">Variable Worker — Callback OAuth2 Discord</td>
+                  </tr>
+                  <tr>
+                    <td className="p-2.5 font-bold text-slate-900 dark:text-[#f4f1fa]">VITE_API_BASE_URL</td>
+                    <td className="p-2.5 font-sans text-slate-500 dark:text-[#9d93b8]">Variable Frontend Pages — URL du Worker API</td>
                   </tr>
                 </tbody>
               </table>
@@ -532,7 +553,7 @@ Body:
             <div className="p-3 bg-slate-50 dark:bg-[#171026] border border-slate-200 dark:border-[#241a38] rounded-lg space-y-1">
               <span className="text-[10px] uppercase font-bold text-slate-400 dark:text-[#7c7296]">Compte de Service</span>
               <div className="font-bold text-slate-900 dark:text-[#f4f1fa] font-mono truncate">
-                {firestoreStatus?.clientEmail || '—'}
+                {firestoreStatus?.isConfigured ? 'Configuré (masqué)' : '—'}
               </div>
             </div>
           </div>

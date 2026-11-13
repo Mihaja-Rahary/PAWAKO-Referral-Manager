@@ -33,7 +33,7 @@ const OFFICIAL_DISCORD_SERVERS: DiscordServerInfo[] = [
     description: 'Accueil de tous les candidats, orientation VA Chatteurs et VA Instagram.',
     inviteBaseUrl: 'https://discord.gg/pawako-recrutement',
     memberCount: 0,
-    botConnected: Boolean(process.env.DISCORD_BOT_TOKEN),
+    botConnected: Boolean(process.env.JARVIS_WEBHOOK_SECRET),
     lastSyncAt: new Date().toISOString(),
   },
   {
@@ -43,7 +43,7 @@ const OFFICIAL_DISCORD_SERVERS: DiscordServerInfo[] = [
     description: 'Réservé exclusivement aux VA Chatteurs en cours de formation.',
     inviteBaseUrl: 'https://discord.gg/pawako-formation',
     memberCount: 0,
-    botConnected: Boolean(process.env.DISCORD_BOT_TOKEN),
+    botConnected: Boolean(process.env.JARVIS_WEBHOOK_SECRET),
     lastSyncAt: new Date().toISOString(),
   },
   {
@@ -53,7 +53,7 @@ const OFFICIAL_DISCORD_SERVERS: DiscordServerInfo[] = [
     description: 'Réservé aux VA Chatteurs validés en production active.',
     inviteBaseUrl: 'https://discord.gg/pawako-prod-chatting',
     memberCount: 0,
-    botConnected: Boolean(process.env.DISCORD_BOT_TOKEN),
+    botConnected: Boolean(process.env.JARVIS_WEBHOOK_SECRET),
     lastSyncAt: new Date().toISOString(),
   },
   {
@@ -63,7 +63,7 @@ const OFFICIAL_DISCORD_SERVERS: DiscordServerInfo[] = [
     description: 'Réservé aux VA Instagram acceptés en production active.',
     inviteBaseUrl: 'https://discord.gg/pawako-prod-instagram',
     memberCount: 0,
-    botConnected: Boolean(process.env.DISCORD_BOT_TOKEN),
+    botConnected: Boolean(process.env.JARVIS_WEBHOOK_SECRET),
     lastSyncAt: new Date().toISOString(),
   },
 ];
@@ -252,11 +252,7 @@ class DatabaseService {
   }
 
   public getInitialAdminConfiguredId(): string {
-    return (
-      process.env.INITIAL_ADMIN_DISCORD_ID ||
-      process.env.PAWAKO_INITIAL_ADMIN_DISCORD_ID ||
-      ''
-    ).trim();
+    return (process.env.INITIAL_ADMIN_DISCORD_ID || '').trim();
   }
 
   public getAllData(): DatabaseSchema {
@@ -280,7 +276,7 @@ class DatabaseService {
     if (!configuredAdminId && !this.isInitialAdminClaimed()) {
       return {
         authorized: false,
-        reason: 'La variable serveur INITIAL_ADMIN_DISCORD_ID (ou PAWAKO_INITIAL_ADMIN_DISCORD_ID) n est pas configurée. Aucun administrateur initial n est défini.',
+        reason: 'La variable serveur INITIAL_ADMIN_DISCORD_ID n est pas configurée. Aucun administrateur initial n est défini.',
       };
     }
 
@@ -344,7 +340,7 @@ class DatabaseService {
       return updated;
     } else {
       // Sécurisation stricte du premier administrateur:
-      // Seul le Discord User ID configuré dans PAWAKO_INITIAL_ADMIN_DISCORD_ID
+      // Seul le Discord User ID configuré dans INITIAL_ADMIN_DISCORD_ID
       // peut réclamer le premier rôle ADMINISTRATEUR. Une fois réclamé, le mécanisme est verrouillé.
       const configuredAdminId = this.getInitialAdminConfiguredId();
       const canClaimInitialAdmin =
@@ -385,8 +381,8 @@ class DatabaseService {
           targetType: 'USER',
           targetId: user.id,
           details: {
-            configuredAdminId,
-            message: 'Premier administrateur PAWAKO initialisé via PAWAKO_INITIAL_ADMIN_DISCORD_ID.',
+            claimedByUserId: user.id,
+            message: 'Premier administrateur PAWAKO initialisé via INITIAL_ADMIN_DISCORD_ID.',
           },
         });
       }

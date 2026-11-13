@@ -17,6 +17,22 @@ function bufferToHex(buffer: ArrayBuffer): string {
 }
 
 /**
+ * Comparaison en temps constant de deux chaînes UTF-8 (protection contre les attaques temporelles).
+ */
+export function constantTimeEqual(a: string, b: string): boolean {
+  if (typeof a !== 'string' || typeof b !== 'string') return false;
+  const enc = new TextEncoder();
+  const bufA = enc.encode(a);
+  const bufB = enc.encode(b);
+  if (bufA.length !== bufB.length) return false;
+  let diff = 0;
+  for (let i = 0; i < bufA.length; i++) {
+    diff |= bufA[i] ^ bufB[i];
+  }
+  return diff === 0;
+}
+
+/**
  * Calcule un HMAC-SHA256 standard via Web Crypto.
  * Exige strictement une clé non vide d'au moins 32 caractères.
  */
@@ -129,10 +145,10 @@ export async function verifyAndConsumeOAuthState(
     return { valid: false, reason: 'State OAuth2 expiré (> 10 minutes)' };
   }
 
-  // Vérification de la signature HMAC
+  // Vérification de la signature HMAC (temps constant)
   const message = `${portal}:${nonce}:${timestamp}`;
   const expectedSig = (await hmacSha256(secret, message)).slice(0, 16);
-  if (receivedSig !== expectedSig) {
+  if (!constantTimeEqual(receivedSig, expectedSig)) {
     return { valid: false, reason: 'Signature HMAC du state OAuth2 invalide (CSRF suspecté)' };
   }
 
@@ -217,7 +233,7 @@ export async function verifySignedSessionToken(
 
   const payload = `${userId}.${role}.${issuedAt}`;
   const expectedSig = (await hmacSha256(secret, `session:${payload}`)).slice(0, 32);
-  if (receivedSig !== expectedSig) {
+  if (!constantTimeEqual(receivedSig, expectedSig)) {
     return { valid: false, reason: 'Signature HMAC de session invalide (jeton falsifié)' };
   }
 

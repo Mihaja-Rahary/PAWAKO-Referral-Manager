@@ -11,25 +11,60 @@ export interface FirestoreRestConfig {
   privateKey?: string;
 }
 
-// Cache du token d'accès Google OAuth2
-let cachedToken: { accessToken: string; expiresAt: number } | null = null;
+// Cache du token d'accès Google OAuth2 indexé par clientEmail
+let cachedToken: { clientEmail: string; accessToken: string; expiresAt: number } | null = null;
 let inFlightTokenPromise: Promise<string> | null = null;
+
+/**
+ * Normalise une clé privée PEM issue d'un secret Cloudflare (gère \n échappés et guillemets éventuels)
+ */
+function normalizePrivateKeyPem(rawPem: string): string {
+  let pem = rawPem.trim();
+  if (
+    (pem.startsWith('"') && pem.endsWith('"')) ||
+    (pem.startsWith("'") && pem.endsWith("'"))
+  ) {
+    pem = pem.slice(1, -1).trim();
+  }
+  pem = pem.replace(/\\n/g, '\n').replace(/\r\n/g, '\n');
+
+  if (pem.includes('BEGIN RSA PRIVATE KEY')) {
+    throw new Error(
+      'Format FIREBASE_PRIVATE_KEY invalide : clé PKCS#8 (-----BEGIN PRIVATE KEY-----) requise.'
+    );
+  }
+  if (!pem.includes('-----BEGIN PRIVATE KEY-----') || !pem.includes('-----END PRIVATE KEY-----')) {
+    throw new Error(
+      'Format FIREBASE_PRIVATE_KEY invalide : en-têtes PEM PKCS#8 manquants.'
+    );
+  }
+  return pem;
+}
 
 /**
  * Convertit une clé privée PEM PKCS#8 en ArrayBuffer binaire pour crypto.subtle.importKey
  */
 function pemToArrayBuffer(pem: string): ArrayBuffer {
-  const cleanPem = pem
+  const normalized = normalizePrivateKeyPem(pem);
+  const cleanPem = normalized
     .replace(/-----BEGIN PRIVATE KEY-----/g, '')
     .replace(/-----END PRIVATE KEY-----/g, '')
     .replace(/[\r\n\s]/g, '');
 
-  const binaryString = atob(cleanPem);
-  const bytes = new Uint8Array(binaryString.length);
-  for (let i = 0; i < binaryString.length; i++) {
-    bytes[i] = binaryString.charCodeAt(i);
+  if (!cleanPem) {
+    throw new Error('FIREBASE_PRIVATE_KEY vide après normalisation PEM.');
   }
-  return bytes.buffer;
+
+  try {
+    const binaryString = atob(cleanPem);
+    const bytes = new Uint8Array(binaryString.length);
+    for (let i = 0; i < binaryString.length; i++) {
+      bytes[i] = binaryString.charCodeAt(i);
+    }
+    return bytes.buffer;
+  } catch {
+    throw new Error('FIREBASE_PRIVATE_KEY invalide : encodage Base64 PKCS#8 corrompu.');
+  }
 }
 
 /**
@@ -55,10 +90,24 @@ function bufferToBase64Url(buf: ArrayBuffer): string {
  * Génère un JWT Google OAuth2 signé avec RS256 et l'échange contre un Access Token Google
  */
 async function getGoogleAccessToken(clientEmail: string, privateKeyPem: string): Promise<string> {
+  const cleanEmail = (clientEmail || '').trim();
+  const cleanKey = (privateKeyPem || '').trim();
+
+  if (!cleanEmail || !cleanEmail.includes('@')) {
+    throw new Error('Authentification Firebase impossible : FIREBASE_CLIENT_EMAIL manquant ou invalide.');
+  }
+  if (!cleanKey) {
+    throw new Error('Authentification Firebase impossible : FIREBASE_PRIVATE_KEY manquant.');
+  }
+
   const now = Math.floor(Date.now() / 1000);
 
-  // Vérifier le cache (avec marge de 5 minutes)
-  if (cachedToken && cachedToken.expiresAt > now + 300) {
+  // Vérifier le cache (avec marge de renouvellement anticipé de 5 minutes)
+  if (
+    cachedToken &&
+    cachedToken.clientEmail === cleanEmail &&
+    cachedToken.expiresAt > now + 300
+  ) {
     return cachedToken.accessToken;
   }
 
@@ -75,7 +124,7 @@ async function getGoogleAccessToken(clientEmail: string, privateKeyPem: string):
       };
 
       const payload = {
-        iss: clientEmail,
+        iss: cleanEmail,
         scope: 'https://www.googleapis.com/auth/datastore',
         aud: 'https://oauth2.googleapis.com/token',
         exp: now + 3600,
@@ -86,17 +135,22 @@ async function getGoogleAccessToken(clientEmail: string, privateKeyPem: string):
       const encodedPayload = base64UrlEncode(JSON.stringify(payload));
       const message = `${encodedHeader}.${encodedPayload}`;
 
-      const privateKeyBuffer = pemToArrayBuffer(privateKeyPem);
-      const cryptoKey = await crypto.subtle.importKey(
-        'pkcs8',
-        privateKeyBuffer,
-        {
-          name: 'RSASSA-PKCS1-v1_5',
-          hash: 'SHA-256',
-        },
-        false,
-        ['sign']
-      );
+      const privateKeyBuffer = pemToArrayBuffer(cleanKey);
+      let cryptoKey: CryptoKey;
+      try {
+        cryptoKey = await crypto.subtle.importKey(
+          'pkcs8',
+          privateKeyBuffer,
+          {
+            name: 'RSASSA-PKCS1-v1_5',
+            hash: 'SHA-256',
+          },
+          false,
+          ['sign']
+        );
+      } catch {
+        throw new Error('Clé privée Firebase (FIREBASE_PRIVATE_KEY) incompatible avec la signature RS256 PKCS#8.');
+      }
 
       const encoder = new TextEncoder();
       const signatureBuffer = await crypto.subtle.sign(
@@ -119,14 +173,30 @@ async function getGoogleAccessToken(clientEmail: string, privateKeyPem: string):
       });
 
       if (!tokenRes.ok) {
-        const errText = await tokenRes.text();
-        throw new Error(`Échec de l'obtention du token Google OAuth2 (${tokenRes.status}) : ${errText}`);
+        let errorCode = 'unknown_error';
+        try {
+          const errJson = (await tokenRes.json()) as { error?: string };
+          if (errJson?.error) errorCode = errJson.error;
+        } catch {
+          // Ne jamais exposer le corps brut en cas d'erreur de format
+        }
+        cachedToken = null;
+        throw new Error(
+          `Échec de l'authentification Google OAuth2 Firestore (HTTP ${tokenRes.status}, code: ${errorCode}). Vérifiez FIREBASE_CLIENT_EMAIL et FIREBASE_PRIVATE_KEY.`
+        );
       }
 
-      const tokenData = (await tokenRes.json()) as { access_token: string; expires_in: number };
+      const tokenData = (await tokenRes.json()) as { access_token?: string; expires_in?: number };
+      if (!tokenData?.access_token) {
+        cachedToken = null;
+        throw new Error('Réponse OAuth2 Google invalide : access_token absent.');
+      }
+
+      const ttl = Number(tokenData.expires_in) > 0 ? Number(tokenData.expires_in) : 3600;
       cachedToken = {
+        clientEmail: cleanEmail,
         accessToken: tokenData.access_token,
-        expiresAt: now + (tokenData.expires_in || 3600),
+        expiresAt: Math.floor(Date.now() / 1000) + ttl,
       };
 
       return cachedToken.accessToken;
@@ -246,17 +316,18 @@ export class FirestoreRestClient {
   }
 
   private async getHeaders(): Promise<HeadersInit> {
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-      Accept: 'application/json',
-    };
-
-    if (this.clientEmail && this.privateKey) {
-      const token = await getGoogleAccessToken(this.clientEmail, this.privateKey);
-      headers['Authorization'] = `Bearer ${token}`;
+    if (!this.clientEmail || !this.privateKey) {
+      throw new Error(
+        'Configuration Firestore incomplète : les secrets FIREBASE_CLIENT_EMAIL et FIREBASE_PRIVATE_KEY sont obligatoires.'
+      );
     }
 
-    return headers;
+    const token = await getGoogleAccessToken(this.clientEmail, this.privateKey);
+    return {
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+      Authorization: `Bearer ${token}`,
+    };
   }
 
   /**

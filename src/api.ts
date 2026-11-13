@@ -16,8 +16,7 @@ import {
   AuditLog,
 } from './types';
 
-// Base URL de l'API : Cloudflare Worker (ex: https://pawako-api.<subdomain>.workers.dev) ou même origine en local
-// Base URL de l'API : Cloudflare Worker (ex: https://pawako-referral-manager.pawako-saas.workers.dev) ou vide en local
+// Base URL de l'API : Cloudflare Worker (https://referral-manager.pawako-saas.workers.dev) ou vide en local
 const API_BASE = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '');
 
 function getHeaders(customHeaders?: HeadersInit): Headers {

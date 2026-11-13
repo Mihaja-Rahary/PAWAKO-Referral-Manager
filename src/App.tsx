@@ -121,12 +121,12 @@ export default function App() {
       // 2. Construction de l'ensemble d'origines strictement autorisées
       const allowedOrigins = new Set<string>();
 
-      // Origine du frontend courant (Firebase Hosting ou domaine hôte)
+      // Origine du frontend courant (Cloudflare Pages ou domaine hôte)
       if (typeof window !== 'undefined' && window.location.origin) {
         allowedOrigins.add(window.location.origin);
       }
 
-      // Origine exacte issue de VITE_API_BASE_URL (ex: https://pawako-referral-manager.pawako-saas.workers.dev)
+      // Origine exacte issue de VITE_API_BASE_URL (https://referral-manager.pawako-saas.workers.dev)
       const rawApiBase = import.meta.env.VITE_API_BASE_URL;
       if (rawApiBase && typeof rawApiBase === 'string') {
         try {

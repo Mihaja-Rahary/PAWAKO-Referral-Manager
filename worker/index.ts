@@ -1,5 +1,5 @@
 /**
- * PAWAKO Referral Manager — Cloudflare Worker API Backend (pawako-api)
+ * PAWAKO Referral Manager — Cloudflare Worker API Backend (referral-manager)
  * Déployable sur l'offre gratuite Cloudflare Workers (workers.dev)
  * Persistance stricte sur Cloud Firestore via REST API
  * Sécurité durcie : Zéro secret par défaut, CORS strict, Webhooks anti-rejeu atomiques,
@@ -27,6 +27,7 @@ import {
   createSignedSessionToken,
   verifySignedSessionToken,
   validateWebhookTimestampAndEventId,
+  constantTimeEqual,
 } from '../server/cryptoUtils';
 
 export interface Env {
@@ -39,9 +40,7 @@ export interface Env {
   DISCORD_REDIRECT_URI?: string;
   FRONTEND_URL?: string;
   INITIAL_ADMIN_DISCORD_ID?: string;
-  PAWAKO_INITIAL_ADMIN_DISCORD_ID?: string;
   JARVIS_WEBHOOK_SECRET?: string;
-  DISCORD_BOT_WEBHOOK_SECRET?: string;
   SESSION_SECRET?: string;
   DISCORD_RECRUITMENT_GUILD_ID?: string;
   DISCORD_FORMATION_GUILD_ID?: string;
@@ -52,6 +51,11 @@ export interface Env {
 }
 
 const app = new Hono<{ Bindings: Env }>();
+
+// Gestionnaire global d'erreurs : ne jamais exposer de trace ni de secret
+app.onError((_err, c) => {
+  return c.json({ error: 'Erreur interne du serveur.' }, 500);
+});
 
 // Échappement HTML sécurisé pour toute injection dynamique
 function escapeHtml(str: any): string {
@@ -95,6 +99,19 @@ function getValidatedSessionSecret(env: Env): string {
     throw new Error('Configuration serveur incomplète : SESSION_SECRET manquant ou inférieur à 32 caractères dans les secrets Cloudflare.');
   }
   return secret;
+}
+
+function getDiscordRedirectUri(env: Env, requestUrl: string): string {
+  const configured = (env.DISCORD_REDIRECT_URI || '').trim();
+  if (configured) {
+    const parsed = new URL(configured);
+    if (parsed.protocol === 'https:' || parsed.protocol === 'http:') {
+      return configured;
+    }
+    throw new Error('Configuration serveur invalide : DISCORD_REDIRECT_URI invalide.');
+  }
+  const workerOrigin = new URL(requestUrl).origin;
+  return `${workerOrigin}/auth/callback`;
 }
 
 // -----------------------------------------------------------------------------
@@ -181,7 +198,7 @@ export async function getAuthenticatedUser(c: any, repo: FirestoreRepository): P
   // Authentification EXCLUSIVE par cookie HttpOnly sécurisé pawako_session
   // Les en-têtes Authorization, X-Pawako-Session ou X-Pawako-User-Id sont formellement refusés comme moyen d'authentification
   const cookieHeader = c.req.header('Cookie') || '';
-  const match = cookieHeader.match(/pawako_session=([^;]+)/);
+  const match = cookieHeader.match(/(?:^|;\s*)pawako_session=([^;]+)/);
   const token = match ? match[1].trim() : null;
 
   if (!token || typeof token !== 'string') {
@@ -282,17 +299,23 @@ app.get('/api/auth/url', async c => {
 
   const portal = c.req.query('portal') === 'parrain' ? 'parrain' : 'admin';
   const clientId = c.env.DISCORD_CLIENT_ID?.trim() || '';
+  const clientSecret = c.env.DISCORD_CLIENT_SECRET?.trim() || '';
 
-  // Calcule l'URL de redirection vers le Worker
+  // Calcule l'URL de redirection exacte vers le Worker
   const workerOrigin = new URL(c.req.url).origin;
-  const redirectUri = c.env.DISCORD_REDIRECT_URI?.trim() || `${workerOrigin}/auth/callback`;
+  let redirectUri: string;
+  try {
+    redirectUri = getDiscordRedirectUri(c.env, c.req.url);
+  } catch (err: any) {
+    return c.json({ error: err.message }, 500);
+  }
 
   // Le state est cryptographiquement aléatoire, signé en HMAC et protégé contre le rejeu
   const { state } = await generateSecureOAuthState(portal, signingSecret);
 
-  const isConfigured = Boolean(clientId && c.env.DISCORD_CLIENT_SECRET);
+  const isConfigured = Boolean(clientId && clientSecret);
   const discordUrl = isConfigured
-    ? `https://discord.com/api/oauth2/authorize?client_id=${clientId}&redirect_uri=${encodeURIComponent(
+    ? `https://discord.com/api/oauth2/authorize?client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(
         redirectUri
       )}&response_type=code&scope=identify&state=${encodeURIComponent(state)}`
     : '';
@@ -345,7 +368,7 @@ const handleAuthCallback = async (c: any) => {
 
   // Détection du portail visé depuis le state vérifié ou le cookie
   const cookieHeader = c.req.header('Cookie') || '';
-  const cookiePortalMatch = cookieHeader.match(/oauth_portal=([^;]+)/);
+  const cookiePortalMatch = cookieHeader.match(/(?:^|;\s*)oauth_portal=([^;]+)/);
   const portalFromCookie = cookiePortalMatch ? cookiePortalMatch[1] : null;
 
   let portal: 'admin' | 'parrain' =
@@ -363,8 +386,8 @@ const handleAuthCallback = async (c: any) => {
     targetOrigin = 'https://pawako-referral-manager.pages.dev';
   }
 
-  const portalLoginUrl = `${frontendUrl}/${portal}/login`;
-  const portalDestUrl = `${frontendUrl}/${portal}`;
+  const portalLoginUrl = `${targetOrigin}/${portal}/login`;
+  const portalDestUrl = `${targetOrigin}/${portal}`;
 
   if (error || !code) {
     return c.html(`
@@ -425,10 +448,13 @@ const handleAuthCallback = async (c: any) => {
   }
 
   try {
-    const workerOrigin = new URL(c.req.url).origin;
-    const redirectUri = c.env.DISCORD_REDIRECT_URI?.trim() || `${workerOrigin}/auth/callback`;
+    const redirectUri = getDiscordRedirectUri(c.env, c.req.url);
     const clientId = c.env.DISCORD_CLIENT_ID?.trim() || '';
     const clientSecret = c.env.DISCORD_CLIENT_SECRET?.trim() || '';
+
+    if (!clientId || !clientSecret) {
+      throw new Error('Configuration Discord OAuth2 incomplète.');
+    }
 
     // Échange du code contre le token Discord
     const tokenRes = await fetch('https://discord.com/api/v10/oauth2/token', {
@@ -465,10 +491,7 @@ const handleAuthCallback = async (c: any) => {
       avatar?: string | null;
     };
 
-    const configuredAdminId =
-      c.env.INITIAL_ADMIN_DISCORD_ID?.trim() ||
-      c.env.PAWAKO_INITIAL_ADMIN_DISCORD_ID?.trim() ||
-      '';
+    const configuredAdminId = c.env.INITIAL_ADMIN_DISCORD_ID?.trim() || '';
 
     // CONTRÔLE STRICT DES ACCÈS PAR PORTAIL
     if (portal === 'admin') {
@@ -651,13 +674,18 @@ app.get('/api/auth/me', async c => {
     isClaimed = false;
   }
 
+  const isOAuthConfigured = Boolean(
+    c.env.DISCORD_CLIENT_ID?.trim() && c.env.DISCORD_CLIENT_SECRET?.trim() && hasValidSecret
+  );
+  const isBotConfigured = Boolean(c.env.JARVIS_WEBHOOK_SECRET?.trim());
+
   if (!user) {
     return c.json({
       authenticated: false,
       user: null,
       referrer: null,
-      isOAuthConfigured: Boolean(c.env.DISCORD_CLIENT_ID && c.env.DISCORD_CLIENT_SECRET && hasValidSecret),
-      isBotConfigured: Boolean(c.env.JARVIS_WEBHOOK_SECRET),
+      isOAuthConfigured,
+      isBotConfigured,
       hasAnyUsers: false,
       isInitialAdminClaimed: isClaimed,
     });
@@ -674,8 +702,8 @@ app.get('/api/auth/me', async c => {
     authenticated: true,
     user,
     referrer: referrer || null,
-    isOAuthConfigured: Boolean(c.env.DISCORD_CLIENT_ID && c.env.DISCORD_CLIENT_SECRET && hasValidSecret),
-    isBotConfigured: Boolean(c.env.JARVIS_WEBHOOK_SECRET),
+    isOAuthConfigured,
+    isBotConfigured,
     hasAnyUsers: true,
     isInitialAdminClaimed: isClaimed,
   });
@@ -1091,15 +1119,11 @@ app.put('/api/discord/role-mappings', async c => {
 });
 
 app.post('/api/discord/webhook', async c => {
-  // 1. Authentification sécurisée du Bot JARVIS via secret partagé
-  const expectedSecret = (
-    c.env.JARVIS_WEBHOOK_SECRET ||
-    c.env.DISCORD_BOT_WEBHOOK_SECRET ||
-    ''
-  ).trim();
-  const receivedSecret = c.req.header('X-JARVIS-Secret');
+  // 1. Authentification sécurisée du Bot JARVIS via secret partagé (temps constant)
+  const expectedSecret = (c.env.JARVIS_WEBHOOK_SECRET || '').trim();
+  const receivedSecret = (c.req.header('X-JARVIS-Secret') || '').trim();
 
-  if (!expectedSecret || receivedSecret !== expectedSecret) {
+  if (!expectedSecret || !receivedSecret || !constantTimeEqual(receivedSecret, expectedSecret)) {
     return c.json({ error: 'Secret JARVIS invalide ou manquant. Requête non autorisée.' }, 401);
   }
 

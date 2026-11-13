@@ -6,6 +6,7 @@ import fs from 'fs';
 import { apiRouter } from './server/api';
 import { discordService } from './server/discordService';
 import { db } from './server/db';
+import { createSignedSessionToken, verifyAndConsumeOAuthState } from './server/cryptoUtils';
 
 dotenv.config();
 
@@ -115,21 +116,37 @@ const oauthCallbackHandler = async (req: express.Request, res: express.Response)
     `);
   }
 
-  // 1. Protection CSRF : Vérification stricte du paramètre state
-  const savedState = req.cookies?.oauth_state;
+  const sessionSecret = (process.env.SESSION_SECRET || '').trim();
+  if (!sessionSecret || sessionSecret.length < 32) {
+    return res.status(500).send(`
+      <!DOCTYPE html>
+      <html>
+        <head><title>Configuration incomplète — PAWAKO</title><meta charset="utf-8"></head>
+        <body style="font-family: system-ui, sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; background: #0f172a; color: white;">
+          <div style="background: #1e293b; padding: 32px; border-radius: 14px; border: 1px solid #dc2626; text-align: center; max-width: 440px;">
+            <h3 style="margin: 0 0 8px 0; color: #f87171;">Configuration serveur incomplète</h3>
+            <p style="color: #cbd5e1; font-size: 13px;">SESSION_SECRET manquant ou inférieur à 32 caractères.</p>
+          </div>
+        </body>
+      </html>
+    `);
+  }
+
+  // 1. Protection CSRF : Vérification cryptographique HMAC du state + correspondance cookie
+  const savedNonce = req.cookies?.oauth_state;
   res.clearCookie('oauth_state', {
     secure: true,
     sameSite: 'none',
     httpOnly: true,
   });
 
-  const isValidState = Boolean(
-    state &&
-    savedState &&
-    (state === savedState || state === `${targetPortal}_${savedState}` || stateStr.endsWith(savedState))
+  const stateVerification = await verifyAndConsumeOAuthState(
+    stateStr,
+    sessionSecret,
+    async nonce => Boolean(savedNonce && nonce === savedNonce)
   );
 
-  if (!isValidState && savedState) {
+  if (!stateVerification.valid) {
     return res.status(403).send(`
       <!DOCTYPE html>
       <html>
@@ -145,8 +162,8 @@ const oauthCallbackHandler = async (req: express.Request, res: express.Response)
     `);
   }
 
-  const appUrl = process.env.APP_URL || `${req.protocol}://${req.get('host')}`;
-  const redirectUri = `${appUrl}/auth/callback`;
+  const originUrl = `${req.protocol}://${req.get('host')}`;
+  const redirectUri = (process.env.DISCORD_REDIRECT_URI || '').trim() || `${originUrl}/auth/callback`;
 
   try {
     if (!code || typeof code !== 'string') {
@@ -228,8 +245,9 @@ const oauthCallbackHandler = async (req: express.Request, res: express.Response)
       avatar: discordService.formatAvatarUrl(discordUser.id, discordUser.avatar),
     });
 
-    // Session cookie sécurisé (30 jours)
-    res.cookie('pawako_session', user.id, {
+    // Session cookie cryptographiquement signé HMAC-SHA256 (30 jours)
+    const signedToken = await createSignedSessionToken(user.id, user.role, sessionSecret);
+    res.cookie('pawako_session', signedToken, {
       secure: true,
       sameSite: 'none',
       httpOnly: true,

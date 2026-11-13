@@ -11,6 +11,7 @@
     "FIREBASE_PROJECT_ID": "gen-lang-client-0255826431",
     "FIREBASE_DATABASE_ID": "ai-studio-pawakoreferralma-1d4a1a22-a715-4552-b717-2e03e349fbee",
     "FRONTEND_URL": "https://pawako-referral-manager.pages.dev",
+    "DISCORD_REDIRECT_URI": "https://referral-manager.pawako-saas.workers.dev/auth/callback",
     "DISCORD_RECRUITMENT_GUILD_ID": "",
     "DISCORD_FORMATION_GUILD_ID": "",
     "DISCORD_CHATTING_PRODUCTION_GUILD_ID": "",

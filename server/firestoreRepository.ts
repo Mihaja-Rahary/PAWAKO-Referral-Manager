@@ -415,7 +415,7 @@ export class FirestoreRepository {
         targetType: 'USER',
         targetId: user.id,
         details: {
-          configuredAdminId: cleanAdminId,
+          claimedByUserId: user.id,
           message: 'Premier administrateur PAWAKO initialisé via INITIAL_ADMIN_DISCORD_ID.',
         },
       });

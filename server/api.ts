@@ -4,63 +4,107 @@ import { db } from './db';
 import { discordService } from './discordService';
 import { firestoreService } from './firestore';
 import { User, UserRole, Candidate, CandidateStatus, AdminStatus, OperationalStatus, VAType, DiscordServerType, DiscordRoleMapping } from './types';
-import { validateWebhookTimestampAndEventId } from './cryptoUtils';
+import {
+  validateWebhookTimestampAndEventId,
+  verifySignedSessionToken,
+  generateSecureOAuthState,
+  constantTimeEqual,
+} from './cryptoUtils';
 
 export const apiRouter = Router();
 
-// Middleware pour extraire l'utilisateur authentifié depuis le cookie de session sécurisé
-export function getAuthenticatedUser(req: Request): User | null {
-  const sessionUserId = req.cookies?.pawako_session;
-  if (!sessionUserId || typeof sessionUserId !== 'string') {
+function getValidatedSessionSecret(): string | null {
+  const secret = (process.env.SESSION_SECRET || '').trim();
+  if (!secret || secret.length < 32) {
     return null;
   }
-  return db.getUserById(sessionUserId) || null;
+  return secret;
+}
+
+// Middleware pour extraire l'utilisateur authentifié depuis le cookie de session HMAC-SHA256 signé
+export async function getAuthenticatedUser(req: Request): Promise<User | null> {
+  const secret = getValidatedSessionSecret();
+  if (!secret) {
+    return null;
+  }
+
+  const token = req.cookies?.pawako_session;
+  if (!token || typeof token !== 'string') {
+    return null;
+  }
+
+  const verification = await verifySignedSessionToken(token.trim(), secret);
+  if (!verification.valid || !verification.payload) {
+    return null;
+  }
+
+  const user = db.getUserById(verification.payload.userId);
+  if (!user || user.status !== 'ACTIVE') {
+    return null;
+  }
+  return user;
 }
 
 // Gardes d'authentification RBAC
-function requireAuth(req: Request, res: Response, next: NextFunction) {
-  const user = getAuthenticatedUser(req);
-  if (!user) {
-    return res.status(401).json({ error: 'Session non authentifiée. Veuillez vous connecter via Discord.' });
+async function requireAuth(req: Request, res: Response, next: NextFunction) {
+  try {
+    const user = await getAuthenticatedUser(req);
+    if (!user) {
+      return res.status(401).json({ error: 'Session non authentifiée. Veuillez vous connecter via Discord.' });
+    }
+    (req as any).user = user;
+    next();
+  } catch (err) {
+    next(err);
   }
-  (req as any).user = user;
-  next();
 }
 
-function requireAdmin(req: Request, res: Response, next: NextFunction) {
-  const user = getAuthenticatedUser(req);
-  if (!user) {
-    return res.status(401).json({ error: 'Session non authentifiée. Veuillez vous connecter via Discord.' });
+async function requireAdmin(req: Request, res: Response, next: NextFunction) {
+  try {
+    const user = await getAuthenticatedUser(req);
+    if (!user) {
+      return res.status(401).json({ error: 'Session non authentifiée. Veuillez vous connecter via Discord.' });
+    }
+    if (user.role !== 'ADMINISTRATEUR') {
+      return res.status(403).json({ error: 'Accès réservé exclusivement aux Administrateurs PAWAKO.' });
+    }
+    (req as any).user = user;
+    next();
+  } catch (err) {
+    next(err);
   }
-  if (user.role !== 'ADMINISTRATEUR') {
-    return res.status(403).json({ error: 'Accès réservé exclusivement aux Administrateurs PAWAKO.' });
-  }
-  (req as any).user = user;
-  next();
 }
 
-function requireResponsableOrAdmin(req: Request, res: Response, next: NextFunction) {
-  const user = getAuthenticatedUser(req);
-  if (!user) {
-    return res.status(401).json({ error: 'Session non authentifiée. Veuillez vous connecter via Discord.' });
+async function requireResponsableOrAdmin(req: Request, res: Response, next: NextFunction) {
+  try {
+    const user = await getAuthenticatedUser(req);
+    if (!user) {
+      return res.status(401).json({ error: 'Session non authentifiée. Veuillez vous connecter via Discord.' });
+    }
+    if (user.role !== 'ADMINISTRATEUR' && user.role !== 'RESPONSABLE') {
+      return res.status(403).json({ error: 'Accès réservé aux Responsables et Administrateurs PAWAKO.' });
+    }
+    (req as any).user = user;
+    next();
+  } catch (err) {
+    next(err);
   }
-  if (user.role !== 'ADMINISTRATEUR' && user.role !== 'RESPONSABLE') {
-    return res.status(403).json({ error: 'Accès réservé aux Responsables et Administrateurs PAWAKO.' });
-  }
-  (req as any).user = user;
-  next();
 }
 
-function requireParrainOrAdmin(req: Request, res: Response, next: NextFunction) {
-  const user = getAuthenticatedUser(req);
-  if (!user) {
-    return res.status(401).json({ error: 'Session non authentifiée. Veuillez vous connecter via Discord.' });
+async function requireParrainOrAdmin(req: Request, res: Response, next: NextFunction) {
+  try {
+    const user = await getAuthenticatedUser(req);
+    if (!user) {
+      return res.status(401).json({ error: 'Session non authentifiée. Veuillez vous connecter via Discord.' });
+    }
+    if (user.role !== 'ADMINISTRATEUR' && user.role !== 'PARRAIN') {
+      return res.status(403).json({ error: 'Accès réservé exclusivement aux Parrains et Administrateurs PAWAKO.' });
+    }
+    (req as any).user = user;
+    next();
+  } catch (err) {
+    next(err);
   }
-  if (user.role !== 'ADMINISTRATEUR' && user.role !== 'PARRAIN') {
-    return res.status(403).json({ error: 'Accès réservé exclusivement aux Parrains et Administrateurs PAWAKO.' });
-  }
-  (req as any).user = user;
-  next();
 }
 
 // Fonction positive d'exclusion stricte pour les données visibles par les parrains
@@ -89,15 +133,21 @@ export function toParrainCandidateView(candidate: Candidate) {
 // 1. AUTHENTICATION & SESSIONS (STRICT REAL DISCORD OAUTH2 ONLY)
 // ----------------------------------------------------
 
-apiRouter.get('/auth/url', (req: Request, res: Response) => {
-  const appUrl = process.env.APP_URL || `${req.protocol}://${req.get('host')}`;
-  const redirectUri = `${appUrl}/auth/callback`;
+apiRouter.get('/auth/url', async (req: Request, res: Response) => {
+  const secret = getValidatedSessionSecret();
+  if (!secret) {
+    return res.status(500).json({
+      error: 'Configuration serveur incomplète : SESSION_SECRET manquant ou inférieur à 32 caractères.',
+    });
+  }
+
+  const originUrl = `${req.protocol}://${req.get('host')}`;
+  const redirectUri = (process.env.DISCORD_REDIRECT_URI || '').trim() || `${originUrl}/auth/callback`;
   const portal = req.query.portal === 'parrain' ? 'parrain' : 'admin';
 
-  // Génération d'un jeton d'état cryptographique anti-CSRF avec encodage de la porte d'entrée
-  const stateNonce = crypto.randomBytes(16).toString('hex');
-  const state = `${portal}_${stateNonce}`;
-  res.cookie('oauth_state', stateNonce, {
+  // Génération d'un jeton d'état cryptographique anti-CSRF signé HMAC
+  const { state, nonce } = await generateSecureOAuthState(portal, secret);
+  res.cookie('oauth_state', nonce, {
     httpOnly: true,
     secure: true,
     sameSite: 'none',
@@ -119,18 +169,19 @@ apiRouter.get('/auth/url', (req: Request, res: Response) => {
     portal,
     isConfigured: result.isConfigured,
     redirectUri,
-    appUrl,
+    appUrl: originUrl,
   });
 });
 
-apiRouter.get('/auth/me', (req: Request, res: Response) => {
-  const user = getAuthenticatedUser(req);
+apiRouter.get('/auth/me', async (req: Request, res: Response) => {
+  const hasValidSecret = Boolean(getValidatedSessionSecret());
+  const user = await getAuthenticatedUser(req);
   if (!user) {
     return res.json({
       authenticated: false,
       user: null,
       referrer: null,
-      isOAuthConfigured: discordService.isOAuthConfigured(),
+      isOAuthConfigured: discordService.isOAuthConfigured() && hasValidSecret,
       isBotConfigured: discordService.isBotConfigured(),
       hasAnyUsers: db.getUsers().length > 0,
       isInitialAdminClaimed: db.isInitialAdminClaimed(),
@@ -143,7 +194,7 @@ apiRouter.get('/auth/me', (req: Request, res: Response) => {
     authenticated: true,
     user,
     referrer: referrer || null,
-    isOAuthConfigured: discordService.isOAuthConfigured(),
+    isOAuthConfigured: discordService.isOAuthConfigured() && hasValidSecret,
     isBotConfigured: discordService.isBotConfigured(),
     hasAnyUsers: true,
     isInitialAdminClaimed: db.isInitialAdminClaimed(),
@@ -555,14 +606,10 @@ apiRouter.post('/discord/sync-members', requireResponsableOrAdmin, async (req: R
 
 // Véritable Webhook sécurisé pour la passerelle Bot JARVIS
 apiRouter.post('/discord/webhook', async (req: Request, res: Response) => {
-  const secret = req.headers['x-jarvis-secret'];
-  const expectedSecret = (
-    process.env.JARVIS_WEBHOOK_SECRET ||
-    process.env.DISCORD_BOT_WEBHOOK_SECRET ||
-    ''
-  ).trim();
+  const receivedSecret = typeof req.headers['x-jarvis-secret'] === 'string' ? req.headers['x-jarvis-secret'].trim() : '';
+  const expectedSecret = (process.env.JARVIS_WEBHOOK_SECRET || '').trim();
 
-  if (!expectedSecret || secret !== expectedSecret) {
+  if (!expectedSecret || !receivedSecret || !constantTimeEqual(receivedSecret, expectedSecret)) {
     return res.status(401).json({ error: 'Clé secrète de webhook JARVIS invalide ou non configurée' });
   }
 
