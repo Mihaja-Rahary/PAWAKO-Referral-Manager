@@ -130,32 +130,129 @@ function buildFirestoreHttpError(operation: string, status: number, rawBody: str
 let cachedToken: { clientEmail: string; accessToken: string; expiresAt: number } | null = null;
 let inFlightTokenPromise: Promise<string> | null = null;
 
-/**
- * Normalise une clé privée PEM issue d'un secret Cloudflare (gère \n échappés et guillemets éventuels)
- */
-function normalizePrivateKeyPem(rawPem: string): string {
-  let pem = rawPem.trim();
+function sanitizeConfigValue(raw?: string): string {
+  let val = (raw || '').trim();
   if (
-    (pem.startsWith('"') && pem.endsWith('"')) ||
-    (pem.startsWith("'") && pem.endsWith("'"))
+    (val.startsWith('"') && val.endsWith('"')) ||
+    (val.startsWith("'") && val.endsWith("'"))
   ) {
-    pem = pem.slice(1, -1).trim();
+    val = val.slice(1, -1).trim();
   }
-  pem = pem.replace(/\\n/g, '\n').replace(/\r\n/g, '\n');
+  return val;
+}
+
+export interface PrivateKeyDiagnostic {
+  valid: boolean;
+  code:
+    | 'OK_PKCS8'
+    | 'MISSING_PRIVATE_KEY'
+    | 'JSON_KEY_INSTEAD_OF_PEM'
+    | 'PKCS1_RSA_KEY_NOT_PKCS8'
+    | 'PEM_HEADERS_MISSING'
+    | 'PEM_BODY_EMPTY'
+    | 'PEM_BASE64_CORRUPTED';
+  detail: string;
+}
+
+function unwrapAndNormalizePemText(rawPem: string): string {
+  let pem = sanitizeConfigValue(rawPem);
+  pem = pem
+    .replace(/\\\\r\\\\n/g, '\n')
+    .replace(/\\\\n/g, '\n')
+    .replace(/\\r\\n/g, '\n')
+    .replace(/\\n/g, '\n')
+    .replace(/\\r/g, '\n')
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n');
+  return pem.trim();
+}
+
+export function diagnosePrivateKeyPem(rawPem?: string): PrivateKeyDiagnostic {
+  const trimmed = (rawPem || '').trim();
+  if (!trimmed) {
+    return {
+      valid: false,
+      code: 'MISSING_PRIVATE_KEY',
+      detail: 'Secret FIREBASE_PRIVATE_KEY manquant ou vide.',
+    };
+  }
+
+  const pem = unwrapAndNormalizePemText(trimmed);
+
+  if (pem.startsWith('{') && pem.includes('"private_key"')) {
+    return {
+      valid: false,
+      code: 'JSON_KEY_INSTEAD_OF_PEM',
+      detail:
+        'FIREBASE_PRIVATE_KEY contient le fichier JSON complet du compte de service au lieu de la seule clé PEM (champ private_key).',
+    };
+  }
 
   if (pem.includes('BEGIN RSA PRIVATE KEY')) {
-    throw new FirestoreRestError(
-      'Format FIREBASE_PRIVATE_KEY invalide : clé PKCS#8 (-----BEGIN PRIVATE KEY-----) requise.',
-      { operation: 'CONFIG', category: 'CONFIG' }
-    );
+    return {
+      valid: false,
+      code: 'PKCS1_RSA_KEY_NOT_PKCS8',
+      detail: 'Format FIREBASE_PRIVATE_KEY invalide : clé PKCS#8 (-----BEGIN PRIVATE KEY-----) requise.',
+    };
   }
+
   if (!pem.includes('-----BEGIN PRIVATE KEY-----') || !pem.includes('-----END PRIVATE KEY-----')) {
-    throw new FirestoreRestError(
-      'Format FIREBASE_PRIVATE_KEY invalide : en-têtes PEM PKCS#8 manquants.',
-      { operation: 'CONFIG', category: 'CONFIG' }
-    );
+    return {
+      valid: false,
+      code: 'PEM_HEADERS_MISSING',
+      detail: 'Format FIREBASE_PRIVATE_KEY invalide : en-têtes PEM PKCS#8 manquants.',
+    };
   }
-  return pem;
+
+  const cleanPem = pem
+    .replace(/-----BEGIN PRIVATE KEY-----/g, '')
+    .replace(/-----END PRIVATE KEY-----/g, '')
+    .replace(/[\r\n\s]/g, '');
+
+  if (!cleanPem) {
+    return {
+      valid: false,
+      code: 'PEM_BODY_EMPTY',
+      detail: 'FIREBASE_PRIVATE_KEY vide après normalisation PEM.',
+    };
+  }
+
+  try {
+    const binaryString = atob(cleanPem);
+    if (binaryString.length < 64) {
+      return {
+        valid: false,
+        code: 'PEM_BASE64_CORRUPTED',
+        detail: 'FIREBASE_PRIVATE_KEY invalide : contenu PKCS#8 trop court ou tronqué.',
+      };
+    }
+    return {
+      valid: true,
+      code: 'OK_PKCS8',
+      detail: 'Clé privée PKCS#8 valide.',
+    };
+  } catch {
+    return {
+      valid: false,
+      code: 'PEM_BASE64_CORRUPTED',
+      detail: 'FIREBASE_PRIVATE_KEY invalide : encodage Base64 PKCS#8 corrompu.',
+    };
+  }
+}
+
+/**
+ * Normalise une clé privée PEM issue d'un secret Cloudflare (gère \n échappés, \r\n et guillemets éventuels)
+ */
+function normalizePrivateKeyPem(rawPem: string): string {
+  const diag = diagnosePrivateKeyPem(rawPem);
+  if (!diag.valid) {
+    throw new FirestoreRestError(diag.detail, {
+      operation: 'CONFIG',
+      firestoreStatus: diag.code,
+      category: 'CONFIG',
+    });
+  }
+  return unwrapAndNormalizePemText(rawPem);
 }
 
 /**
@@ -168,13 +265,6 @@ function pemToArrayBuffer(pem: string): ArrayBuffer {
     .replace(/-----END PRIVATE KEY-----/g, '')
     .replace(/[\r\n\s]/g, '');
 
-  if (!cleanPem) {
-    throw new FirestoreRestError('FIREBASE_PRIVATE_KEY vide après normalisation PEM.', {
-      operation: 'CONFIG',
-      category: 'CONFIG',
-    });
-  }
-
   try {
     const binaryString = atob(cleanPem);
     const bytes = new Uint8Array(binaryString.length);
@@ -185,6 +275,7 @@ function pemToArrayBuffer(pem: string): ArrayBuffer {
   } catch (err) {
     throw new FirestoreRestError('FIREBASE_PRIVATE_KEY invalide : encodage Base64 PKCS#8 corrompu.', {
       operation: 'CONFIG',
+      firestoreStatus: 'PEM_BASE64_CORRUPTED',
       category: 'CONFIG',
       cause: err,
     });
@@ -210,23 +301,33 @@ function bufferToBase64Url(buf: ArrayBuffer): string {
   return base64UrlEncode(binary);
 }
 
+function isMissingDatabaseOrProject404(rawBody: string): boolean {
+  const lower = (rawBody || '').toLowerCase();
+  if (!lower) return false;
+  if (lower.includes('database') && lower.includes('does not exist')) return true;
+  if (lower.includes('project') && (lower.includes('does not exist') || lower.includes('not found'))) {
+    return true;
+  }
+  return false;
+}
+
 /**
  * Génère un JWT Google OAuth2 signé avec RS256 et l'échange contre un Access Token Google
  */
 async function getGoogleAccessToken(clientEmail: string, privateKeyPem: string): Promise<string> {
-  const cleanEmail = (clientEmail || '').trim();
+  const cleanEmail = sanitizeConfigValue(clientEmail);
   const cleanKey = (privateKeyPem || '').trim();
 
-  if (!cleanEmail || !cleanEmail.includes('@')) {
+  if (!cleanEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
     throw new FirestoreRestError(
       'Authentification Firebase impossible : FIREBASE_CLIENT_EMAIL manquant ou invalide.',
-      { operation: 'AUTH_TOKEN', category: 'CONFIG' }
+      { operation: 'AUTH_TOKEN', firestoreStatus: 'INVALID_CLIENT_EMAIL', category: 'CONFIG' }
     );
   }
   if (!cleanKey) {
     throw new FirestoreRestError(
       'Authentification Firebase impossible : FIREBASE_PRIVATE_KEY manquant.',
-      { operation: 'AUTH_TOKEN', category: 'CONFIG' }
+      { operation: 'AUTH_TOKEN', firestoreStatus: 'MISSING_PRIVATE_KEY', category: 'CONFIG' }
     );
   }
 
@@ -316,15 +417,20 @@ async function getGoogleAccessToken(clientEmail: string, privateKeyPem: string):
 
       if (!tokenRes.ok) {
         let errorCode = 'unknown_error';
+        let errorDescription = '';
         try {
-          const errJson = (await tokenRes.json()) as { error?: string };
+          const errJson = (await tokenRes.json()) as { error?: string; error_description?: string };
           if (errJson?.error) errorCode = errJson.error;
+          if (errJson?.error_description && typeof errJson.error_description === 'string') {
+            errorDescription = errJson.error_description.replace(/\s+/g, ' ').trim().slice(0, 160);
+          }
         } catch {
           // Ne jamais exposer le corps brut en cas d'erreur de format
         }
         cachedToken = null;
+        const descSuffix = errorDescription ? ` — ${errorDescription}` : '';
         throw new FirestoreRestError(
-          `Échec de l'authentification Google OAuth2 Firestore (HTTP ${tokenRes.status}, code: ${errorCode}). Vérifiez FIREBASE_CLIENT_EMAIL et FIREBASE_PRIVATE_KEY.`,
+          `Échec de l'authentification Google OAuth2 Firestore (HTTP ${tokenRes.status}, code: ${errorCode}${descSuffix}). Vérifiez FIREBASE_CLIENT_EMAIL et FIREBASE_PRIVATE_KEY.`,
           {
             operation: 'AUTH_TOKEN',
             status: tokenRes.status,
@@ -456,21 +562,155 @@ export class FirestoreRestClient {
   private privateKey?: string;
 
   constructor(config: FirestoreRestConfig) {
-    this.projectId = config.projectId;
-    this.databaseId = config.databaseId || '(default)';
-    this.clientEmail = config.clientEmail;
+    this.projectId = sanitizeConfigValue(config.projectId);
+    this.databaseId = sanitizeConfigValue(config.databaseId) || '(default)';
+    this.clientEmail = sanitizeConfigValue(config.clientEmail);
     this.privateKey = config.privateKey;
   }
 
   private get baseUrl(): string {
-    return `https://firestore.googleapis.com/v1/projects/${this.projectId}/databases/${this.databaseId}/documents`;
+    return `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(this.projectId)}/databases/${encodeURIComponent(this.databaseId)}/documents`;
+  }
+
+  /**
+   * Diagnostic en lecture seule de la configuration, de l'authentification Google JWT RS256
+   * et de l'accessibilité réelle de la base Cloud Firestore (sans jamais exposer de secret).
+   */
+  async diagnoseFirestoreConnection(): Promise<{
+    ok: boolean;
+    stage: 'CONFIG' | 'GOOGLE_OAUTH2' | 'FIRESTORE_API' | 'OK';
+    category?: FirestoreErrorCategory;
+    httpStatus?: number | null;
+    firestoreStatus?: string | null;
+    diagnosticCode: string;
+    message: string;
+    projectId: string;
+    databaseId: string;
+  }> {
+    if (!this.projectId) {
+      return {
+        ok: false,
+        stage: 'CONFIG',
+        category: 'CONFIG',
+        diagnosticCode: 'MISSING_PROJECT_ID',
+        message: 'FIREBASE_PROJECT_ID manquant.',
+        projectId: this.projectId,
+        databaseId: this.databaseId,
+      };
+    }
+
+    if (!this.clientEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(this.clientEmail)) {
+      return {
+        ok: false,
+        stage: 'CONFIG',
+        category: 'CONFIG',
+        diagnosticCode: this.clientEmail ? 'INVALID_CLIENT_EMAIL' : 'MISSING_CLIENT_EMAIL',
+        message: 'FIREBASE_CLIENT_EMAIL manquant ou invalide.',
+        projectId: this.projectId,
+        databaseId: this.databaseId,
+      };
+    }
+
+    const keyDiag = diagnosePrivateKeyPem(this.privateKey);
+    if (!keyDiag.valid) {
+      return {
+        ok: false,
+        stage: 'CONFIG',
+        category: 'CONFIG',
+        diagnosticCode: keyDiag.code,
+        message: keyDiag.detail,
+        projectId: this.projectId,
+        databaseId: this.databaseId,
+      };
+    }
+
+    let token: string;
+    try {
+      token = await getGoogleAccessToken(this.clientEmail, this.privateKey || '');
+    } catch (err: any) {
+      const fErr = err instanceof FirestoreRestError ? err : null;
+      return {
+        ok: false,
+        stage: fErr?.category === 'CONFIG' ? 'CONFIG' : 'GOOGLE_OAUTH2',
+        category: fErr?.category || 'AUTH',
+        httpStatus: fErr?.status ?? null,
+        firestoreStatus: fErr?.firestoreStatus ?? null,
+        diagnosticCode: fErr?.firestoreStatus || fErr?.category || 'AUTH_TOKEN_FAILED',
+        message: fErr?.message || 'Échec authentification Google OAuth2.',
+        projectId: this.projectId,
+        databaseId: this.databaseId,
+      };
+    }
+
+    const probeUrl = `${this.baseUrl}/pawako_metadata/system`;
+    try {
+      const res = await this.executeFetch('DIAGNOSE_GET pawako_metadata/system', probeUrl, {
+        headers: {
+          Accept: 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      if (res.ok) {
+        return {
+          ok: true,
+          stage: 'OK',
+          httpStatus: res.status,
+          firestoreStatus: 'OK',
+          diagnosticCode: 'FIRESTORE_CONNECTED',
+          message: 'Connexion Google OAuth2 RS256 et lecture Firestore REST vérifiées.',
+          projectId: this.projectId,
+          databaseId: this.databaseId,
+        };
+      }
+
+      const rawErr = await res.text();
+      if (res.status === 404 && !isMissingDatabaseOrProject404(rawErr)) {
+        return {
+          ok: true,
+          stage: 'OK',
+          httpStatus: 404,
+          firestoreStatus: 'DOC_NOT_FOUND_DB_OK',
+          diagnosticCode: 'FIRESTORE_CONNECTED_EMPTY_META',
+          message: 'Connexion Google OAuth2 RS256 et accès base Firestore vérifiés (document système non encore créé).',
+          projectId: this.projectId,
+          databaseId: this.databaseId,
+        };
+      }
+
+      const fErr = buildFirestoreHttpError('DIAGNOSE_GET pawako_metadata/system', res.status, rawErr);
+      return {
+        ok: false,
+        stage: 'FIRESTORE_API',
+        category: fErr.category,
+        httpStatus: fErr.status ?? res.status,
+        firestoreStatus: fErr.firestoreStatus ?? null,
+        diagnosticCode: fErr.firestoreStatus || fErr.category,
+        message: fErr.message,
+        projectId: this.projectId,
+        databaseId: this.databaseId,
+      };
+    } catch (err: any) {
+      const fErr = err instanceof FirestoreRestError ? err : null;
+      return {
+        ok: false,
+        stage: 'FIRESTORE_API',
+        category: fErr?.category || 'NETWORK',
+        httpStatus: fErr?.status ?? null,
+        firestoreStatus: fErr?.firestoreStatus ?? null,
+        diagnosticCode: fErr?.firestoreStatus || fErr?.category || 'NETWORK_ERROR',
+        message: fErr?.message || 'Erreur réseau lors du diagnostic Firestore.',
+        projectId: this.projectId,
+        databaseId: this.databaseId,
+      };
+    }
   }
 
   private async getHeaders(): Promise<HeadersInit> {
     if (!this.clientEmail || !this.privateKey) {
       throw new FirestoreRestError(
         'Configuration Firestore incomplète : les secrets FIREBASE_CLIENT_EMAIL et FIREBASE_PRIVATE_KEY sont obligatoires.',
-        { operation: 'CONFIG', category: 'CONFIG' }
+        { operation: 'CONFIG', firestoreStatus: 'MISSING_SERVICE_ACCOUNT', category: 'CONFIG' }
       );
     }
 
@@ -509,6 +749,10 @@ export class FirestoreRestClient {
     const res = await this.executeFetch(`GET ${collection}/${docId}`, url, { headers });
 
     if (res.status === 404) {
+      const rawBody = await res.text();
+      if (isMissingDatabaseOrProject404(rawBody)) {
+        throw buildFirestoreHttpError(`GET ${collection}/${docId}`, res.status, rawBody);
+      }
       return null;
     }
     if (!res.ok) {
@@ -632,8 +876,10 @@ export class FirestoreRestClient {
       const res = await this.executeFetch(`LIST ${collection}`, url, { headers });
 
       if (!res.ok) {
-        if (res.status === 404) return allDocuments;
         const err = await res.text();
+        if (res.status === 404 && !isMissingDatabaseOrProject404(err)) {
+          return allDocuments;
+        }
         throw buildFirestoreHttpError(`LIST ${collection}`, res.status, err);
       }
 

@@ -110,6 +110,9 @@ export type OAuthStateFailureCode =
 export interface PersistentNonceConsumerResult {
   consumed: boolean;
   reason?: 'REPLAY' | 'INVALID_NONCE' | 'TECHNICAL_ERROR';
+  category?: string;
+  operation?: string;
+  httpStatus?: number | null;
   errorCode?: string;
   detail?: string;
 }
@@ -340,6 +343,9 @@ export async function verifyAndConsumeOAuthState(
           failureCode: 'FIRESTORE_ERROR',
           portal,
           noncePrefix: nonce.slice(0, 8),
+          category: normalized.category || null,
+          operation: normalized.operation || null,
+          httpStatus: normalized.httpStatus ?? null,
           errorCode: normalized.errorCode || null,
           detail: normalized.detail || null,
         });
@@ -353,6 +359,9 @@ export async function verifyAndConsumeOAuthState(
             normalized.detail ||
             'Échec technique Firestore lors de la consommation atomique du state OAuth2',
           diagnostics: {
+            category: normalized.category || 'UNKNOWN',
+            operation: normalized.operation || 'SET',
+            httpStatus: normalized.httpStatus ?? null,
             errorCode: normalized.errorCode || 'FIRESTORE_ERROR',
           },
         };

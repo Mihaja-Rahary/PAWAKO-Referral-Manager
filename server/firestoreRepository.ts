@@ -133,6 +133,9 @@ export class FirestoreRepository {
   ): Promise<{
     consumed: boolean;
     reason?: 'REPLAY' | 'INVALID_NONCE' | 'TECHNICAL_ERROR';
+    category?: string;
+    operation?: string;
+    httpStatus?: number | null;
     errorCode?: string;
     detail?: string;
   }> {
@@ -162,25 +165,31 @@ export class FirestoreRepository {
         return {
           consumed: false,
           reason: 'REPLAY',
+          category: 'PRECONDITION',
+          operation: err.operation,
+          httpStatus: err.status ?? 409,
           errorCode: err.firestoreStatus || `HTTP_${err.status || 409}`,
           detail: 'Nonce OAuth2 déjà consommé dans Firestore.',
         };
       }
 
       const firestoreErr = err instanceof FirestoreRestError ? err : null;
+      const category = firestoreErr?.category || 'UNKNOWN';
+      const operation = firestoreErr?.operation || 'SET';
+      const httpStatus = firestoreErr?.status ?? null;
       const errorCode = firestoreErr
         ? firestoreErr.firestoreStatus || firestoreErr.category
         : 'UNEXPECTED_ERROR';
-      const statusSuffix = firestoreErr?.status ? ` (HTTP ${firestoreErr.status})` : '';
-      const safeDetail = `${firestoreErr?.operation || 'SET'} ${errorCode}${statusSuffix}: ${
+      const statusSuffix = httpStatus ? ` (HTTP ${httpStatus})` : '';
+      const safeDetail = `${operation} ${errorCode}${statusSuffix}: ${
         err?.message || 'Erreur Firestore inconnue'
       }`;
 
       console.error('[Firestore][consumeOAuthNonce] Technical Firestore failure', {
         noncePrefix: nonce.slice(0, 8),
-        category: firestoreErr?.category || 'UNKNOWN',
-        operation: firestoreErr?.operation || 'SET',
-        status: firestoreErr?.status ?? null,
+        category,
+        operation,
+        status: httpStatus,
         firestoreStatus: firestoreErr?.firestoreStatus ?? null,
         message: err?.message || 'Unknown error',
       });
@@ -188,6 +197,9 @@ export class FirestoreRepository {
       return {
         consumed: false,
         reason: 'TECHNICAL_ERROR',
+        category,
+        operation,
+        httpStatus,
         errorCode,
         detail: safeDetail,
       };

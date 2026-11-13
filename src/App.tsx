@@ -167,10 +167,10 @@ export default function App() {
           navigate('/admin');
         }
       } else if (eventType === 'OAUTH_AUTH_FAILED') {
-        const errorMsg =
-          (event.data as { error?: string }).error ||
-          'Authentification Discord échouée ou refusée.';
-        setOauthError(errorMsg);
+        const payload = event.data as { error?: string; code?: string; diagnostic?: string };
+        const baseMsg = payload.error || 'Authentification Discord échouée ou refusée.';
+        const suffix = payload.diagnostic ? ` [Diagnostic : ${payload.diagnostic}]` : '';
+        setOauthError(`${baseMsg}${suffix}`);
       }
     };
 

@@ -7,7 +7,7 @@
  */
 
 import { Hono } from 'hono';
-import { FirestoreRestClient, FirestoreRestError } from '../server/firestoreRest';
+import { FirestoreRestClient, FirestoreRestError, diagnosePrivateKeyPem } from '../server/firestoreRest';
 import { FirestoreRepository } from '../server/firestoreRepository';
 import {
   AdminStatus,
@@ -68,25 +68,24 @@ function escapeHtml(str: any): string {
     .replace(/'/g, '&#039;');
 }
 
-// Helper pour initialiser le repository Firestore depuis l'environnement du Worker
-function getRepository(env: Env): FirestoreRepository {
+// Helper pour initialiser le client REST Firestore et le repository depuis l'environnement du Worker
+function createFirestoreClient(env: Env): FirestoreRestClient {
   const projectId = env.FIREBASE_PROJECT_ID?.trim() || 'gen-lang-client-0255826431';
-  const databaseId = env.FIREBASE_DATABASE_ID?.trim() || 'ai-studio-pawakoreferralma-1d4a1a22-a715-4552-b717-2e03e349fbee';
+  const databaseId =
+    env.FIREBASE_DATABASE_ID?.trim() || 'ai-studio-pawakoreferralma-1d4a1a22-a715-4552-b717-2e03e349fbee';
   const clientEmail = env.FIREBASE_CLIENT_EMAIL?.trim();
-  let privateKey = env.FIREBASE_PRIVATE_KEY?.trim();
+  const privateKey = env.FIREBASE_PRIVATE_KEY?.trim();
 
-  if (privateKey && privateKey.includes('\\n')) {
-    privateKey = privateKey.replace(/\\n/g, '\n');
-  }
-
-  const restClient = new FirestoreRestClient({
+  return new FirestoreRestClient({
     projectId,
     databaseId,
     clientEmail,
     privateKey,
   });
+}
 
-  return new FirestoreRepository(restClient);
+function getRepository(env: Env): FirestoreRepository {
+  return new FirestoreRepository(createFirestoreClient(env));
 }
 
 // -----------------------------------------------------------------------------
@@ -307,17 +306,68 @@ app.get('/health', c => {
   });
 });
 
-app.get('/api/health', c => {
-  const projectId = c.env.FIREBASE_PROJECT_ID || 'gen-lang-client-0255826431';
-  return c.json({
-    status: 'ok',
-    worker: 'referral-manager',
-    firestore: {
-      projectId,
-      hasServiceAccount: Boolean(c.env.FIREBASE_CLIENT_EMAIL && c.env.FIREBASE_PRIVATE_KEY),
+app.get('/api/health', async c => {
+  const client = createFirestoreClient(c.env);
+  const rawProjectId =
+    (c.env.FIREBASE_PROJECT_ID || '').trim().replace(/^["']|["']$/g, '') ||
+    'gen-lang-client-0255826431';
+  const rawDatabaseId =
+    (c.env.FIREBASE_DATABASE_ID || '').trim().replace(/^["']|["']$/g, '') ||
+    'ai-studio-pawakoreferralma-1d4a1a22-a715-4552-b717-2e03e349fbee';
+  const cleanEmail = (c.env.FIREBASE_CLIENT_EMAIL || '').trim().replace(/^["']|["']$/g, '');
+  const hasClientEmail = Boolean(cleanEmail);
+  const clientEmailFormatValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail);
+  const keyDiag = diagnosePrivateKeyPem(c.env.FIREBASE_PRIVATE_KEY);
+
+  let sessionSecretValid = false;
+  try {
+    getValidatedSessionSecret(c.env);
+    sessionSecretValid = true;
+  } catch {
+    sessionSecretValid = false;
+  }
+
+  let oauthRedirectUriValid = false;
+  try {
+    getDiscordRedirectUri(c.env, c.req.url);
+    oauthRedirectUriValid = true;
+  } catch {
+    oauthRedirectUriValid = false;
+  }
+
+  const deepCheck =
+    c.req.query('check') === 'firestore' ||
+    c.req.query('deep') === '1' ||
+    c.req.query('deep') === 'true';
+
+  const connectivity = deepCheck ? await client.diagnoseFirestoreConnection() : undefined;
+  const httpStatus = connectivity && !connectivity.ok ? 503 : 200;
+
+  return c.json(
+    {
+      status: connectivity && !connectivity.ok ? 'degraded' : 'ok',
+      worker: 'referral-manager',
+      firestore: {
+        projectId: rawProjectId,
+        databaseId: rawDatabaseId,
+        hasServiceAccount: Boolean(hasClientEmail && c.env.FIREBASE_PRIVATE_KEY?.trim()),
+        hasClientEmail,
+        clientEmailFormatValid,
+        hasPrivateKey: Boolean(c.env.FIREBASE_PRIVATE_KEY?.trim()),
+        privateKeyFormat: keyDiag.code,
+        ...(connectivity ? { connectivity } : {}),
+      },
+      auth: {
+        hasSessionSecret: Boolean((c.env.SESSION_SECRET || '').trim()),
+        sessionSecretValid,
+        hasDiscordClientId: Boolean((c.env.DISCORD_CLIENT_ID || '').trim()),
+        hasDiscordClientSecret: Boolean((c.env.DISCORD_CLIENT_SECRET || '').trim()),
+        oauthRedirectUriValid,
+      },
+      timestamp: new Date().toISOString(),
     },
-    timestamp: new Date().toISOString(),
-  });
+    httpStatus
+  );
 });
 
 // -----------------------------------------------------------------------------
@@ -484,12 +534,26 @@ const handleAuthCallback = async (c: any) => {
     const noncePrefix = stateCheck.nonce ? stateCheck.nonce.slice(0, 8) : null;
 
     if (stateCheck.errorCategory === 'TECHNICAL_ERROR') {
+      const diag = stateCheck.diagnostics || {};
+      const diagCategory = diag.category ? String(diag.category) : 'UNKNOWN';
+      const diagOperation = diag.operation ? String(diag.operation) : 'FIRESTORE';
+      const diagStatus = diag.httpStatus ? `HTTP ${diag.httpStatus}` : null;
+      const diagErrorCode = diag.errorCode ? String(diag.errorCode) : null;
+      const safeDiagnosticLine = [
+        diagCategory,
+        diagOperation,
+        diagStatus,
+        diagErrorCode ? `(${diagErrorCode})` : null,
+      ]
+        .filter(Boolean)
+        .join(' · ');
+
       console.error('[OAuth2 Callback][TECHNICAL_ERROR]', {
         failureCode: stateCheck.failureCode || 'FIRESTORE_ERROR',
         portal,
         noncePrefix,
         reason: stateCheck.reason || 'Erreur technique Firestore',
-        diagnostics: stateCheck.diagnostics || null,
+        diagnostics: diag,
       });
 
       const techErrorMessage =
@@ -505,16 +569,18 @@ const handleAuthCallback = async (c: any) => {
               <h3 style="margin: 0 0 8px 0; color: #fbbf24;">Erreur technique temporaire</h3>
               <p style="color: #cbd5e1; font-size: 13px; line-height: 1.5;">${escapeHtml(techErrorMessage)}</p>
               <p style="color: #94a3b8; font-size: 11px; margin-top: 8px;">Code : ${escapeHtml(stateCheck.failureCode || 'FIRESTORE_ERROR')}</p>
+              <p style="color: #64748b; font-size: 11px; margin-top: 4px; font-family: monospace;">Diagnostic : ${escapeHtml(safeDiagnosticLine)}</p>
               <button id="btn-back" style="background: #334155; color: white; border: none; padding: 9px 18px; border-radius: 8px; cursor: pointer; font-size: 13px; margin-top: 14px;">Retour à la connexion</button>
             </div>
             <script>
               const targetOrigin = ${JSON.stringify(targetOrigin)};
               const loginUrl = ${JSON.stringify(portalLoginUrl)};
               const failureCode = ${JSON.stringify(stateCheck.failureCode || 'FIRESTORE_ERROR')};
+              const diagnostic = ${JSON.stringify(safeDiagnosticLine)};
               const errorMessage = ${JSON.stringify(techErrorMessage)};
               document.getElementById('btn-back').addEventListener('click', function() {
                 if (window.opener) {
-                  window.opener.postMessage({ type: 'OAUTH_AUTH_FAILED', category: 'TECHNICAL_ERROR', code: failureCode, error: errorMessage }, targetOrigin);
+                  window.opener.postMessage({ type: 'OAUTH_AUTH_FAILED', category: 'TECHNICAL_ERROR', code: failureCode, diagnostic: diagnostic, error: errorMessage }, targetOrigin);
                   window.close();
                 } else {
                   window.location.href = loginUrl;
