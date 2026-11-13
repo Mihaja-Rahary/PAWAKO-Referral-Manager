@@ -945,21 +945,14 @@ app.get('/auth/callback/', handleAuthCallback);
 
 app.get('/api/auth/me', async c => {
   const repo = getRepository(c.env);
-  const user = await getAuthenticatedUser(c, repo);
 
   let hasValidSecret = false;
+  let secret = '';
   try {
-    getValidatedSessionSecret(c.env);
+    secret = getValidatedSessionSecret(c.env);
     hasValidSecret = true;
   } catch {
     hasValidSecret = false;
-  }
-
-  let isClaimed = false;
-  try {
-    isClaimed = await repo.isInitialAdminClaimed();
-  } catch {
-    isClaimed = false;
   }
 
   const isOAuthConfigured = Boolean(
@@ -967,7 +960,24 @@ app.get('/api/auth/me', async c => {
   );
   const isBotConfigured = Boolean(c.env.JARVIS_WEBHOOK_SECRET?.trim());
 
-  if (!user) {
+  // Vérification cryptographique du cookie AVANT toute requête Firestore
+  let verifiedUserId: string | null = null;
+  let verifiedRole: UserRole | null = null;
+  if (hasValidSecret) {
+    const cookieHeader = c.req.header('Cookie') || '';
+    const match = cookieHeader.match(/(?:^|;\s*)pawako_session=([^;]+)/);
+    const token = match ? match[1].trim() : null;
+    if (token) {
+      const verification = await verifySignedSessionToken(token, secret);
+      if (verification.valid && verification.payload) {
+        verifiedUserId = verification.payload.userId;
+        verifiedRole = verification.payload.role as UserRole;
+      }
+    }
+  }
+
+  if (!verifiedUserId) {
+    const isClaimed = await repo.isInitialAdminClaimed().catch(() => false);
     return c.json({
       authenticated: false,
       user: null,
@@ -979,11 +989,24 @@ app.get('/api/auth/me', async c => {
     });
   }
 
-  let referrer: any = null;
-  try {
-    referrer = await repo.getReferrerByDiscordUserId(user.id);
-  } catch {
-    referrer = null;
+  const [user, isClaimed, referrer] = await Promise.all([
+    repo.getUserById(verifiedUserId).catch(() => null),
+    repo.isInitialAdminClaimed().catch(() => false),
+    verifiedRole === 'PARRAIN'
+      ? repo.getReferrerByDiscordUserId(verifiedUserId).catch(() => null)
+      : Promise.resolve(null),
+  ]);
+
+  if (!user || user.status !== 'ACTIVE') {
+    return c.json({
+      authenticated: false,
+      user: null,
+      referrer: null,
+      isOAuthConfigured,
+      isBotConfigured,
+      hasAnyUsers: false,
+      isInitialAdminClaimed: isClaimed,
+    });
   }
 
   return c.json({
@@ -1006,6 +1029,49 @@ app.post('/api/auth/logout', c => {
 // -----------------------------------------------------------------------------
 // 6. STATISTIQUES GLOBALES & ESPACE PARRAIN (RBAC ET LISTE BLANCHE STRICTS)
 // -----------------------------------------------------------------------------
+
+app.get('/api/admin/bootstrap', async c => {
+  const repo = getRepository(c.env);
+  const user = await getAuthenticatedUser(c, repo);
+
+  if (!user) {
+    return c.json({ error: 'Session non authentifiée. Veuillez vous connecter via Discord.' }, 401);
+  }
+
+  if (user.role !== 'ADMINISTRATEUR' && user.role !== 'RESPONSABLE') {
+    return c.json({ error: 'Accès réservé exclusivement à la Direction et aux Responsables.' }, 403);
+  }
+
+  let hasValidSecret = false;
+  try {
+    getValidatedSessionSecret(c.env);
+    hasValidSecret = true;
+  } catch {
+    hasValidSecret = false;
+  }
+
+  const guildIds = {
+    RECRUTEMENT: c.env.DISCORD_RECRUITMENT_GUILD_ID || '',
+    FORMATION: c.env.DISCORD_FORMATION_GUILD_ID || '',
+    PRODUCTION_CHATTING: c.env.DISCORD_CHATTING_PRODUCTION_GUILD_ID || '',
+    PRODUCTION_INSTAGRAM: c.env.DISCORD_INSTAGRAM_PRODUCTION_GUILD_ID || '',
+  };
+
+  const bootstrap = await repo.getAdminBootstrapData(guildIds);
+
+  return c.json({
+    authenticated: true,
+    user,
+    referrer: null,
+    isOAuthConfigured: Boolean(
+      c.env.DISCORD_CLIENT_ID?.trim() && c.env.DISCORD_CLIENT_SECRET?.trim() && hasValidSecret
+    ),
+    isBotConfigured: Boolean(c.env.JARVIS_WEBHOOK_SECRET?.trim()),
+    isInitialAdminClaimed: bootstrap.isInitialAdminClaimed,
+    stats: bootstrap.stats,
+    referrers: bootstrap.referrers,
+  });
+});
 
 app.get('/api/stats/overview', async c => {
   const repo = getRepository(c.env);

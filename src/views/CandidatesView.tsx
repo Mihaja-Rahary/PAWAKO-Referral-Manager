@@ -56,6 +56,7 @@ export const CandidatesView: React.FC<Props> = ({
 
   // Filters
   const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [vaType, setVaType] = useState<VAType | 'ALL'>((initialVaTypeFilter as any) || 'ALL');
   const [status, setStatus] = useState<CandidateStatus | 'ALL'>((initialStatusFilter as any) || 'ALL');
   const [server, setServer] = useState<string>('ALL');
@@ -68,11 +69,18 @@ export const CandidatesView: React.FC<Props> = ({
   const isAdmin = currentUserRole === 'ADMINISTRATEUR';
   const isResponsableOrAdmin = currentUserRole === 'ADMINISTRATEUR' || currentUserRole === 'RESPONSABLE';
 
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(search);
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [search]);
+
   const fetchCandidates = async () => {
     try {
       setIsLoading(true);
       const res = await api.getCandidates({
-        search: search.trim() || undefined,
+        search: debouncedSearch.trim() || undefined,
         vaType,
         status,
         server,
@@ -93,7 +101,7 @@ export const CandidatesView: React.FC<Props> = ({
 
   useEffect(() => {
     fetchCandidates();
-  }, [search, vaType, status, server, attributionStatus, anomalyOnly, page, refreshTrigger]);
+  }, [debouncedSearch, vaType, status, server, attributionStatus, anomalyOnly, page, refreshTrigger]);
 
   const handleCopyId = (e: React.MouseEvent, id: string) => {
     e.stopPropagation();

@@ -60,6 +60,61 @@ export const api = {
     return request('/api/auth/me');
   },
 
+  async getAdminBootstrap(): Promise<{
+    authenticated: boolean;
+    user: User;
+    referrer: Referrer | null;
+    isOAuthConfigured: boolean;
+    isBotConfigured: boolean;
+    isInitialAdminClaimed?: boolean;
+    stats: OverviewStatistics;
+    referrers: Referrer[];
+  }> {
+    const res = await fetch(`${API_BASE}/api/admin/bootstrap`, {
+      credentials: 'include',
+    });
+
+    if (res.status === 404) {
+      // Compatibilité descendante si le backend ne dispose pas encore de /api/admin/bootstrap
+      const auth = await this.getAuthMe();
+      if (!auth.authenticated || !auth.user) {
+        throw new Error('Session non authentifiée.');
+      }
+      if (auth.user.role !== 'ADMINISTRATEUR' && auth.user.role !== 'RESPONSABLE') {
+        throw new Error('Accès réservé exclusivement à la Direction et aux Responsables.');
+      }
+      const [stats, refRes] = await Promise.all([
+        this.getOverviewStats(),
+        this.getReferrers().catch(() => ({ referrers: [] })),
+      ]);
+      return {
+        authenticated: true,
+        user: auth.user,
+        referrer: auth.referrer,
+        isOAuthConfigured: auth.isOAuthConfigured,
+        isBotConfigured: auth.isBotConfigured,
+        isInitialAdminClaimed: auth.isInitialAdminClaimed,
+        stats,
+        referrers: refRes.referrers || [],
+      };
+    }
+
+    if (!res.ok) {
+      let errMsg = `Erreur HTTP ${res.status}`;
+      try {
+        const errJson = await res.json();
+        errMsg = errJson.error || errMsg;
+      } catch {
+        // ignore
+      }
+      const err: any = new Error(errMsg);
+      err.status = res.status;
+      throw err;
+    }
+
+    return res.json();
+  },
+
   async getOAuthUrl(portal: 'admin' | 'parrain' = 'admin'): Promise<{
     url: string;
     portal: string;

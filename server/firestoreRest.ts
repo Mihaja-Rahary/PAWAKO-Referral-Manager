@@ -126,8 +126,9 @@ function buildFirestoreHttpError(operation: string, status: number, rawBody: str
   });
 }
 
-// Cache du token d'accès Google OAuth2 indexé par clientEmail
+// Cache du token d'accès Google OAuth2 et de la clé cryptographique importée
 let cachedToken: { clientEmail: string; accessToken: string; expiresAt: number } | null = null;
+let cachedCryptoKey: { rawKey: string; cryptoKey: CryptoKey } | null = null;
 let inFlightTokenPromise: Promise<string> | null = null;
 
 function sanitizeConfigValue(raw?: string): string {
@@ -390,24 +391,29 @@ async function getGoogleAccessToken(clientEmail: string, privateKeyPem: string):
       const encodedPayload = base64UrlEncode(JSON.stringify(payload));
       const message = `${encodedHeader}.${encodedPayload}`;
 
-      const privateKeyBuffer = pemToArrayBuffer(cleanKey);
       let cryptoKey: CryptoKey;
-      try {
-        cryptoKey = await crypto.subtle.importKey(
-          'pkcs8',
-          privateKeyBuffer,
-          {
-            name: 'RSASSA-PKCS1-v1_5',
-            hash: 'SHA-256',
-          },
-          false,
-          ['sign']
-        );
-      } catch (err) {
-        throw new FirestoreRestError(
-          'Clé privée Firebase (FIREBASE_PRIVATE_KEY) incompatible avec la signature RS256 PKCS#8.',
-          { operation: 'AUTH_TOKEN', category: 'CONFIG', cause: err }
-        );
+      if (cachedCryptoKey && cachedCryptoKey.rawKey === cleanKey) {
+        cryptoKey = cachedCryptoKey.cryptoKey;
+      } else {
+        const privateKeyBuffer = pemToArrayBuffer(cleanKey);
+        try {
+          cryptoKey = await crypto.subtle.importKey(
+            'pkcs8',
+            privateKeyBuffer,
+            {
+              name: 'RSASSA-PKCS1-v1_5',
+              hash: 'SHA-256',
+            },
+            false,
+            ['sign']
+          );
+          cachedCryptoKey = { rawKey: cleanKey, cryptoKey };
+        } catch (err) {
+          throw new FirestoreRestError(
+            'Clé privée Firebase (FIREBASE_PRIVATE_KEY) incompatible avec la signature RS256 PKCS#8.',
+            { operation: 'AUTH_TOKEN', category: 'CONFIG', cause: err }
+          );
+        }
       }
 
       const encoder = new TextEncoder();

@@ -34,6 +34,7 @@ import { LogOut, UserCheck, Shield } from 'lucide-react';
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [isAuthLoading, setIsAuthLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<NavigationTab>('dashboard');
   const [isOAuthConfigured, setIsOAuthConfigured] = useState(false);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
@@ -80,19 +81,36 @@ export default function App() {
 
   const loadAuthAndGlobals = useCallback(async () => {
     try {
+      const pathNow = typeof window !== 'undefined' ? window.location.pathname : '/';
+      const preferAdminBootstrap = pathNow.startsWith('/admin') && pathNow !== '/admin/login';
+
+      if (preferAdminBootstrap) {
+        try {
+          const boot = await api.getAdminBootstrap();
+          setCurrentUser(boot.user);
+          setIsOAuthConfigured(boot.isOAuthConfigured);
+          setStats(boot.stats);
+          setReferrers(boot.referrers || []);
+          return;
+        } catch {
+          // Si non authentifié (401) ou parrain (403), basculer proprement sur /api/auth/me
+        }
+      }
+
       const auth = await api.getAuthMe();
+      setIsOAuthConfigured(auth.isOAuthConfigured);
+
       if (auth.authenticated && auth.user) {
         setCurrentUser(auth.user);
-        setIsOAuthConfigured(auth.isOAuthConfigured);
 
-        // Fetch sensitive stats only if user is authenticated and authorized for admin views
         if (auth.user.role === 'ADMINISTRATEUR' || auth.user.role === 'RESPONSABLE') {
-          const [overviewStats, refRes] = await Promise.all([
-            api.getOverviewStats().catch(() => null),
-            api.getReferrers().catch(() => ({ referrers: [] })),
-          ]);
-          if (overviewStats) setStats(overviewStats);
-          if (refRes?.referrers) setReferrers(refRes.referrers);
+          try {
+            const boot = await api.getAdminBootstrap();
+            setStats(boot.stats);
+            setReferrers(boot.referrers || []);
+          } catch {
+            // Fallback silencieux
+          }
         }
       } else {
         setCurrentUser(null);
@@ -101,6 +119,8 @@ export default function App() {
       }
     } catch (err) {
       console.error('Failed to load initial data:', err);
+    } finally {
+      setIsAuthLoading(false);
     }
   }, []);
 
@@ -317,6 +337,15 @@ export default function App() {
 
   // 4. Route : /parrain (Espace Parrain Protégé)
   if (currentPath.startsWith('/parrain')) {
+    if (isAuthLoading && !currentUser) {
+      return (
+        <div className="min-h-screen bg-slate-50 dark:bg-[#06040a] flex flex-col items-center justify-center gap-3 text-slate-500 dark:text-[#9d93b8]">
+          <PawakoLogo size="sm" />
+          <div className="text-xs font-medium animate-pulse">Chargement de votre espace...</div>
+        </div>
+      );
+    }
+
     if (!currentUser) {
       navigate('/parrain/login');
       return null;
@@ -404,6 +433,15 @@ export default function App() {
   }
 
   // 5. Route : /admin (Espace Administration Protégé)
+  if (isAuthLoading && !currentUser) {
+    return (
+      <div className="min-h-screen bg-slate-50 dark:bg-[#06040a] flex flex-col items-center justify-center gap-3 text-slate-500 dark:text-[#9d93b8]">
+        <PawakoLogo size="sm" />
+        <div className="text-xs font-medium animate-pulse">Chargement du tableau de bord...</div>
+      </div>
+    );
+  }
+
   if (!currentUser) {
     navigate('/admin/login');
     return null;
@@ -507,6 +545,7 @@ export default function App() {
                   setActiveTab('candidates');
                 }}
                 refreshTrigger={refreshTrigger}
+                initialReferrers={referrers}
               />
             )}
 
@@ -522,6 +561,7 @@ export default function App() {
               <DiscordSyncView
                 refreshTrigger={refreshTrigger}
                 onRefreshAll={triggerRefresh}
+                initialServers={stats?.servers}
               />
             )}
 

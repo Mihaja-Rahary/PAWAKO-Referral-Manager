@@ -7,13 +7,15 @@ interface Props {
   currentUserRole: UserRole;
   onSelectReferrerFilter: (referrerId: string) => void;
   refreshTrigger: number;
+  initialReferrers?: Referrer[];
 }
 
 export const ReferrersView: React.FC<Props> = ({
   currentUserRole,
   refreshTrigger,
+  initialReferrers,
 }) => {
-  const [referrers, setReferrers] = useState<Referrer[]>([]);
+  const [referrers, setReferrers] = useState<Referrer[]>(initialReferrers || []);
   const [isLoading, setIsLoading] = useState(false);
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
 
@@ -26,6 +28,12 @@ export const ReferrersView: React.FC<Props> = ({
   const [error, setError] = useState<string | null>(null);
 
   const isAdmin = currentUserRole === 'ADMINISTRATEUR';
+
+  useEffect(() => {
+    if (initialReferrers && initialReferrers.length > 0) {
+      setReferrers(initialReferrers);
+    }
+  }, [initialReferrers]);
 
   const fetchReferrers = async () => {
     try {
@@ -40,6 +48,9 @@ export const ReferrersView: React.FC<Props> = ({
   };
 
   useEffect(() => {
+    if (initialReferrers && refreshTrigger === 0) {
+      return;
+    }
     fetchReferrers();
   }, [refreshTrigger]);
 

@@ -13,12 +13,19 @@ import {
 interface Props {
   refreshTrigger: number;
   onRefreshAll: () => void;
+  initialServers?: DiscordServerInfo[];
 }
 
-export const DiscordSyncView: React.FC<Props> = ({ refreshTrigger }) => {
-  const [servers, setServers] = useState<DiscordServerInfo[]>([]);
+export const DiscordSyncView: React.FC<Props> = ({ refreshTrigger, initialServers }) => {
+  const [servers, setServers] = useState<DiscordServerInfo[]>(initialServers || []);
   const [isLoading, setIsLoading] = useState(false);
   const [copiedPayload, setCopiedPayload] = useState(false);
+
+  useEffect(() => {
+    if (initialServers && initialServers.length > 0) {
+      setServers(initialServers);
+    }
+  }, [initialServers]);
 
   const fetchServers = async () => {
     try {
@@ -33,6 +40,9 @@ export const DiscordSyncView: React.FC<Props> = ({ refreshTrigger }) => {
   };
 
   useEffect(() => {
+    if (initialServers && initialServers.length > 0 && refreshTrigger === 0) {
+      return;
+    }
     fetchServers();
   }, [refreshTrigger]);
 

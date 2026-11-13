@@ -1068,12 +1068,16 @@ export class FirestoreRepository {
         servers.map(s => ({ collection: 'pawako_discord_servers', docId: s.id, data: s }))
       );
     } else if (guildIds) {
-      // Met à jour les guildIds depuis l'environnement si fournis
+      // Met à jour les guildIds modifiés en un seul lot atomique
+      const changedServers: Array<{ collection: string; docId: string; data: Record<string, any> }> = [];
       for (const s of servers) {
         if (guildIds[s.id] && s.guildId !== guildIds[s.id]) {
           s.guildId = guildIds[s.id];
-          await this.client.setDocument('pawako_discord_servers', s.id, s);
+          changedServers.push({ collection: 'pawako_discord_servers', docId: s.id, data: s });
         }
+      }
+      if (changedServers.length > 0) {
+        await this.client.batchSet(changedServers);
       }
     }
 
@@ -1167,12 +1171,12 @@ export class FirestoreRepository {
 
   // --- STATISTIQUES GLOBALES ET PARRAIN ---
 
-  async getOverviewStats(guildIds?: Record<DiscordServerType, string>) {
-    const [candidates, referrers, servers] = await Promise.all([
-      this.client.listDocuments<Candidate>('pawako_candidates'),
-      this.client.listDocuments<Referrer>('pawako_referrers'),
-      this.getDiscordServers(guildIds),
-    ]);
+  private computeOverviewStatsFromData(params: {
+    candidates: Candidate[];
+    referrers: Referrer[];
+    servers: DiscordServerInfo[];
+  }) {
+    const { candidates, referrers, servers } = params;
 
     const totalCandidats = candidates.length;
     const totalChatteurs = candidates.filter(c => c.vaType === 'CHATTEUR').length;
@@ -1255,13 +1259,46 @@ export class FirestoreRepository {
     };
   }
 
+  async getOverviewStats(guildIds?: Record<DiscordServerType, string>) {
+    const [candidates, referrers, servers] = await Promise.all([
+      this.client.listDocuments<Candidate>('pawako_candidates'),
+      this.client.listDocuments<Referrer>('pawako_referrers'),
+      this.getDiscordServers(guildIds),
+    ]);
+
+    return this.computeOverviewStatsFromData({ candidates, referrers, servers });
+  }
+
+  /**
+   * Charge en un seul lot parallèle toutes les données globales du tableau de bord Admin
+   * (évite les doublons de lecture entre /api/auth/me, /api/stats/overview et /api/referrers).
+   */
+  async getAdminBootstrapData(guildIds?: Record<DiscordServerType, string>) {
+    const [candidates, referrers, servers, isInitialAdminClaimed] = await Promise.all([
+      this.client.listDocuments<Candidate>('pawako_candidates'),
+      this.client.listDocuments<Referrer>('pawako_referrers'),
+      this.getDiscordServers(guildIds),
+      this.isInitialAdminClaimed().catch(() => false),
+    ]);
+
+    return {
+      stats: this.computeOverviewStatsFromData({ candidates, referrers, servers }),
+      referrers,
+      isInitialAdminClaimed,
+    };
+  }
+
   async getParrainDashboard(discordUserId: string) {
-    const referrer = await this.getReferrerByDiscordUserId(discordUserId);
+    const [referrers, allCandidates] = await Promise.all([
+      this.getReferrers(),
+      this.client.listDocuments<Candidate>('pawako_candidates'),
+    ]);
+
+    const referrer = referrers.find(r => r.discordUserId === discordUserId) || null;
     if (!referrer) {
       throw new Error(`Aucun compte parrain actif n est associé au Discord ID : ${discordUserId}`);
     }
 
-    const allCandidates = await this.client.listDocuments<Candidate>('pawako_candidates');
     const myCandidates = allCandidates.filter(c => c.referrerDiscordUserId === discordUserId);
 
     // Suppression stricte des données confidentielles
