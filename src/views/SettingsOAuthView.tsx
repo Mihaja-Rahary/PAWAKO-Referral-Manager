@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { api } from '../api';
 import { DiscordRoleMapping, DiscordServerType, PawakoRoleType } from '../types';
-import { getServerLabel, getPawakoRoleLabel } from '../utils/statusUtils';
+import { getPawakoRoleLabel } from '../utils/statusUtils';
 import {
   KeyRound,
   Copy,
@@ -48,6 +48,7 @@ export const SettingsOAuthView: React.FC = () => {
   const [backupPath, setBackupPath] = useState<string | null>(null);
   const [isBackingUp, setIsBackingUp] = useState(false);
   const [isMigrating, setIsMigrating] = useState(false);
+  const [confirmMigrate, setConfirmMigrate] = useState(false);
   const [migrationResult, setMigrationResult] = useState<any | null>(null);
   const [migrationError, setMigrationError] = useState<string | null>(null);
 
@@ -118,11 +119,9 @@ export const SettingsOAuthView: React.FC = () => {
   };
 
   const handleMigrateFirestore = async () => {
-    if (!window.confirm('Confirmer le transfert des données vers Cloud Firestore ? Une sauvegarde locale intégrale sera automatiquement créée avant toute écriture.')) {
-      return;
-    }
     try {
       setIsMigrating(true);
+      setConfirmMigrate(false);
       setMigrationError(null);
       setMigrationResult(null);
       const res = await api.migrateToFirestore();
@@ -137,151 +136,133 @@ export const SettingsOAuthView: React.FC = () => {
   };
 
   const currentOrigin = typeof window !== 'undefined' ? window.location.origin : '';
-  const devCallback = `${currentOrigin}/auth/callback`;
+  const devCallback = oauthInfo?.redirectUri || `${currentOrigin}/auth/callback`;
   const webhookUrl = `${currentOrigin}/api/discord/webhook`;
 
-  const serverSections: { id: DiscordServerType; title: string; subtitle: string; roles: PawakoRoleType[] }[] = [
+  const serverSections: { id: DiscordServerType; title: string; roles: PawakoRoleType[] }[] = [
     {
       id: 'RECRUTEMENT',
       title: '1. Serveur Recrutement',
-      subtitle: 'Accueil de tous les candidats (Chatting & Instagram)',
       roles: ['CANDIDAT', 'CANDIDAT_ACCEPTE', 'CANDIDAT_REFUSE'],
     },
     {
       id: 'FORMATION',
-      title: '2. Serveur Formation (VA Chatting uniquement)',
-      subtitle: 'Parcours des VA Chatteurs en cours d apprentissage et de simulation',
+      title: '2. Serveur Formation',
       roles: ['EN_FORMATION', 'EN_SIMULATION', 'VA_VALIDE'],
     },
     {
       id: 'PRODUCTION_CHATTING',
       title: '3. Serveur Production VA Chatting',
-      subtitle: 'Serveur de travail réservé aux VA Chatteurs confirmés',
       roles: ['VA_PRODUCTION'],
     },
     {
       id: 'PRODUCTION_INSTAGRAM',
       title: '4. Serveur Production VA Instagram',
-      subtitle: 'Serveur de travail réservé aux VA Instagram acceptés',
       roles: ['VA_PRODUCTION'],
     },
   ];
 
   return (
     <div className="space-y-6 max-w-4xl">
-      {/* Header */}
-      <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-xs space-y-2">
-        <h2 className="text-base font-bold text-slate-900 tracking-tight">
-          Configuration Discord, Rôles & Passerelle JARVIS
+      {/* Header & Tabs */}
+      <div className="bg-white dark:bg-[#100b1a] border border-slate-200 dark:border-[#241a38] rounded-xl p-5 shadow-xs space-y-3 transition-colors">
+        <h2 className="text-base font-bold text-slate-900 dark:text-[#f4f1fa] tracking-tight">
+          Paramètres Discord & Système
         </h2>
-        <p className="text-xs text-slate-500">
-          Gestion centralisée des correspondances de rôles Discord, de l'architecture des 4 serveurs et de la sécurisation OAuth2.
-        </p>
 
         {/* Tabs Bar */}
-        <div className="flex items-center gap-2 pt-3 border-t border-slate-100">
+        <div className="flex items-center gap-2 pt-3 border-t border-slate-100 dark:border-[#241a38] overflow-x-auto">
           <button
             onClick={() => setActiveTab('ROLES')}
-            className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors flex items-center gap-1.5 ${
+            className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
               activeTab === 'ROLES'
-                ? 'bg-slate-900 text-white'
-                : 'text-slate-600 hover:bg-slate-100'
+                ? 'bg-violet-600 text-white'
+                : 'text-slate-600 dark:text-[#9d93b8] hover:bg-slate-100 dark:hover:bg-[#171026] hover:text-slate-900 dark:hover:text-[#f4f1fa]'
             }`}
           >
             <Layers className="w-3.5 h-3.5" />
-            <span>Correspondance des Rôles (4 Serveurs)</span>
+            <span>Rôles Discord</span>
           </button>
 
           <button
             onClick={() => setActiveTab('SERVERS')}
-            className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors flex items-center gap-1.5 ${
+            className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
               activeTab === 'SERVERS'
-                ? 'bg-slate-900 text-white'
-                : 'text-slate-600 hover:bg-slate-100'
+                ? 'bg-violet-600 text-white'
+                : 'text-slate-600 dark:text-[#9d93b8] hover:bg-slate-100 dark:hover:bg-[#171026] hover:text-slate-900 dark:hover:text-[#f4f1fa]'
             }`}
           >
             <Server className="w-3.5 h-3.5" />
-            <span>Architecture & Variables d'Environnement</span>
+            <span>OAuth2 & Variables</span>
           </button>
 
           <button
             onClick={() => setActiveTab('WEBHOOK')}
-            className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors flex items-center gap-1.5 ${
+            className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
               activeTab === 'WEBHOOK'
-                ? 'bg-slate-900 text-white'
-                : 'text-slate-600 hover:bg-slate-100'
+                ? 'bg-violet-600 text-white'
+                : 'text-slate-600 dark:text-[#9d93b8] hover:bg-slate-100 dark:hover:bg-[#171026] hover:text-slate-900 dark:hover:text-[#f4f1fa]'
             }`}
           >
             <Webhook className="w-3.5 h-3.5" />
-            <span>Passerelle Bot JARVIS</span>
+            <span>Webhook</span>
           </button>
 
           <button
             onClick={() => setActiveTab('FIRESTORE')}
-            className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors flex items-center gap-1.5 ${
+            className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
               activeTab === 'FIRESTORE'
-                ? 'bg-slate-900 text-white'
-                : 'text-slate-600 hover:bg-slate-100'
+                ? 'bg-violet-600 text-white'
+                : 'text-slate-600 dark:text-[#9d93b8] hover:bg-slate-100 dark:hover:bg-[#171026] hover:text-slate-900 dark:hover:text-[#f4f1fa]'
             }`}
           >
             <Cloud className="w-3.5 h-3.5" />
-            <span>Base Firestore & Déploiement Gratuit</span>
+            <span>Base de données</span>
           </button>
         </div>
       </div>
 
       {/* TAB 1: Role Mappings Configuration */}
       {activeTab === 'ROLES' && (
-        <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-6 shadow-xs text-xs">
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <h3 className="font-bold text-slate-900 text-sm flex items-center gap-2">
-                <Settings className="w-4 h-4 text-slate-900" />
-                Configuration des Role ID Discord pour chaque Serveur
-              </h3>
-              <p className="text-slate-500 text-[11px] mt-1">
-                Le Referral Manager utilise les identifiants numériques <strong>Role ID (Snowflake)</strong> plutôt que les libellés.
-                Un simple renommage de rôle dans Discord ne rompra ainsi jamais la synchronisation des statuts.
-              </p>
-            </div>
+        <div className="bg-white dark:bg-[#100b1a] border border-slate-200 dark:border-[#241a38] rounded-xl p-6 space-y-6 shadow-xs text-xs transition-colors">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <h3 className="font-bold text-slate-900 dark:text-[#f4f1fa] text-sm flex items-center gap-2">
+              <Settings className="w-4 h-4 text-violet-600 dark:text-violet-400" />
+              Correspondance des Role ID Discord
+            </h3>
             <button
               onClick={handleSaveRoleMappings}
               disabled={isSavingRoles}
-              className="px-4 py-2 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 rounded-lg transition-colors shadow-xs flex items-center gap-1.5 shrink-0 disabled:opacity-50"
+              className="px-4 py-2 text-xs font-semibold text-white bg-violet-600 hover:bg-violet-500 rounded-lg transition-colors shadow-xs flex items-center gap-1.5 shrink-0 whitespace-nowrap disabled:opacity-50"
             >
               <Save className="w-3.5 h-3.5" />
-              <span>{isSavingRoles ? 'Enregistrement...' : 'Enregistrer les correspondances'}</span>
+              <span>{isSavingRoles ? 'Enregistrement...' : 'Enregistrer'}</span>
             </button>
           </div>
 
           {saveSuccess && (
-            <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-lg flex items-center gap-2 font-medium">
-              <Check className="w-4 h-4 text-emerald-600" />
-              <span>Correspondances de rôles enregistrées avec succès dans la base de données.</span>
+            <div className="p-3 bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-500/30 text-emerald-800 dark:text-emerald-300 rounded-lg flex items-center gap-2 font-medium">
+              <Check className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+              <span>Correspondances enregistrées.</span>
             </div>
           )}
 
           {saveError && (
-            <div className="p-3 bg-rose-50 border border-rose-200 text-rose-800 rounded-lg flex items-center gap-2 font-medium">
-              <AlertCircle className="w-4 h-4 text-rose-600" />
+            <div className="p-3 bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-500/30 text-rose-800 dark:text-rose-300 rounded-lg flex items-center gap-2 font-medium">
+              <AlertCircle className="w-4 h-4 text-rose-600 dark:text-rose-400" />
               <span>{saveError}</span>
             </div>
           )}
 
-          <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg text-slate-600 text-[11px] leading-relaxed">
-            <strong>Comment obtenir un Role ID dans Discord ?</strong> Dans Discord : Paramètres du serveur → Rôles → Clic droit sur le rôle souhaité → <em>Copier l'identifiant du rôle</em> (le Mode Développeur doit être activé).
-          </div>
-
           {/* Independent Configuration for the 4 Servers */}
-          <div className="space-y-6">
+          <div className="space-y-5">
             {serverSections.map(sec => (
-              <div key={sec.id} className="p-4 border border-slate-200 rounded-xl bg-slate-50/40 space-y-3">
-                <div className="border-b border-slate-200 pb-2">
-                  <h4 className="font-bold text-slate-900 text-xs">{sec.title}</h4>
-                  <p className="text-[11px] text-slate-500 mt-0.5">{sec.subtitle}</p>
+              <div key={sec.id} className="p-4 border border-slate-200 dark:border-[#241a38] rounded-xl bg-slate-50/40 dark:bg-[#171026] space-y-3">
+                <div className="border-b border-slate-200 dark:border-[#241a38] pb-2">
+                  <h4 className="font-bold text-slate-900 dark:text-[#f4f1fa] text-xs">{sec.title}</h4>
                 </div>
 
-                <div className="space-y-3 pt-1">
+                <div className="space-y-2.5 pt-1">
                   {sec.roles.map(roleType => {
                     const currentMapping = roleMappings.find(
                       m => m.serverId === sec.id && m.roleType === roleType
@@ -291,24 +272,24 @@ export const SettingsOAuthView: React.FC = () => {
                     return (
                       <div
                         key={roleType}
-                        className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-2.5 bg-white border border-slate-200 rounded-lg"
+                        className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-2.5 bg-white dark:bg-[#100b1a] border border-slate-200 dark:border-[#241a38] rounded-lg"
                       >
                         <div className="min-w-[200px]">
-                          <div className="font-bold text-slate-900 text-xs">
+                          <div className="font-bold text-slate-900 dark:text-[#f4f1fa] text-xs">
                             {getPawakoRoleLabel(roleType)}
                           </div>
-                          <div className="text-[10px] text-slate-400 font-mono">
-                            Type PAWAKO : {roleType}
+                          <div className="text-[10px] text-slate-400 dark:text-[#7c7296] font-mono">
+                            {roleType}
                           </div>
                         </div>
 
                         <div className="flex-1 max-w-md">
                           <input
                             type="text"
-                            placeholder="Role ID Discord (ex: 120123456789012345)"
+                            placeholder="Role ID Discord"
                             value={currentId}
                             onChange={e => handleRoleChange(sec.id, roleType, e.target.value)}
-                            className="w-full text-xs font-mono p-2 border border-slate-200 rounded bg-slate-50 text-slate-900 focus:bg-white focus:outline-none focus:ring-1 focus:ring-slate-900"
+                            className="w-full text-xs font-mono p-2 border border-slate-200 dark:border-[#241a38] rounded bg-slate-50 dark:bg-[#08050f] text-slate-900 dark:text-[#f4f1fa] focus:outline-none focus:ring-1 focus:ring-violet-500 placeholder:text-slate-400 dark:placeholder:text-[#7c7296]"
                           />
                         </div>
                       </div>
@@ -323,128 +304,118 @@ export const SettingsOAuthView: React.FC = () => {
             <button
               onClick={handleSaveRoleMappings}
               disabled={isSavingRoles}
-              className="px-5 py-2.5 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 rounded-lg transition-colors shadow-xs flex items-center gap-1.5 disabled:opacity-50"
+              className="px-5 py-2.5 text-xs font-semibold text-white bg-violet-600 hover:bg-violet-500 rounded-lg transition-colors shadow-xs flex items-center gap-1.5 disabled:opacity-50"
             >
               <Save className="w-3.5 h-3.5" />
-              <span>{isSavingRoles ? 'Enregistrement...' : 'Enregistrer toutes les correspondances'}</span>
+              <span>{isSavingRoles ? 'Enregistrement...' : 'Enregistrer'}</span>
             </button>
           </div>
         </div>
       )}
 
-      {/* TAB 2: Architecture & Environment Variables */}
+      {/* TAB 2: OAuth2 & Environment Variables */}
       {activeTab === 'SERVERS' && (
-        <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-6 shadow-xs text-xs">
+        <div className="bg-white dark:bg-[#100b1a] border border-slate-200 dark:border-[#241a38] rounded-xl p-6 space-y-6 shadow-xs text-xs transition-colors">
           {/* Status banner */}
-          <div className={`p-4 rounded-xl border text-xs flex items-start gap-3 ${
+          <div className={`p-4 rounded-xl border text-xs flex items-center gap-3 ${
             oauthInfo?.isConfigured
-              ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
-              : 'bg-amber-50 border-amber-200 text-amber-900'
+              ? 'bg-emerald-50 dark:bg-[#171026] border-emerald-200 dark:border-emerald-500/30 text-emerald-900 dark:text-emerald-200'
+              : 'bg-amber-50 dark:bg-[#171026] border-amber-200 dark:border-amber-500/30 text-amber-900 dark:text-amber-200'
           }`}>
             {oauthInfo?.isConfigured ? (
-              <ShieldCheck className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
+              <ShieldCheck className="w-5 h-5 text-emerald-600 dark:text-emerald-400 shrink-0" />
             ) : (
-              <AlertCircle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+              <AlertCircle className="w-5 h-5 text-amber-600 dark:text-amber-400 shrink-0" />
             )}
-            <div className="space-y-1">
-              <div className="font-bold">
-                {oauthInfo?.isConfigured
-                  ? 'OAuth2 Discord Actif & Opérationnel'
-                  : 'Identifiants Discord OAuth2 en attente de configuration'}
-              </div>
-              <p className="text-[11px] leading-relaxed">
-                {oauthInfo?.isConfigured
-                  ? 'Les identifiants DISCORD_CLIENT_ID et DISCORD_CLIENT_SECRET sont injectés. La connexion sécurisée par popup est opérationnelle.'
-                  : 'Renseignez les variables DISCORD_CLIENT_ID et DISCORD_CLIENT_SECRET dans vos paramètres d environnement.'}
-              </p>
+            <div className="font-bold">
+              {oauthInfo?.isConfigured
+                ? 'OAuth2 Discord configuré'
+                : 'Identifiants OAuth2 en attente'}
             </div>
           </div>
 
           {/* Callback URL */}
           <div className="space-y-2">
-            <div className="font-semibold text-slate-800 flex items-center gap-2">
-              <KeyRound className="w-4 h-4 text-slate-900" />
-              <span>URL de Redirection OAuth2 Discord (Redirect URI)</span>
+            <div className="font-semibold text-slate-800 dark:text-[#f4f1fa] flex items-center gap-2">
+              <KeyRound className="w-4 h-4 text-violet-600 dark:text-violet-400" />
+              <span>Redirect URI Discord</span>
             </div>
-            <p className="text-slate-500">
-              Dans le <a href="https://discord.com/developers/applications" target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline font-medium inline-flex items-center gap-1">Discord Developer Portal <ExternalLink className="w-3 h-3" /></a>, sous <strong>OAuth2 → General → Redirects</strong>, ajoutez l'URL suivante :
-            </p>
             <div className="flex items-center gap-2">
               <input
                 type="text"
                 readOnly
                 value={devCallback}
-                className="flex-1 text-xs font-mono p-2 border border-slate-200 rounded bg-slate-50 text-slate-900 select-all"
+                className="flex-1 text-xs font-mono p-2 border border-slate-200 dark:border-[#241a38] rounded bg-slate-50 dark:bg-[#08050f] text-slate-900 dark:text-[#f4f1fa] select-all focus:outline-none"
               />
               <button
                 onClick={() => handleCopy('devCallback', devCallback)}
-                className="px-3 py-2 bg-slate-900 text-white font-medium rounded hover:bg-slate-800 transition-colors flex items-center gap-1 text-[11px]"
+                className="px-3 py-2 bg-violet-600 hover:bg-violet-500 text-white font-medium rounded transition-colors flex items-center gap-1 text-[11px]"
               >
-                {copiedKey === 'devCallback' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                {copiedKey === 'devCallback' ? <Check className="w-3.5 h-3.5 text-emerald-300" /> : <Copy className="w-3.5 h-3.5" />}
                 <span>Copier</span>
               </button>
             </div>
+            <div>
+              <a
+                href="https://discord.com/developers/applications"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-violet-600 dark:text-violet-400 hover:underline font-medium inline-flex items-center gap-1 text-[11px]"
+              >
+                Discord Developer Portal <ExternalLink className="w-3 h-3" />
+              </a>
+            </div>
           </div>
 
-          {/* Table of the 4 Servers & Variables */}
+          {/* Table of Environment Variables */}
           <div className="space-y-3">
-            <h4 className="font-bold text-slate-900 text-sm">
-              Tableau des Variables d'Environnement Système
+            <h4 className="font-bold text-slate-900 dark:text-[#f4f1fa] text-sm">
+              Variables d'Environnement
             </h4>
-            <div className="overflow-x-auto border border-slate-200 rounded-lg">
+            <div className="overflow-x-auto border border-slate-200 dark:border-[#241a38] rounded-lg">
               <table className="w-full text-left text-xs">
-                <thead className="bg-slate-50 text-slate-500 uppercase tracking-wider text-[11px] border-b border-slate-200">
+                <thead className="bg-slate-50 dark:bg-[#171026] text-slate-500 dark:text-[#9d93b8] uppercase tracking-wider text-[11px] border-b border-slate-200 dark:border-[#241a38]">
                   <tr>
                     <th className="p-2.5 font-semibold">Variable</th>
-                    <th className="p-2.5 font-semibold">Description</th>
-                    <th className="p-2.5 font-semibold">Serveur Associé / Origine</th>
+                    <th className="p-2.5 font-semibold">Rôle</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-100 font-mono text-[11px] text-slate-700">
+                <tbody className="divide-y divide-slate-100 dark:divide-[#241a38] font-mono text-[11px] text-slate-700 dark:text-[#d8d0eb]">
                   <tr>
-                    <td className="p-2.5 font-bold text-slate-900">DISCORD_RECRUITMENT_GUILD_ID</td>
-                    <td className="p-2.5 font-sans">Guild ID du Serveur Recrutement</td>
-                    <td className="p-2.5 font-sans text-slate-500">Serveur Recrutement (Accueil tous candidats)</td>
+                    <td className="p-2.5 font-bold text-slate-900 dark:text-[#f4f1fa]">DISCORD_RECRUITMENT_GUILD_ID</td>
+                    <td className="p-2.5 font-sans text-slate-500 dark:text-[#9d93b8]">Serveur Recrutement</td>
                   </tr>
                   <tr>
-                    <td className="p-2.5 font-bold text-slate-900">DISCORD_FORMATION_GUILD_ID</td>
-                    <td className="p-2.5 font-sans">Guild ID du Serveur Formation</td>
-                    <td className="p-2.5 font-sans text-slate-500">Serveur Formation (Réservé VA Chatteurs)</td>
+                    <td className="p-2.5 font-bold text-slate-900 dark:text-[#f4f1fa]">DISCORD_FORMATION_GUILD_ID</td>
+                    <td className="p-2.5 font-sans text-slate-500 dark:text-[#9d93b8]">Serveur Formation (Chatting)</td>
                   </tr>
                   <tr>
-                    <td className="p-2.5 font-bold text-slate-900">DISCORD_CHATTING_PRODUCTION_GUILD_ID</td>
-                    <td className="p-2.5 font-sans">Guild ID du Serveur Production Chatting</td>
-                    <td className="p-2.5 font-sans text-slate-500">Serveur Production VA Chatting</td>
+                    <td className="p-2.5 font-bold text-slate-900 dark:text-[#f4f1fa]">DISCORD_CHATTING_PRODUCTION_GUILD_ID</td>
+                    <td className="p-2.5 font-sans text-slate-500 dark:text-[#9d93b8]">Serveur Prod VA Chatting</td>
                   </tr>
                   <tr>
-                    <td className="p-2.5 font-bold text-slate-900">DISCORD_INSTAGRAM_PRODUCTION_GUILD_ID</td>
-                    <td className="p-2.5 font-sans">Guild ID du Serveur Production Instagram</td>
-                    <td className="p-2.5 font-sans text-slate-500">Serveur Production VA Instagram</td>
+                    <td className="p-2.5 font-bold text-slate-900 dark:text-[#f4f1fa]">DISCORD_INSTAGRAM_PRODUCTION_GUILD_ID</td>
+                    <td className="p-2.5 font-sans text-slate-500 dark:text-[#9d93b8]">Serveur Prod VA Instagram</td>
                   </tr>
                   <tr>
-                    <td className="p-2.5 font-bold text-slate-900">PAWAKO_INITIAL_ADMIN_DISCORD_ID</td>
-                    <td className="p-2.5 font-sans">Discord User ID du 1er Administrateur habilité</td>
-                    <td className="p-2.5 font-sans text-slate-500">Mode Développeur → Clic droit sur votre profil</td>
+                    <td className="p-2.5 font-bold text-slate-900 dark:text-[#f4f1fa]">PAWAKO_INITIAL_ADMIN_DISCORD_ID</td>
+                    <td className="p-2.5 font-sans text-slate-500 dark:text-[#9d93b8]">Discord ID du 1er Administrateur</td>
                   </tr>
                   <tr>
-                    <td className="p-2.5 font-bold text-slate-900">JARVIS_WEBHOOK_SECRET</td>
-                    <td className="p-2.5 font-sans">Secret d'authentification du webhook JARVIS</td>
-                    <td className="p-2.5 font-sans text-slate-500">Header HTTP X-JARVIS-Secret</td>
+                    <td className="p-2.5 font-bold text-slate-900 dark:text-[#f4f1fa]">JARVIS_WEBHOOK_SECRET</td>
+                    <td className="p-2.5 font-sans text-slate-500 dark:text-[#9d93b8]">Secret Webhook (X-JARVIS-Secret)</td>
                   </tr>
                   <tr>
-                    <td className="p-2.5 font-bold text-slate-900">DISCORD_CLIENT_ID</td>
-                    <td className="p-2.5 font-sans">Client ID OAuth2 de l'application</td>
-                    <td className="p-2.5 font-sans text-slate-500">Discord Dev Portal → General Information</td>
+                    <td className="p-2.5 font-bold text-slate-900 dark:text-[#f4f1fa]">DISCORD_CLIENT_ID</td>
+                    <td className="p-2.5 font-sans text-slate-500 dark:text-[#9d93b8]">Client ID OAuth2</td>
                   </tr>
                   <tr>
-                    <td className="p-2.5 font-bold text-slate-900">DISCORD_CLIENT_SECRET</td>
-                    <td className="p-2.5 font-sans">Secret OAuth2 (côté serveur uniquement)</td>
-                    <td className="p-2.5 font-sans text-slate-500">Discord Dev Portal → OAuth2 → General</td>
+                    <td className="p-2.5 font-bold text-slate-900 dark:text-[#f4f1fa]">DISCORD_CLIENT_SECRET</td>
+                    <td className="p-2.5 font-sans text-slate-500 dark:text-[#9d93b8]">Secret OAuth2</td>
                   </tr>
                   <tr>
-                    <td className="p-2.5 font-bold text-slate-900">DISCORD_BOT_TOKEN</td>
-                    <td className="p-2.5 font-sans">Token d'authentification du Bot JARVIS</td>
-                    <td className="p-2.5 font-sans text-slate-500">Discord Dev Portal → Bot → Reset Token</td>
+                    <td className="p-2.5 font-bold text-slate-900 dark:text-[#f4f1fa]">DISCORD_BOT_TOKEN</td>
+                    <td className="p-2.5 font-sans text-slate-500 dark:text-[#9d93b8]">Token Bot Discord</td>
                   </tr>
                 </tbody>
               </table>
@@ -453,59 +424,48 @@ export const SettingsOAuthView: React.FC = () => {
         </div>
       )}
 
-      {/* TAB 3: Webhook JARVIS Specifications */}
+      {/* TAB 3: Webhook Specifications */}
       {activeTab === 'WEBHOOK' && (
-        <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-5 shadow-xs text-xs">
-          <div>
-            <h3 className="font-bold text-slate-900 text-sm flex items-center gap-2">
-              <Webhook className="w-4 h-4 text-slate-900" />
-              Intégration du Webhook JARVIS (Passerelle Discord)
-            </h3>
-            <p className="text-slate-500 text-[11px] mt-1">
-              Configurez le bot JARVIS pour transmettre en temps réel les arrivées, départs et modifications de rôles vers cette URL.
-            </p>
-          </div>
+        <div className="bg-white dark:bg-[#100b1a] border border-slate-200 dark:border-[#241a38] rounded-xl p-6 space-y-5 shadow-xs text-xs transition-colors">
+          <h3 className="font-bold text-slate-900 dark:text-[#f4f1fa] text-sm flex items-center gap-2">
+            <Webhook className="w-4 h-4 text-violet-600 dark:text-violet-400" />
+            Webhook Discord
+          </h3>
 
           <div className="space-y-2">
-            <label className="font-semibold text-slate-800">URL du Webhook :</label>
+            <label className="font-semibold text-slate-800 dark:text-[#d8d0eb]">URL du Webhook</label>
             <div className="flex items-center gap-2">
               <input
                 type="text"
                 readOnly
                 value={webhookUrl}
-                className="flex-1 text-xs font-mono p-2 border border-slate-200 rounded bg-slate-50 text-slate-900 select-all"
+                className="flex-1 text-xs font-mono p-2 border border-slate-200 dark:border-[#241a38] rounded bg-slate-50 dark:bg-[#08050f] text-slate-900 dark:text-[#f4f1fa] select-all focus:outline-none"
               />
               <button
                 onClick={() => handleCopy('webhookUrl', webhookUrl)}
-                className="px-3 py-2 bg-slate-900 text-white font-medium rounded hover:bg-slate-800 transition-colors flex items-center gap-1 text-[11px]"
+                className="px-3 py-2 bg-violet-600 hover:bg-violet-500 text-white font-medium rounded transition-colors flex items-center gap-1 text-[11px]"
               >
-                {copiedKey === 'webhookUrl' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                {copiedKey === 'webhookUrl' ? <Check className="w-3.5 h-3.5 text-emerald-300" /> : <Copy className="w-3.5 h-3.5" />}
                 <span>Copier</span>
               </button>
             </div>
           </div>
 
-          <div className="space-y-2">
-            <label className="font-semibold text-slate-800">Événements pris en charge :</label>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-              <div className="p-2.5 border border-slate-200 rounded-lg bg-slate-50">
-                <span className="font-mono font-bold text-slate-900">GUILD_MEMBER_ADD</span>
-                <p className="text-[10px] text-slate-500 mt-0.5">Arrivée d'un membre ou retour historique</p>
-              </div>
-              <div className="p-2.5 border border-slate-200 rounded-lg bg-slate-50">
-                <span className="font-mono font-bold text-slate-900">GUILD_MEMBER_UPDATE</span>
-                <p className="text-[10px] text-slate-500 mt-0.5">Ajout ou retrait de rôles Discord</p>
-              </div>
-              <div className="p-2.5 border border-slate-200 rounded-lg bg-slate-50">
-                <span className="font-mono font-bold text-slate-900">GUILD_MEMBER_REMOVE</span>
-                <p className="text-[10px] text-slate-500 mt-0.5">Départ d'un serveur (dossier conservé)</p>
-              </div>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+            <div className="p-2.5 border border-slate-200 dark:border-[#241a38] rounded-lg bg-slate-50 dark:bg-[#171026]">
+              <span className="font-mono font-bold text-slate-900 dark:text-[#f4f1fa]">GUILD_MEMBER_ADD</span>
+            </div>
+            <div className="p-2.5 border border-slate-200 dark:border-[#241a38] rounded-lg bg-slate-50 dark:bg-[#171026]">
+              <span className="font-mono font-bold text-slate-900 dark:text-[#f4f1fa]">GUILD_MEMBER_UPDATE</span>
+            </div>
+            <div className="p-2.5 border border-slate-200 dark:border-[#241a38] rounded-lg bg-slate-50 dark:bg-[#171026]">
+              <span className="font-mono font-bold text-slate-900 dark:text-[#f4f1fa]">GUILD_MEMBER_REMOVE</span>
             </div>
           </div>
 
           <div className="space-y-2">
-            <label className="font-semibold text-slate-800">Exemple de Payload JSON :</label>
-            <pre className="p-3 bg-slate-900 text-slate-100 rounded-lg font-mono text-[11px] overflow-x-auto">
+            <label className="font-semibold text-slate-800 dark:text-[#d8d0eb]">Payload JSON</label>
+            <pre className="p-3 bg-slate-900 dark:bg-[#08050f] border border-slate-800 dark:border-[#241a38] text-slate-100 dark:text-[#d8d0eb] rounded-lg font-mono text-[11px] overflow-x-auto">
 {`POST /api/discord/webhook
 Headers:
   Content-Type: application/json
@@ -530,188 +490,125 @@ Body:
         </div>
       )}
 
-      {/* TAB 4: Cloud Firestore & Free Deployment Architecture */}
+      {/* TAB 4: Database Status & Backup */}
       {activeTab === 'FIRESTORE' && (
-        <div className="space-y-6">
-          {/* Firestore Status Card */}
-          <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-5 shadow-xs text-xs">
-            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-              <div>
-                <h3 className="font-bold text-slate-900 text-sm flex items-center gap-2">
-                  <Database className="w-4 h-4 text-slate-900" />
-                  État de la Base de Données Cloud Firestore (Plan Spark Gratuit)
-                </h3>
-                <p className="text-slate-500 text-[11px] mt-1">
-                  Transition du stockage local vers Cloud Firestore sans interruption ni frais payants.
-                </p>
-              </div>
-              <div className="flex items-center gap-2">
-                <span
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border font-semibold text-xs ${
-                    firestoreStatus?.isConfigured
-                      ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                      : 'bg-amber-50 text-amber-700 border-amber-200'
-                  }`}
-                >
-                  <span className={`w-2 h-2 rounded-full ${firestoreStatus?.isConfigured ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'}`} />
-                  <span>
-                    {firestoreStatus?.isConfigured
-                      ? 'Firestore Configuré'
-                      : 'Stockage Local (En attente de clés)'}
-                  </span>
-                </span>
+        <div className="bg-white dark:bg-[#100b1a] border border-slate-200 dark:border-[#241a38] rounded-xl p-6 space-y-5 shadow-xs text-xs transition-colors">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+            <h3 className="font-bold text-slate-900 dark:text-[#f4f1fa] text-sm flex items-center gap-2">
+              <Database className="w-4 h-4 text-violet-600 dark:text-violet-400" />
+              Cloud Firestore
+            </h3>
+            <span
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border font-semibold text-xs ${
+                firestoreStatus?.isConfigured
+                  ? 'bg-emerald-50 dark:bg-[#171026] text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-500/30'
+                  : 'bg-amber-50 dark:bg-[#171026] text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-500/30'
+              }`}
+            >
+              <span className={`w-2 h-2 rounded-full ${firestoreStatus?.isConfigured ? 'bg-emerald-500' : 'bg-amber-500'}`} />
+              <span>
+                {firestoreStatus?.isConfigured ? 'Configuré' : 'Stockage local'}
+              </span>
+            </span>
+          </div>
+
+          {/* Storage Details Grid */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="p-3 bg-slate-50 dark:bg-[#171026] border border-slate-200 dark:border-[#241a38] rounded-lg space-y-1">
+              <span className="text-[10px] uppercase font-bold text-slate-400 dark:text-[#7c7296]">Mode</span>
+              <div className="font-bold text-slate-900 dark:text-[#f4f1fa] font-mono flex items-center gap-1.5">
+                <HardDrive className="w-3.5 h-3.5 text-slate-500 dark:text-[#9d93b8]" />
+                <span>{firestoreStatus?.storageMode === 'firestore' ? 'Cloud Firestore' : 'Local'}</span>
               </div>
             </div>
 
-            {/* Storage Details Grid */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg space-y-1">
-                <span className="text-[10px] uppercase font-bold text-slate-400">Mode de Stockage Actif</span>
-                <div className="font-bold text-slate-900 font-mono flex items-center gap-1.5">
-                  <HardDrive className="w-3.5 h-3.5 text-slate-500" />
-                  <span>{firestoreStatus?.storageMode === 'firestore' ? 'Cloud Firestore' : 'Local (/data/pawako_db.json)'}</span>
-                </div>
-              </div>
-
-              <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg space-y-1">
-                <span className="text-[10px] uppercase font-bold text-slate-400">Projet Firebase</span>
-                <div className="font-bold text-slate-900 font-mono truncate">
-                  {firestoreStatus?.projectId || 'Non configuré (FIREBASE_PROJECT_ID)'}
-                </div>
-              </div>
-
-              <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg space-y-1">
-                <span className="text-[10px] uppercase font-bold text-slate-400">Compte de Service</span>
-                <div className="font-bold text-slate-900 font-mono truncate">
-                  {firestoreStatus?.clientEmail || 'Non configuré (FIREBASE_CLIENT_EMAIL)'}
-                </div>
+            <div className="p-3 bg-slate-50 dark:bg-[#171026] border border-slate-200 dark:border-[#241a38] rounded-lg space-y-1">
+              <span className="text-[10px] uppercase font-bold text-slate-400 dark:text-[#7c7296]">Projet Firebase</span>
+              <div className="font-bold text-slate-900 dark:text-[#f4f1fa] font-mono truncate">
+                {firestoreStatus?.projectId || '—'}
               </div>
             </div>
 
-            {/* Error banner if any */}
-            {firestoreStatus?.error && (
-              <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-amber-800 flex items-start gap-2">
-                <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-                <span className="text-[11px] leading-relaxed">{firestoreStatus.error}</span>
+            <div className="p-3 bg-slate-50 dark:bg-[#171026] border border-slate-200 dark:border-[#241a38] rounded-lg space-y-1">
+              <span className="text-[10px] uppercase font-bold text-slate-400 dark:text-[#7c7296]">Compte de Service</span>
+              <div className="font-bold text-slate-900 dark:text-[#f4f1fa] font-mono truncate">
+                {firestoreStatus?.clientEmail || '—'}
               </div>
-            )}
+            </div>
+          </div>
 
-            {/* Migration Controls */}
-            <div className="pt-3 border-t border-slate-100 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
-              <div className="text-[11px] text-slate-500 max-w-lg">
-                Une sauvegarde locale intégrale de sécurité est systématiquement créée avant tout transfert de données vers Firestore.
-              </div>
+          {/* Error banner if any */}
+          {firestoreStatus?.error && (
+            <div className="p-3 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-500/30 rounded-lg text-amber-800 dark:text-amber-200 flex items-start gap-2">
+              <AlertCircle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+              <span className="text-[11px] leading-relaxed">{firestoreStatus.error}</span>
+            </div>
+          )}
 
+          {/* Migration & Backup Controls */}
+          <div className="pt-3 border-t border-slate-100 dark:border-[#241a38] flex items-center justify-end gap-2 flex-wrap">
+            <button
+              onClick={handleCreateBackup}
+              disabled={isBackingUp}
+              className="px-3.5 py-2 bg-slate-100 dark:bg-[#171026] hover:bg-slate-200 dark:hover:bg-[#241a38] text-slate-800 dark:text-[#f4f1fa] border border-transparent dark:border-[#241a38] font-semibold rounded-lg transition-colors flex items-center gap-1.5 text-xs disabled:opacity-50"
+            >
+              <FileCheck className="w-3.5 h-3.5 text-slate-600 dark:text-[#9d93b8]" />
+              <span>{isBackingUp ? 'Sauvegarde...' : 'Sauvegarde locale'}</span>
+            </button>
+
+            {!confirmMigrate ? (
+              <button
+                onClick={() => setConfirmMigrate(true)}
+                disabled={isMigrating || !firestoreStatus?.isConfigured}
+                className="px-3.5 py-2 bg-violet-600 hover:bg-violet-500 text-white font-semibold rounded-lg transition-colors flex items-center gap-1.5 text-xs disabled:opacity-40"
+              >
+                <UploadCloud className="w-3.5 h-3.5" />
+                <span>{isMigrating ? 'Migration...' : 'Transférer vers Firestore'}</span>
+              </button>
+            ) : (
               <div className="flex items-center gap-2">
                 <button
-                  onClick={handleCreateBackup}
-                  disabled={isBackingUp}
-                  className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 font-semibold rounded-lg transition-colors flex items-center gap-1.5 text-xs disabled:opacity-50"
+                  onClick={() => setConfirmMigrate(false)}
+                  className="px-3 py-2 text-xs font-medium text-slate-600 dark:text-[#9d93b8] hover:bg-slate-100 dark:hover:bg-[#171026] rounded-lg"
                 >
-                  <FileCheck className="w-3.5 h-3.5 text-slate-600" />
-                  <span>{isBackingUp ? 'Sauvegarde...' : 'Créer une Sauvegarde Locale'}</span>
+                  Annuler
                 </button>
-
                 <button
                   onClick={handleMigrateFirestore}
-                  disabled={isMigrating || !firestoreStatus?.isConfigured}
-                  title={!firestoreStatus?.isConfigured ? 'Renseignez FIREBASE_PROJECT_ID dans les variables pour activer la migration' : ''}
-                  className="px-3.5 py-2 bg-slate-900 hover:bg-slate-800 text-white font-semibold rounded-lg transition-colors flex items-center gap-1.5 text-xs disabled:opacity-40"
+                  disabled={isMigrating}
+                  className="px-3.5 py-2 bg-violet-600 hover:bg-violet-500 text-white font-semibold rounded-lg transition-colors text-xs"
                 >
-                  <UploadCloud className="w-3.5 h-3.5 text-sky-400" />
-                  <span>{isMigrating ? 'Migration en cours...' : 'Transférer vers Cloud Firestore'}</span>
+                  Confirmer le transfert
                 </button>
               </div>
-            </div>
-
-            {backupPath && (
-              <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-lg text-emerald-800 text-[11px] flex items-center justify-between">
-                <span>Sauvegarde locale enregistrée avec succès : <code>{backupPath}</code></span>
-                <Check className="w-4 h-4 text-emerald-600 shrink-0" />
-              </div>
-            )}
-
-            {migrationResult && (
-              <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-lg text-emerald-800 text-[11px] space-y-1">
-                <div className="font-bold flex items-center gap-1.5">
-                  <Check className="w-4 h-4 text-emerald-600" />
-                  <span>{migrationResult.message}</span>
-                </div>
-                <div className="text-[10px] text-emerald-700 font-mono">
-                  Éléments transférés : {JSON.stringify(migrationResult.details)}
-                </div>
-              </div>
-            )}
-
-            {migrationError && (
-              <div className="p-3 bg-rose-50 border border-rose-200 rounded-lg text-rose-800 text-[11px] flex items-start gap-2">
-                <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
-                <span>{migrationError}</span>
-              </div>
             )}
           </div>
 
-          {/* Architecture & Free Deployment Guide */}
-          <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-4 shadow-xs text-xs">
-            <h3 className="font-bold text-slate-900 text-sm flex items-center gap-2">
-              <Cloud className="w-4 h-4 text-slate-900" />
-              Architecture Déployée (Offres 100% Gratuites)
-            </h3>
+          {backupPath && (
+            <div className="p-3 bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-500/30 rounded-lg text-emerald-800 dark:text-emerald-200 text-[11px] flex items-center justify-between">
+              <span>Sauvegarde créée : <code>{backupPath}</code></span>
+              <Check className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+            </div>
+          )}
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-2">
-                <div className="font-bold text-slate-900 flex items-center gap-1.5 text-xs">
-                  <span className="w-2 h-2 rounded-full bg-amber-500" />
-                  1. Frontend Web : Firebase Hosting (Plan Spark)
-                </div>
-                <p className="text-[11px] text-slate-600 leading-relaxed">
-                  Hébergement statique mondial rapide, SSL automatique, gratuit dans le plan Spark. Fichier <code className="bg-white px-1 py-0.5 rounded border border-slate-200">firebase.json</code> configuré avec réécriture SPA vers <code className="bg-white px-1 py-0.5 rounded border border-slate-200">/index.html</code>.
-                </p>
-                <div className="pt-2 text-[10px] text-slate-500 font-mono">
-                  Commande : <code className="text-slate-800 font-semibold">firebase deploy --only hosting</code>
-                </div>
+          {migrationResult && (
+            <div className="p-3 bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-500/30 rounded-lg text-emerald-800 dark:text-emerald-200 text-[11px] space-y-1">
+              <div className="font-bold flex items-center gap-1.5">
+                <Check className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                <span>{migrationResult.message}</span>
               </div>
-
-              <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-2">
-                <div className="font-bold text-slate-900 flex items-center gap-1.5 text-xs">
-                  <span className="w-2 h-2 rounded-full bg-emerald-500" />
-                  2. Base de Données : Cloud Firestore (Plan Spark)
-                </div>
-                <p className="text-[11px] text-slate-600 leading-relaxed">
-                  Inclus gratuitement : 1 Go de stockage, 50 000 lectures/jour, 20 000 écritures/jour. Règles de sécurité <code className="bg-white px-1 py-0.5 rounded border border-slate-200">firestore.rules</code> restreintes interdisant tout accès direct non-médié par le backend.
-                </p>
-                <div className="pt-2 text-[10px] text-slate-500 font-mono">
-                  Commande : <code className="text-slate-800 font-semibold">firebase deploy --only firestore:rules</code>
-                </div>
-              </div>
-
-              <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-2">
-                <div className="font-bold text-slate-900 flex items-center gap-1.5 text-xs">
-                  <span className="w-2 h-2 rounded-full bg-orange-500" />
-                  3. Backend API : Cloudflare Workers (pawako-api sur workers.dev)
-                </div>
-                <p className="text-[11px] text-slate-600 leading-relaxed">
-                  Worker autonome ultra-rapide sur l'offre gratuite Cloudflare Workers (100 000 requêtes/jour gratuites), sans abonnement ni domaine personnalisé. Utilise l'API REST Firestore sans dépendance gRPC native.
-                </p>
-                <div className="pt-2 text-[10px] text-slate-500 font-mono">
-                  Déploiement : <code className="text-slate-800 font-semibold">npm run deploy:worker</code>
-                </div>
-              </div>
-
-              <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-2">
-                <div className="font-bold text-slate-900 flex items-center gap-1.5 text-xs">
-                  <span className="w-2 h-2 rounded-full bg-indigo-500" />
-                  4. Portes d'Entrée Séparées : /admin/login & /parrain/login
-                </div>
-                <p className="text-[11px] text-slate-600 leading-relaxed">
-                  Parcours de connexion et contrôles d'autorisation hermétiques avec état Discord OAuth2 sécurisé (<code className="text-slate-800 font-semibold">admin_*</code> / <code className="text-slate-800 font-semibold">parrain_*</code>). Les parrains n'ont accès qu'à leurs propres filleuls.
-                </p>
-                <div className="pt-2 text-[10px] text-slate-500 font-mono">
-                  URLs : <code className="text-slate-800 font-semibold">/admin/login</code> & <code className="text-slate-800 font-semibold">/parrain/login</code>
-                </div>
+              <div className="text-[10px] text-emerald-700 dark:text-emerald-300 font-mono">
+                {JSON.stringify(migrationResult.details)}
               </div>
             </div>
-          </div>
+          )}
+
+          {migrationError && (
+            <div className="p-3 bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-500/30 rounded-lg text-rose-800 dark:text-rose-200 text-[11px] flex items-start gap-2">
+              <AlertCircle className="w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0 mt-0.5" />
+              <span>{migrationError}</span>
+            </div>
+          )}
         </div>
       )}
     </div>

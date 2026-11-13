@@ -1,5 +1,7 @@
-import React from 'react';
-import { Shield, UserCheck, Server, ArrowRight, Lock, CheckCircle2, Radio } from 'lucide-react';
+import React, { useState } from 'react';
+import { Shield, UserCheck, ArrowRight } from 'lucide-react';
+import { PawakoLogo } from '../components/PawakoLogo';
+import { ThemeToggle } from '../components/ThemeToggle';
 
 interface Props {
   onNavigateToAdminLogin: () => void;
@@ -10,166 +12,105 @@ export const LandingPortalView: React.FC<Props> = ({
   onNavigateToAdminLogin,
   onNavigateToParrainLogin,
 }) => {
+  const [bannerError, setBannerError] = useState(false);
+
   return (
-    <div className="min-h-screen bg-[#f8fafc] text-slate-900 flex flex-col justify-between font-sans">
-      {/* Top Navbar */}
-      <header className="border-b border-slate-200 bg-white/80 backdrop-blur-xs sticky top-0 z-10">
-        <div className="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <span className="w-8 h-8 bg-slate-900 text-white rounded-lg flex items-center justify-center font-black text-xs tracking-wider shadow-xs">
-              PW
+    <div className="min-h-screen bg-slate-50 dark:bg-[#06040a] text-slate-900 dark:text-[#f4f1fa] flex flex-col justify-between transition-colors">
+      {/* Minimal Top Bar */}
+      <header className="border-b border-slate-200 dark:border-[#201636] bg-white/95 dark:bg-[#08050f]/95 sticky top-0 z-20 transition-colors">
+        <div className="max-w-5xl mx-auto px-6 h-16 flex items-center justify-between gap-4">
+          <div className="flex items-center gap-3 shrink-0">
+            <PawakoLogo size="sm" />
+            <span className="font-extrabold text-slate-900 dark:text-[#f4f1fa] text-base tracking-tight whitespace-nowrap">
+              PAWAKO
             </span>
-            <div>
-              <span className="font-bold text-slate-900 text-base tracking-tight">PAWAKO</span>
-              <span className="text-[11px] text-slate-500 ml-2 font-medium">Referral & Recruitment</span>
-            </div>
           </div>
-          <div className="flex items-center gap-2 text-xs text-slate-600 bg-slate-100/80 px-3 py-1.5 rounded-lg border border-slate-200">
-            <Radio className="w-3.5 h-3.5 text-emerald-600 animate-pulse" />
-            <span className="font-medium">Passerelle Discord Active (4 Serveurs)</span>
-          </div>
+
+          <ThemeToggle compact />
         </div>
       </header>
 
-      {/* Main Content Area */}
-      <main className="flex-1 flex items-center justify-center p-6 py-12">
-        <div className="max-w-4xl w-full space-y-10">
-          {/* Hero Header */}
-          <div className="text-center space-y-3">
-            <div className="inline-flex items-center gap-1.5 px-3 py-1 bg-slate-100 border border-slate-200 text-slate-700 text-xs font-semibold rounded-full">
-              <Lock className="w-3.5 h-3.5 text-slate-500" />
-              <span>Authentification Sécurisée & Rôles Dédiés</span>
-            </div>
-            <h1 className="text-3xl sm:text-4xl font-extrabold text-slate-900 tracking-tight">
-              Portail Officiel PAWAKO
-            </h1>
-            <p className="text-sm sm:text-base text-slate-600 max-w-xl mx-auto leading-relaxed">
-              Sélectionnez votre espace de travail pour vous connecter avec votre compte Discord authentifié.
-            </p>
-          </div>
+      {/* Main Content */}
+      <main className="flex-1 flex items-center justify-center py-10 px-6">
+        <div className="max-w-4xl w-full space-y-8">
+          {/* Official PAWAKO Banner — Intact Original Aspect Ratio */}
+          <section className="rounded-2xl overflow-hidden bg-black border border-slate-200 dark:border-[#291c45] shadow-lg dark:shadow-[0_12px_40px_rgba(124,58,237,0.12)]">
+            {!bannerError ? (
+              <img
+                src="/assets/aistudio/image_20261113_014958_13c36f49.jpg"
+                alt="PAWAKO Referral Manager"
+                referrerPolicy="no-referrer"
+                onError={() => setBannerError(true)}
+                className="w-full h-auto block object-contain bg-black"
+              />
+            ) : (
+              <div className="py-12 px-6 flex flex-col items-center justify-center gap-3 bg-[#06040a]">
+                <PawakoLogo size="xl" />
+                <span className="text-xl font-extrabold tracking-tight text-white">PAWAKO</span>
+              </div>
+            )}
+          </section>
 
-          {/* 2 Distinct Access Doors */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {/* Card 1: Espace Administration & Direction */}
-            <div className="bg-slate-900 text-white border border-slate-800 rounded-2xl p-7 flex flex-col justify-between space-y-6 shadow-xl relative overflow-hidden group hover:border-slate-700 transition-all">
-              <div className="absolute top-0 right-0 w-32 h-32 bg-sky-500/10 rounded-full blur-2xl pointer-events-none" />
-
-              <div className="space-y-4 relative z-1">
-                <div className="flex items-center justify-between">
-                  <div className="w-12 h-12 rounded-xl bg-slate-800 border border-slate-700 flex items-center justify-center text-sky-400">
-                    <Shield className="w-6 h-6" />
-                  </div>
-                  <span className="text-[10px] uppercase font-bold tracking-wider bg-slate-800 text-slate-300 border border-slate-700 px-2.5 py-1 rounded-full">
-                    Accès Direction
-                  </span>
+          {/* Two Dedicated Access Portals */}
+          <section className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {/* Espace Parrain */}
+            <div className="bg-white dark:bg-[#100b1a] border border-slate-200 dark:border-[#241a38] rounded-2xl p-7 flex flex-col justify-between space-y-6 transition-colors hover:border-violet-400/60 dark:hover:border-violet-500/50">
+              <div className="space-y-3">
+                <div className="w-10 h-10 rounded-xl bg-violet-50 dark:bg-violet-500/10 border border-violet-200 dark:border-violet-500/30 flex items-center justify-center text-violet-700 dark:text-violet-300">
+                  <UserCheck className="w-5 h-5" />
                 </div>
-
                 <div>
-                  <h2 className="text-xl font-bold tracking-tight text-white">
+                  <h1 className="text-lg font-bold tracking-tight text-slate-900 dark:text-[#f4f1fa]">
+                    Espace Parrain
+                  </h1>
+                  <p className="text-xs text-slate-500 dark:text-[#9d93b8] mt-1 leading-relaxed">
+                    Accédez à votre lien de parrainage et suivez l'avancement de vos filleuls.
+                  </p>
+                </div>
+              </div>
+
+              <button
+                onClick={onNavigateToParrainLogin}
+                className="w-full flex items-center justify-center gap-2 py-3 px-4 bg-violet-600 hover:bg-violet-500 text-white font-semibold text-xs rounded-xl transition-colors cursor-pointer"
+              >
+                <span>Connexion Parrain</span>
+                <ArrowRight className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Espace Administration */}
+            <div className="bg-white dark:bg-[#100b1a] border border-slate-200 dark:border-[#241a38] rounded-2xl p-7 flex flex-col justify-between space-y-6 transition-colors hover:border-violet-400/60 dark:hover:border-violet-500/50">
+              <div className="space-y-3">
+                <div className="w-10 h-10 rounded-xl bg-slate-100 dark:bg-[#191129] border border-slate-200 dark:border-[#2f224a] flex items-center justify-center text-slate-800 dark:text-violet-300">
+                  <Shield className="w-5 h-5" />
+                </div>
+                <div>
+                  <h2 className="text-lg font-bold tracking-tight text-slate-900 dark:text-[#f4f1fa]">
                     Espace Administration
                   </h2>
-                  <p className="text-xs text-slate-400 mt-1 leading-relaxed">
-                    Réservé à la Direction et aux Responsables Formation.
+                  <p className="text-xs text-slate-500 dark:text-[#9d93b8] mt-1 leading-relaxed">
+                    Accès réservé à la Direction et aux Responsables Formation.
                   </p>
                 </div>
-
-                <ul className="space-y-2 text-xs text-slate-300 pt-2 border-t border-slate-800">
-                  <li className="flex items-start gap-2">
-                    <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
-                    <span>Pilotage central des 4 serveurs Discord</span>
-                  </li>
-                  <li className="flex items-start gap-2">
-                    <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
-                    <span>Parcours séparés VA Chatting & VA Instagram</span>
-                  </li>
-                  <li className="flex items-start gap-2">
-                    <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
-                    <span>Journal d'audit et attributions de parrainage</span>
-                  </li>
-                </ul>
               </div>
 
-              <div className="space-y-2 pt-2 relative z-1">
-                <button
-                  onClick={onNavigateToAdminLogin}
-                  className="w-full flex items-center justify-center gap-2 py-3 px-4 bg-sky-500 hover:bg-sky-400 text-slate-950 font-bold text-xs rounded-xl transition-all shadow-md active:scale-[0.99]"
-                >
-                  <span>Accéder à l'Administration</span>
-                  <ArrowRight className="w-4 h-4" />
-                </button>
-                <div className="text-[10px] text-center text-slate-500 font-mono">
-                  URL : /admin/login
-                </div>
-              </div>
+              <button
+                onClick={onNavigateToAdminLogin}
+                className="w-full flex items-center justify-center gap-2 py-3 px-4 bg-slate-900 hover:bg-slate-800 dark:bg-[#1c1330] dark:hover:bg-[#271b42] dark:border dark:border-violet-500/40 text-white font-semibold text-xs rounded-xl transition-colors cursor-pointer"
+              >
+                <span>Connexion Administration</span>
+                <ArrowRight className="w-4 h-4" />
+              </button>
             </div>
-
-            {/* Card 2: Espace Parrain */}
-            <div className="bg-white text-slate-900 border border-slate-200 rounded-2xl p-7 flex flex-col justify-between space-y-6 shadow-sm relative overflow-hidden group hover:border-slate-300 hover:shadow-md transition-all">
-              <div className="space-y-4">
-                <div className="flex items-center justify-between">
-                  <div className="w-12 h-12 rounded-xl bg-emerald-50 border border-emerald-100 flex items-center justify-center text-emerald-600">
-                    <UserCheck className="w-6 h-6" />
-                  </div>
-                  <span className="text-[10px] uppercase font-bold tracking-wider bg-emerald-50 text-emerald-700 border border-emerald-200 px-2.5 py-1 rounded-full">
-                    Parrains Agréés
-                  </span>
-                </div>
-
-                <div>
-                  <h2 className="text-xl font-bold tracking-tight text-slate-900">
-                    Espace Parrain
-                  </h2>
-                  <p className="text-xs text-slate-500 mt-1 leading-relaxed">
-                    Portail officiel dédié aux parrains autorisés PAWAKO.
-                  </p>
-                </div>
-
-                <ul className="space-y-2 text-xs text-slate-600 pt-2 border-t border-slate-100">
-                  <li className="flex items-start gap-2">
-                    <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
-                    <span>Lien d'invitation Discord unique et personnalisé</span>
-                  </li>
-                  <li className="flex items-start gap-2">
-                    <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
-                    <span>Suivi transparent de vos filleuls et de leur avancement</span>
-                  </li>
-                  <li className="flex items-start gap-2">
-                    <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
-                    <span>Statistiques personnelles et taux de conversion</span>
-                  </li>
-                </ul>
-              </div>
-
-              <div className="space-y-2 pt-2">
-                <button
-                  onClick={onNavigateToParrainLogin}
-                  className="w-full flex items-center justify-center gap-2 py-3 px-4 bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs rounded-xl transition-all shadow-md active:scale-[0.99]"
-                >
-                  <span>Accéder à l'Espace Parrain</span>
-                  <ArrowRight className="w-4 h-4" />
-                </button>
-                <div className="text-[10px] text-center text-slate-400 font-mono">
-                  URL : /parrain/login
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Privacy & Security Footnote */}
-          <div className="p-4 bg-slate-100/60 border border-slate-200/80 rounded-xl text-center text-xs text-slate-500 space-y-1">
-            <p className="font-semibold text-slate-700">
-              Sécurité des données et confidentialité garantie
-            </p>
-            <p className="text-[11px] leading-relaxed max-w-2xl mx-auto">
-              Aucune donnée sensible n'est exposée sans authentification. Les accès parrain sont strictement isolés de leurs pairs. Toutes les opérations de validation sont vérifiées côté serveur.
-            </p>
-          </div>
+          </section>
         </div>
       </main>
 
-      {/* Footer */}
-      <footer className="border-t border-slate-200 bg-white p-4 text-center text-[11px] text-slate-400">
-        PAWAKO Referral & Recruitment Manager — Système sécurisé connecté à Discord
+      {/* Clean Minimal Footer */}
+      <footer className="border-t border-slate-200 dark:border-[#1c132e] bg-white dark:bg-[#08050f] px-6 py-4">
+        <div className="max-w-4xl mx-auto text-center text-[11px] text-slate-500 dark:text-[#7c7296]">
+          PAWAKO Referral Manager
+        </div>
       </footer>
     </div>
   );

@@ -28,6 +28,8 @@ import { CandidateDrawer } from './components/CandidateDrawer';
 import { StatusChangeModal } from './components/StatusChangeModal';
 import { ReassignReferrerModal } from './components/ReassignReferrerModal';
 import { NewCandidateModal } from './components/NewCandidateModal';
+import { PawakoLogo } from './components/PawakoLogo';
+import { ThemeToggle } from './components/ThemeToggle';
 import { LogOut, UserCheck, Shield } from 'lucide-react';
 
 export default function App() {
@@ -321,61 +323,57 @@ export default function App() {
     }
 
     return (
-      <div className="min-h-screen bg-[#f8fafc] text-slate-900 flex flex-col font-sans">
+      <div className="min-h-screen bg-slate-50 dark:bg-[#06040a] text-slate-900 dark:text-[#f4f1fa] flex flex-col font-sans antialiased transition-colors">
         {/* Parrain Portal Top Bar */}
-        <header className="border-b border-slate-200 bg-white/90 backdrop-blur-xs sticky top-0 z-10 px-6 py-3.5 flex items-center justify-between shadow-xs">
-          <div className="flex items-center gap-3">
-            <span className="w-8 h-8 bg-slate-900 text-white rounded-lg flex items-center justify-center font-black text-xs tracking-wider shadow-xs">
-              PW
-            </span>
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="font-bold text-slate-900 text-sm tracking-tight">PAWAKO</span>
-                <span className="text-[10px] uppercase font-bold tracking-wider bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded-full">
-                  Espace Parrain
-                </span>
-              </div>
-              <p className="text-[11px] text-slate-500 font-medium">
-                Suivi de vos filleuls et lien d'invitation Discord unique
-              </p>
+        <header className="border-b border-slate-200 dark:border-[#1e1530] bg-white/95 dark:bg-[#090611]/95 sticky top-0 z-10 px-6 h-16 flex items-center justify-between transition-colors">
+          <div className="flex items-center gap-3 min-w-0">
+            <PawakoLogo size="sm" />
+            <div className="flex items-center gap-2 text-sm tracking-tight min-w-0">
+              <span className="font-bold text-slate-900 dark:text-[#f4f1fa] whitespace-nowrap">PAWAKO</span>
+              <span className="text-slate-300 dark:text-[#3b2d5c]" aria-hidden="true">·</span>
+              <span className="text-xs font-semibold text-violet-700 dark:text-violet-300 whitespace-nowrap">
+                Espace Parrain
+              </span>
             </div>
           </div>
 
-          <div className="flex items-center gap-4">
-            {/* If user is admin/responsable visiting parrain portal, allow them to return to admin */}
+          <div className="flex items-center gap-3 shrink-0">
             {(currentUser.role === 'ADMINISTRATEUR' || currentUser.role === 'RESPONSABLE') && (
               <button
                 onClick={() => navigate('/admin')}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-sky-700 bg-sky-50 border border-sky-200 rounded-lg hover:bg-sky-100 transition-colors"
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-violet-700 dark:text-violet-200 bg-violet-50 dark:bg-[#191129] border border-violet-200 dark:border-violet-500/35 rounded-lg hover:bg-violet-100 dark:hover:bg-[#231839] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
               >
                 <Shield className="w-3.5 h-3.5" />
-                <span>Retour Administration</span>
+                <span>Administration</span>
               </button>
             )}
 
-            <div className="flex items-center gap-2.5">
+            <ThemeToggle compact />
+
+            <div className="flex items-center gap-2.5 pl-1">
               {currentUser.avatar ? (
                 <img
                   src={currentUser.avatar}
                   alt={currentUser.displayName}
-                  className="w-8 h-8 rounded-full border border-slate-200 object-cover"
+                  referrerPolicy="no-referrer"
+                  className="w-8 h-8 rounded-full border border-slate-200 dark:border-[#2e224a] object-cover"
                 />
               ) : (
-                <div className="w-8 h-8 rounded-full bg-slate-900 text-white flex items-center justify-center font-bold text-xs">
+                <div className="w-8 h-8 rounded-full bg-violet-600 text-white flex items-center justify-center font-bold text-xs">
                   {currentUser.displayName.charAt(0)}
                 </div>
               )}
               <div className="text-left hidden sm:block">
-                <div className="text-xs font-semibold text-slate-900 truncate">
+                <div className="text-xs font-semibold text-slate-900 dark:text-[#f4f1fa] truncate max-w-[140px]">
                   {currentUser.displayName}
                 </div>
-                <div className="text-[10px] text-emerald-600 font-medium">Parrain Officiel</div>
+                <div className="text-[10px] text-violet-600 dark:text-violet-300 font-medium">Parrain</div>
               </div>
             </div>
 
             <button
               onClick={() => handleLogout('/parrain/login')}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-lg border border-slate-200 transition-colors"
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-600 dark:text-[#c4badb] hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-[#191129] rounded-lg border border-slate-200 dark:border-[#241a38] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
             >
               <LogOut className="w-3.5 h-3.5" />
               <span className="hidden sm:inline">Déconnexion</span>
@@ -384,7 +382,7 @@ export default function App() {
         </header>
 
         {/* Parrain Main Content */}
-        <main className="flex-1 p-6 max-w-7xl mx-auto w-full">
+        <main className="flex-1 p-6 max-w-6xl mx-auto w-full">
           <ParrainPortalView
             currentUserRole={currentUser.role}
             onSelectCandidate={id => setSelectedCandidateId(id)}
@@ -406,13 +404,11 @@ export default function App() {
   }
 
   // 5. Route : /admin (Espace Administration Protégé)
-  // If not logged in, redirect to /admin/login
   if (!currentUser) {
     navigate('/admin/login');
     return null;
   }
 
-  // If a Parrain tries to access /admin, forbid and redirect to /parrain
   if (currentUser.role === 'PARRAIN') {
     navigate('/parrain');
     return null;
@@ -422,56 +418,30 @@ export default function App() {
   const getHeaderInfo = () => {
     switch (activeTab) {
       case 'dashboard':
-        return {
-          title: 'Tableau de Bord & Vue Générale',
-          subtitle: 'Métriques globales réelles, conversion vers la production et classement des parrains',
-        };
+        return { title: 'Tableau de bord' };
       case 'candidates':
-        return {
-          title: 'Gestion Centralisée des Candidats',
-          subtitle: 'Suivi des candidatures, fiches individuelles et transitions de statuts par parcours',
-        };
+        return { title: 'Candidats & Recrutement' };
       case 'referrers':
-        return {
-          title: 'Gestion des Parrains & Invitations',
-          subtitle: "Génération de liens Discord uniques, compteurs d'utilisation et conversion",
-        };
+        return { title: 'Gestion des Parrains' };
       case 'parrain_portal':
-        return {
-          title: 'Mon Espace Personnel de Parrainage',
-          subtitle: 'Votre lien Discord unique, vos statistiques et la progression de vos filleuls',
-        };
+        return { title: 'Mon Espace Parrain' };
       case 'discord_sync':
-        return {
-          title: 'Serveurs Discord & Passerelle Bot JARVIS',
-          subtitle:
-            'Monitoring des 4 serveurs (Recrutement, Formation, Production Chatting, Production Instagram) et synchronisation JARVIS',
-        };
+        return { title: 'Serveurs Discord & Bot' };
       case 'users':
-        return {
-          title: 'Utilisateurs & Gestion des Rôles',
-          subtitle: 'Administration des accès, permissions RBAC et affectation des droits',
-        };
+        return { title: 'Utilisateurs & Rôles' };
       case 'audit_logs':
-        return {
-          title: "Journal d'Audit & Traçabilité",
-          subtitle: "Historique chronologique inaltérable des actions, statuts et réattributions",
-        };
+        return { title: "Journal d'Audit" };
       case 'oauth_settings':
-        return {
-          title: 'Configuration Discord & Déploiement Gratuit',
-          subtitle:
-            "Paramètres OAuth2, correspondances des 4 serveurs Discord et base de données Cloud Firestore (Spark)",
-        };
+        return { title: 'Configuration' };
       default:
         return { title: 'PAWAKO Referral Manager' };
     }
   };
 
-  const { title, subtitle } = getHeaderInfo();
+  const { title } = getHeaderInfo();
 
   return (
-    <div className="flex h-screen bg-[#f8fafc] text-slate-900 overflow-hidden font-sans antialiased">
+    <div className="flex h-screen bg-slate-50 dark:bg-[#06040a] text-slate-900 dark:text-[#f4f1fa] overflow-hidden font-sans antialiased transition-colors">
       {/* Sidebar Navigation */}
       <Sidebar
         activeTab={activeTab}
@@ -493,7 +463,6 @@ export default function App() {
         {/* Top Navbar */}
         <Navbar
           title={title}
-          subtitle={subtitle}
           currentUser={currentUser}
           onOpenDiscordLogin={() => handleOpenDiscordLogin('admin')}
           onLogout={() => handleLogout('/admin/login')}

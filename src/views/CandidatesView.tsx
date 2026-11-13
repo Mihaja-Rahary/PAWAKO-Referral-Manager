@@ -1,9 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { Candidate, CandidateStatus, AdminStatus, OperationalStatus, DiscordServerType, UserRole, VAType } from '../types';
+import { Candidate, CandidateStatus, DiscordServerType, UserRole, VAType } from '../types';
 import { api } from '../api';
 import {
   getStatusBadgeClasses,
-  getStatusLabel,
   getAdminStatusLabel,
   getOperationalStatusLabel,
   getServerLabel,
@@ -13,7 +12,6 @@ import {
 } from '../utils/statusUtils';
 import {
   Search,
-  Filter,
   Plus,
   Copy,
   Check,
@@ -112,11 +110,11 @@ export const CandidatesView: React.FC<Props> = ({
       {/* Notices Banners */}
       <div className="space-y-2">
         {isAdmin && attributionStatus !== 'UNCERTAIN' && uncertainCount > 0 && (
-          <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl flex items-center justify-between text-xs text-amber-900">
+          <div className="p-3 bg-amber-50 dark:bg-[#171026] border border-amber-200 dark:border-amber-500/30 rounded-xl flex items-center justify-between gap-3 text-xs text-amber-900 dark:text-amber-200">
             <div className="flex items-center gap-2">
-              <ShieldAlert className="w-4 h-4 text-amber-600 shrink-0" />
+              <ShieldAlert className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
               <span>
-                <strong>{uncertainCount} candidat(s)</strong> nécessitent une vérification de parrainage (invitation directe ou code non confirmé).
+                <strong className="tabular-nums">{uncertainCount} candidat(s)</strong> sans attribution confirmée.
               </span>
             </div>
             <button
@@ -124,19 +122,19 @@ export const CandidatesView: React.FC<Props> = ({
                 setAttributionStatus('UNCERTAIN');
                 setPage(1);
               }}
-              className="px-2.5 py-1 bg-amber-200/80 hover:bg-amber-200 text-amber-950 font-semibold rounded-md transition-colors"
+              className="px-2.5 py-1 bg-amber-200/80 dark:bg-amber-500/20 hover:bg-amber-200 dark:hover:bg-amber-500/30 text-amber-950 dark:text-amber-100 font-semibold rounded-md transition-colors whitespace-nowrap shrink-0"
             >
-              Filtrer les incertains
+              Filtrer
             </button>
           </div>
         )}
 
         {isResponsableOrAdmin && !anomalyOnly && anomalyCount > 0 && (
-          <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl flex items-center justify-between text-xs text-rose-900">
+          <div className="p-3 bg-rose-50 dark:bg-[#171026] border border-rose-200 dark:border-rose-500/30 rounded-xl flex items-center justify-between gap-3 text-xs text-rose-900 dark:text-rose-200">
             <div className="flex items-center gap-2">
-              <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+              <AlertTriangle className="w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0" />
               <span>
-                <strong>{anomalyCount} anomalie(s)</strong> détectée(s) : rôles Discord contradictoires ou incompatibilité de parcours.
+                <strong className="tabular-nums">{anomalyCount} anomalie(s)</strong> Discord détectée(s).
               </span>
             </div>
             <button
@@ -144,29 +142,29 @@ export const CandidatesView: React.FC<Props> = ({
                 setAnomalyOnly(true);
                 setPage(1);
               }}
-              className="px-2.5 py-1 bg-rose-200/80 hover:bg-rose-200 text-rose-950 font-semibold rounded-md transition-colors"
+              className="px-2.5 py-1 bg-rose-200/80 dark:bg-rose-500/20 hover:bg-rose-200 dark:hover:bg-rose-500/30 text-rose-950 dark:text-rose-100 font-semibold rounded-md transition-colors whitespace-nowrap shrink-0"
             >
-              Afficher les anomalies
+              Afficher
             </button>
           </div>
         )}
       </div>
 
       {/* Control Bar: Filters & Actions */}
-      <div className="bg-white border border-slate-200 rounded-xl p-4 space-y-3 shadow-xs">
+      <div className="bg-white dark:bg-[#100b1a] border border-slate-200 dark:border-[#241a38] rounded-xl p-4 space-y-3 shadow-xs transition-colors">
         <div className="flex flex-col md:flex-row gap-3 items-stretch md:items-center justify-between">
           {/* Search */}
           <div className="relative flex-1">
-            <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+            <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 dark:text-[#7c7296]" />
             <input
               type="text"
-              placeholder="Rechercher par pseudo, Discord ID ou nom du parrain..."
+              placeholder="Rechercher par pseudo, Discord ID ou parrain..."
               value={search}
               onChange={e => {
                 setSearch(e.target.value);
                 setPage(1);
               }}
-              className="w-full pl-9 pr-3 py-2 text-xs border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-900/10 focus:border-slate-900 text-slate-900 bg-slate-50/50"
+              className="w-full pl-9 pr-3 py-2 text-xs border border-slate-200 dark:border-[#241a38] rounded-lg focus:outline-none focus:ring-2 focus:ring-violet-500/20 focus:border-violet-500 text-slate-900 dark:text-[#f4f1fa] bg-slate-50/50 dark:bg-[#08050f] placeholder:text-slate-400 dark:placeholder:text-[#7c7296]"
             />
           </div>
 
@@ -175,7 +173,7 @@ export const CandidatesView: React.FC<Props> = ({
             {isResponsableOrAdmin && (
               <button
                 onClick={onOpenNewCandidateModal}
-                className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 rounded-lg transition-colors shadow-xs"
+                className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-white bg-violet-600 hover:bg-violet-500 rounded-lg transition-colors shadow-xs shadow-violet-600/20 whitespace-nowrap"
               >
                 <Plus className="w-4 h-4" />
                 <span>Nouveau Candidat</span>
@@ -188,7 +186,7 @@ export const CandidatesView: React.FC<Props> = ({
         <div className="grid grid-cols-2 md:grid-cols-5 gap-2.5 pt-1 text-xs">
           {/* VA Type Filter */}
           <div>
-            <label className="block text-[11px] font-medium text-slate-500 mb-1">
+            <label className="block text-[11px] font-medium text-slate-500 dark:text-[#9d93b8] mb-1">
               Activité
             </label>
             <select
@@ -197,17 +195,17 @@ export const CandidatesView: React.FC<Props> = ({
                 setVaType(e.target.value as any);
                 setPage(1);
               }}
-              className="w-full p-2 border border-slate-200 rounded-lg text-slate-800 bg-white focus:outline-none focus:ring-1 focus:ring-slate-900"
+              className="w-full p-2 border border-slate-200 dark:border-[#241a38] rounded-lg text-slate-800 dark:text-[#f4f1fa] bg-white dark:bg-[#171026] focus:outline-none focus:ring-1 focus:ring-violet-500"
             >
-              <option value="ALL">Toutes activités (Chatting & Insta)</option>
-              <option value="CHATTEUR">VA Chatting (Avec Formation)</option>
-              <option value="INSTAGRAM">VA Instagram (Parcours Direct)</option>
+              <option value="ALL">Toutes activités</option>
+              <option value="CHATTEUR">VA Chatting</option>
+              <option value="INSTAGRAM">VA Instagram</option>
             </select>
           </div>
 
           {/* Status Filter */}
           <div>
-            <label className="block text-[11px] font-medium text-slate-500 mb-1">
+            <label className="block text-[11px] font-medium text-slate-500 dark:text-[#9d93b8] mb-1">
               Statut
             </label>
             <select
@@ -216,14 +214,14 @@ export const CandidatesView: React.FC<Props> = ({
                 setStatus(e.target.value as any);
                 setPage(1);
               }}
-              className="w-full p-2 border border-slate-200 rounded-lg text-slate-800 bg-white focus:outline-none focus:ring-1 focus:ring-slate-900"
+              className="w-full p-2 border border-slate-200 dark:border-[#241a38] rounded-lg text-slate-800 dark:text-[#f4f1fa] bg-white dark:bg-[#171026] focus:outline-none focus:ring-1 focus:ring-violet-500"
             >
               <option value="ALL">Tous les statuts</option>
-              <option value="EN_ATTENTE">En attente (Recrutement)</option>
+              <option value="EN_ATTENTE">En attente</option>
               <option value="ACCEPTE">Accepté</option>
-              <option value="EN_FORMATION">En formation (Chatting)</option>
-              <option value="EN_SIMULATION">En simulation (Chatting)</option>
-              <option value="VALIDE">Validé (Chatting)</option>
+              <option value="EN_FORMATION">En formation</option>
+              <option value="EN_SIMULATION">En simulation</option>
+              <option value="VALIDE">Validé</option>
               <option value="EN_PRODUCTION">En production</option>
               <option value="REFUSE">Refusé</option>
               <option value="ABANDONNE">Abandonné</option>
@@ -232,7 +230,7 @@ export const CandidatesView: React.FC<Props> = ({
 
           {/* Server Filter */}
           <div>
-            <label className="block text-[11px] font-medium text-slate-500 mb-1">
+            <label className="block text-[11px] font-medium text-slate-500 dark:text-[#9d93b8] mb-1">
               Serveur Discord
             </label>
             <select
@@ -241,21 +239,21 @@ export const CandidatesView: React.FC<Props> = ({
                 setServer(e.target.value);
                 setPage(1);
               }}
-              className="w-full p-2 border border-slate-200 rounded-lg text-slate-800 bg-white focus:outline-none focus:ring-1 focus:ring-slate-900"
+              className="w-full p-2 border border-slate-200 dark:border-[#241a38] rounded-lg text-slate-800 dark:text-[#f4f1fa] bg-white dark:bg-[#171026] focus:outline-none focus:ring-1 focus:ring-violet-500"
             >
-              <option value="ALL">Tous les 4 serveurs</option>
-              <option value="RECRUTEMENT">Serveur Recrutement</option>
-              <option value="FORMATION">Serveur Formation (Chatting)</option>
-              <option value="PRODUCTION_CHATTING">Serveur Prod VA Chatting</option>
-              <option value="PRODUCTION_INSTAGRAM">Serveur Prod VA Instagram</option>
+              <option value="ALL">Tous les serveurs</option>
+              <option value="RECRUTEMENT">Recrutement</option>
+              <option value="FORMATION">Formation</option>
+              <option value="PRODUCTION_CHATTING">Prod VA Chatting</option>
+              <option value="PRODUCTION_INSTAGRAM">Prod VA Instagram</option>
               <option value="AUCUN">Hors serveur</option>
             </select>
           </div>
 
           {/* Attribution Status Filter */}
           <div>
-            <label className="block text-[11px] font-medium text-slate-500 mb-1">
-              Attribution Parrain
+            <label className="block text-[11px] font-medium text-slate-500 dark:text-[#9d93b8] mb-1">
+              Attribution
             </label>
             <select
               value={attributionStatus}
@@ -263,19 +261,19 @@ export const CandidatesView: React.FC<Props> = ({
                 setAttributionStatus(e.target.value);
                 setPage(1);
               }}
-              className="w-full p-2 border border-slate-200 rounded-lg text-slate-800 bg-white focus:outline-none focus:ring-1 focus:ring-slate-900"
+              className="w-full p-2 border border-slate-200 dark:border-[#241a38] rounded-lg text-slate-800 dark:text-[#f4f1fa] bg-white dark:bg-[#171026] focus:outline-none focus:ring-1 focus:ring-violet-500"
             >
               <option value="ALL">Toutes attributions</option>
-              <option value="CONFIRMED">Confirmé (Lien valide)</option>
-              <option value="UNCERTAIN">Incertain (À vérifier)</option>
-              <option value="MANUAL_REASSIGNED">Réassigné manuellement</option>
+              <option value="CONFIRMED">Confirmé</option>
+              <option value="UNCERTAIN">Incertain</option>
+              <option value="MANUAL_REASSIGNED">Réassigné</option>
             </select>
           </div>
 
           {/* Anomaly Toggle */}
           <div>
-            <label className="block text-[11px] font-medium text-slate-500 mb-1">
-              Anomalies Discord
+            <label className="block text-[11px] font-medium text-slate-500 dark:text-[#9d93b8] mb-1">
+              Anomalies
             </label>
             <button
               type="button"
@@ -285,44 +283,44 @@ export const CandidatesView: React.FC<Props> = ({
               }}
               className={`w-full p-2 border rounded-lg text-xs font-semibold transition-colors flex items-center justify-center gap-1.5 ${
                 anomalyOnly
-                  ? 'bg-rose-600 text-white border-rose-600'
-                  : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                  ? 'bg-violet-600 text-white border-violet-600'
+                  : 'bg-white dark:bg-[#171026] text-slate-700 dark:text-[#d8d0eb] border-slate-200 dark:border-[#241a38] hover:bg-slate-50 dark:hover:bg-[#1f1633]'
               }`}
             >
               <AlertTriangle className="w-3.5 h-3.5" />
-              <span>{anomalyOnly ? 'Anomalies seules' : 'Toutes situations'}</span>
+              <span>{anomalyOnly ? 'Anomalies seules' : 'Toutes'}</span>
             </button>
           </div>
         </div>
       </div>
 
       {/* Candidates Table */}
-      <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-xs">
+      <div className="bg-white dark:bg-[#100b1a] border border-slate-200 dark:border-[#241a38] rounded-xl overflow-hidden shadow-xs transition-colors">
         <div className="overflow-x-auto">
           <table className="w-full text-left text-xs">
-            <thead className="bg-slate-50/70 text-slate-500 uppercase tracking-wider text-[11px] border-b border-slate-200">
+            <thead className="bg-slate-50/70 dark:bg-[#171026] text-slate-500 dark:text-[#9d93b8] uppercase tracking-wider text-[11px] border-b border-slate-200 dark:border-[#241a38]">
               <tr>
                 <th className="py-3 px-4 font-semibold">Candidat</th>
                 <th className="py-3 px-4 font-semibold">Activité</th>
-                <th className="py-3 px-4 font-semibold">Statut Administratif & Opérationnel</th>
+                <th className="py-3 px-4 font-semibold">Statut</th>
                 <th className="py-3 px-4 font-semibold">Serveur Discord</th>
-                <th className="py-3 px-4 font-semibold">Parrain Rattaché</th>
+                <th className="py-3 px-4 font-semibold">Parrain</th>
                 <th className="py-3 px-4 font-semibold">Arrivée</th>
                 {!isParrainOnly && <th className="py-3 px-4 font-semibold text-right">Actions</th>}
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100 text-slate-700">
+            <tbody className="divide-y divide-slate-100 dark:divide-[#241a38]/80 text-slate-700 dark:text-[#d8d0eb]">
               {isLoading ? (
                 <tr>
-                  <td colSpan={7} className="py-12 text-center text-slate-400 text-xs">
-                    <RefreshCw className="w-5 h-5 animate-spin mx-auto mb-2 text-slate-400" />
+                  <td colSpan={7} className="py-12 text-center text-slate-400 dark:text-[#9d93b8] text-xs">
+                    <RefreshCw className="w-5 h-5 animate-spin mx-auto mb-2 text-violet-500" />
                     Chargement des dossiers candidats...
                   </td>
                 </tr>
               ) : candidates.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="py-12 text-center text-slate-400 text-xs">
-                    Aucun dossier candidat ne correspond aux filtres sélectionnés.
+                  <td colSpan={7} className="py-12 text-center text-slate-400 dark:text-[#9d93b8] text-xs">
+                    Aucun dossier candidat trouvé.
                   </td>
                 </tr>
               ) : (
@@ -334,8 +332,8 @@ export const CandidatesView: React.FC<Props> = ({
                     <tr
                       key={candidate.id}
                       onClick={() => onSelectCandidate(candidate.id)}
-                      className={`hover:bg-slate-50/70 transition-colors cursor-pointer ${
-                        candidate.hasAnomaly ? 'bg-rose-50/20' : ''
+                      className={`hover:bg-slate-50/70 dark:hover:bg-[#171026] transition-colors cursor-pointer ${
+                        candidate.hasAnomaly ? 'bg-rose-50/20 dark:bg-rose-950/15' : ''
                       }`}
                     >
                       {/* Identity */}
@@ -346,41 +344,42 @@ export const CandidatesView: React.FC<Props> = ({
                               <img
                                 src={candidate.avatar}
                                 alt={candidate.displayName}
-                                className="w-8 h-8 rounded-full object-cover border border-slate-200"
+                                referrerPolicy="no-referrer"
+                                className="w-8 h-8 rounded-full object-cover border border-slate-200 dark:border-[#2e2249]"
                               />
                             ) : (
-                              <div className="w-8 h-8 rounded-full bg-slate-200 flex items-center justify-center font-bold text-slate-700 text-xs">
+                              <div className="w-8 h-8 rounded-full bg-slate-200 dark:bg-[#1f1633] flex items-center justify-center font-bold text-slate-700 dark:text-[#f4f1fa] text-xs border border-transparent dark:border-[#2e2249]">
                                 {candidate.displayName.charAt(0).toUpperCase()}
                               </div>
                             )}
                             <span
-                              className={`absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full border-2 border-white ${badge.dot}`}
+                              className={`absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full border-2 border-white dark:border-[#100b1a] ${badge.dot}`}
                             />
                           </div>
 
                           <div className="min-w-0">
                             <div className="flex items-center gap-1.5 flex-wrap">
-                              <span className="font-semibold text-slate-900 truncate">
+                              <span className="font-semibold text-slate-900 dark:text-[#f4f1fa] truncate">
                                 {candidate.displayName}
                               </span>
                               {candidate.hasAnomaly && (
                                 <span
                                   title={candidate.anomalyReason || 'Anomalie détectée'}
-                                  className="px-1.5 py-0.2 text-[10px] bg-rose-100 text-rose-800 rounded font-semibold flex items-center gap-0.5"
+                                  className="px-1.5 py-0.5 text-[10px] bg-rose-100 dark:bg-rose-500/20 text-rose-800 dark:text-rose-300 rounded font-semibold flex items-center gap-0.5"
                                 >
-                                  <AlertTriangle className="w-3 h-3 text-rose-600" /> Anomalie
+                                  <AlertTriangle className="w-3 h-3 text-rose-600 dark:text-rose-400" /> Anomalie
                                 </span>
                               )}
                             </div>
-                            <div className="flex items-center gap-1 text-[11px] text-slate-400 font-mono">
-                              <span>ID: {candidate.discordUserId}</span>
+                            <div className="flex items-center gap-1 text-[11px] text-slate-400 dark:text-[#7c7296] font-mono">
+                              <span>{candidate.discordUserId}</span>
                               <button
                                 onClick={e => handleCopyId(e, candidate.discordUserId)}
-                                title="Copier le Discord ID"
-                                className="p-0.5 hover:text-slate-700 rounded transition-colors"
+                                title="Copier l'identifiant Discord"
+                                className="p-0.5 hover:text-slate-700 dark:hover:text-[#f4f1fa] rounded transition-colors"
                               >
                                 {copiedId === candidate.discordUserId ? (
-                                  <Check className="w-3 h-3 text-emerald-600" />
+                                  <Check className="w-3 h-3 text-emerald-600 dark:text-emerald-400" />
                                 ) : (
                                   <Copy className="w-3 h-3" />
                                 )}
@@ -392,7 +391,7 @@ export const CandidatesView: React.FC<Props> = ({
 
                       {/* VA Type */}
                       <td className="py-3 px-4">
-                        <span className="font-semibold text-slate-800">
+                        <span className="font-semibold text-slate-800 dark:text-[#f4f1fa]">
                           {getVaTypeLabel(candidate.vaType)}
                         </span>
                       </td>
@@ -402,21 +401,21 @@ export const CandidatesView: React.FC<Props> = ({
                         <div className="space-y-1">
                           <div className="flex items-center gap-1.5">
                             <span className={`w-2 h-2 rounded-full ${badge.dot}`} />
-                            <span className="font-bold text-slate-900 text-xs">
+                            <span className="font-bold text-slate-900 dark:text-[#f4f1fa] text-xs">
                               {getOperationalStatusLabel(candidate.operationalStatus)}
                             </span>
                           </div>
-                          <div className="text-[11px] text-slate-500">
-                            Admin : <strong className="text-slate-700">{getAdminStatusLabel(candidate.adminStatus)}</strong>
+                          <div className="text-[11px] text-slate-500 dark:text-[#9d93b8]">
+                            Admin : <strong className="text-slate-700 dark:text-[#d8d0eb]">{getAdminStatusLabel(candidate.adminStatus)}</strong>
                           </div>
                         </div>
                       </td>
 
                       {/* Server */}
-                      <td className="py-3 px-4 text-slate-700">
+                      <td className="py-3 px-4 text-slate-700 dark:text-[#d8d0eb]">
                         <div className="flex items-center gap-1.5 text-xs">
-                          <Server className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                          <span className="truncate max-w-[140px]">
+                          <Server className="w-3.5 h-3.5 text-slate-400 dark:text-[#7c7296] shrink-0" />
+                          <span className="truncate max-w-[150px]">
                             {getServerLabel(candidate.currentServer)}
                           </span>
                         </div>
@@ -425,7 +424,7 @@ export const CandidatesView: React.FC<Props> = ({
                       {/* Referrer */}
                       <td className="py-3 px-4">
                         <div>
-                          <div className="font-medium text-slate-900 truncate max-w-[130px]">
+                          <div className="font-medium text-slate-900 dark:text-[#f4f1fa] truncate max-w-[130px]">
                             {candidate.referrerName || 'Non assigné'}
                           </div>
                           <div className={`text-[10px] ${attrInfo.text}`}>
@@ -435,7 +434,7 @@ export const CandidatesView: React.FC<Props> = ({
                       </td>
 
                       {/* Arrival Date */}
-                      <td className="py-3 px-4 text-slate-500 font-mono text-[11px]">
+                      <td className="py-3 px-4 text-slate-500 dark:text-[#9d93b8] font-mono text-[11px]">
                         {formatDate(candidate.arrivalDate)}
                       </td>
 
@@ -446,7 +445,7 @@ export const CandidatesView: React.FC<Props> = ({
                             <button
                               onClick={() => onOpenStatusModal(candidate)}
                               title="Modifier le statut"
-                              className="p-1.5 text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-md transition-colors"
+                              className="p-1.5 text-slate-600 dark:text-[#9d93b8] hover:text-slate-900 dark:hover:text-[#f4f1fa] hover:bg-slate-100 dark:hover:bg-[#1f1633] rounded-md transition-colors"
                             >
                               <Edit3 className="w-3.5 h-3.5" />
                             </button>
@@ -455,7 +454,7 @@ export const CandidatesView: React.FC<Props> = ({
                               <button
                                 onClick={() => onOpenReassignModal(candidate)}
                                 title="Réassigner le parrain"
-                                className="p-1.5 text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-md transition-colors"
+                                className="p-1.5 text-slate-600 dark:text-[#9d93b8] hover:text-slate-900 dark:hover:text-[#f4f1fa] hover:bg-slate-100 dark:hover:bg-[#1f1633] rounded-md transition-colors"
                               >
                                 <UserPlus className="w-3.5 h-3.5" />
                               </button>
@@ -472,26 +471,27 @@ export const CandidatesView: React.FC<Props> = ({
         </div>
 
         {/* Pagination Bar */}
-        <div className="px-4 py-3 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500">
+        <div className="px-4 py-3 border-t border-slate-100 dark:border-[#241a38] flex items-center justify-between text-xs text-slate-500 dark:text-[#9d93b8]">
           <div>
-            Affichage de <strong>{candidates.length}</strong> sur <strong>{total}</strong> dossier(s)
+            Affichage de <strong className="font-mono tabular-nums text-slate-800 dark:text-[#f4f1fa]">{candidates.length}</strong> sur{' '}
+            <strong className="font-mono tabular-nums text-slate-800 dark:text-[#f4f1fa]">{total}</strong> dossier(s)
           </div>
 
           <div className="flex items-center gap-2">
             <button
               onClick={() => setPage(Math.max(1, page - 1))}
               disabled={page <= 1 || isLoading}
-              className="p-1.5 border border-slate-200 rounded-md hover:bg-slate-50 disabled:opacity-40 transition-colors"
+              className="p-1.5 border border-slate-200 dark:border-[#241a38] rounded-md hover:bg-slate-50 dark:hover:bg-[#171026] disabled:opacity-40 transition-colors"
             >
               <ChevronLeft className="w-4 h-4" />
             </button>
-            <span className="font-mono text-slate-700">
+            <span className="font-mono tabular-nums text-slate-700 dark:text-[#d8d0eb]">
               Page {page} / {totalPages}
             </span>
             <button
               onClick={() => setPage(Math.min(totalPages, page + 1))}
               disabled={page >= totalPages || isLoading}
-              className="p-1.5 border border-slate-200 rounded-md hover:bg-slate-50 disabled:opacity-40 transition-colors"
+              className="p-1.5 border border-slate-200 dark:border-[#241a38] rounded-md hover:bg-slate-50 dark:hover:bg-[#171026] disabled:opacity-40 transition-colors"
             >
               <ChevronRight className="w-4 h-4" />
             </button>

@@ -1,8 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Referrer, UserRole } from '../types';
 import { api } from '../api';
-import { formatDate } from '../utils/statusUtils';
-import { Award, Plus, Copy, Check, ExternalLink, RefreshCw, Users, TrendingUp, AlertCircle } from 'lucide-react';
+import { Award, Plus, Copy, Check, AlertCircle } from 'lucide-react';
 
 interface Props {
   currentUserRole: UserRole;
@@ -12,7 +11,6 @@ interface Props {
 
 export const ReferrersView: React.FC<Props> = ({
   currentUserRole,
-  onSelectReferrerFilter,
   refreshTrigger,
 }) => {
   const [referrers, setReferrers] = useState<Referrer[]>([]);
@@ -81,19 +79,14 @@ export const ReferrersView: React.FC<Props> = ({
   return (
     <div className="space-y-6">
       {/* Header bar */}
-      <div className="flex flex-col sm:flex-row gap-3 items-start sm:items-center justify-between bg-white border border-slate-200 rounded-xl p-5">
-        <div>
-          <h2 className="text-base font-bold text-slate-900 tracking-tight">
-            Gestion des Parrains & Liens d'invitation Discord
-          </h2>
-          <p className="text-xs text-slate-500 mt-0.5">
-            Chaque parrain dispose de son propre lien d'invitation unique rattaché à son Discord User ID sur le Serveur Recrutement.
-          </p>
-        </div>
+      <div className="flex flex-col sm:flex-row gap-3 items-start sm:items-center justify-between bg-white dark:bg-[#100b1a] border border-slate-200 dark:border-[#241a38] rounded-xl p-5 transition-colors">
+        <h2 className="text-base font-bold text-slate-900 dark:text-[#f4f1fa] tracking-tight">
+          Parrains & Liens Discord
+        </h2>
         {isAdmin && (
           <button
             onClick={() => setIsModalOpen(true)}
-            className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 rounded-lg transition-colors shadow-xs"
+            className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-white bg-violet-600 hover:bg-violet-500 rounded-lg transition-colors shadow-xs shadow-violet-600/20 whitespace-nowrap shrink-0"
           >
             <Plus className="w-4 h-4" />
             <span>Nouveau Parrain</span>
@@ -102,128 +95,142 @@ export const ReferrersView: React.FC<Props> = ({
       </div>
 
       {/* Referrers Grid / Cards */}
-      {referrers.length === 0 ? (
-        <div className="bg-white border border-slate-200 rounded-xl p-12 text-center space-y-3">
-          <div className="w-10 h-10 rounded-full bg-slate-100 text-slate-500 flex items-center justify-center mx-auto">
+      {isLoading && referrers.length === 0 ? (
+        <div className="bg-white dark:bg-[#100b1a] border border-slate-200 dark:border-[#241a38] rounded-xl p-12 text-center text-xs text-slate-500 dark:text-[#9d93b8]">
+          Chargement des parrains...
+        </div>
+      ) : referrers.length === 0 ? (
+        <div className="bg-white dark:bg-[#100b1a] border border-slate-200 dark:border-[#241a38] rounded-xl p-12 text-center space-y-2 transition-colors">
+          <div className="w-10 h-10 rounded-full bg-slate-100 dark:bg-[#171026] text-slate-500 dark:text-[#9d93b8] flex items-center justify-center mx-auto border border-transparent dark:border-[#241a38]">
             <Award className="w-5 h-5" />
           </div>
-          <h3 className="font-bold text-slate-900 text-sm">Aucun parrain configuré</h3>
-          <p className="text-xs text-slate-500 max-w-md mx-auto">
-            Aucun parrain n'est enregistré pour le moment. Cliquez sur « Nouveau Parrain » pour associer un Discord User ID réel et générer son lien personnel d'invitation.
-          </p>
+          <h3 className="font-bold text-slate-900 dark:text-[#f4f1fa] text-sm">Aucun parrain configuré</h3>
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {referrers.map(ref => {
+            const conv = ref.conversionRate || 0;
             return (
               <div
                 key={ref.id}
-                className="bg-white border border-slate-200 rounded-xl p-5 space-y-4 hover:border-slate-300 transition-colors shadow-xs flex flex-col justify-between"
+                className="bg-white dark:bg-[#100b1a] border border-slate-200 dark:border-[#241a38] rounded-xl p-5 space-y-4 hover:border-violet-300 dark:hover:border-violet-500/40 transition-colors shadow-xs flex flex-col justify-between"
               >
-              <div className="space-y-3">
-                <div className="flex items-start justify-between">
-                  <div className="min-w-0">
-                    <h3 className="font-bold text-slate-900 text-sm truncate">
-                      {ref.discordDisplayName || ref.discordUsername}
-                    </h3>
-                    <div className="text-[11px] text-slate-400 font-mono mt-0.5">
-                      Discord ID: {ref.discordUserId}
+                <div className="space-y-3">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <h3 className="font-bold text-slate-900 dark:text-[#f4f1fa] text-sm truncate">
+                        {ref.discordDisplayName || ref.discordUsername}
+                      </h3>
+                      <div className="text-[11px] text-slate-400 dark:text-[#7c7296] font-mono mt-0.5">
+                        {ref.discordUserId}
+                      </div>
                     </div>
-                  </div>
-                  <span className="text-[10px] bg-slate-100 text-slate-700 px-2 py-0.5 rounded font-mono font-medium">
-                    {ref.inviteCode}
-                  </span>
-                </div>
-
-                {ref.notes && (
-                  <p className="text-xs text-slate-500 italic bg-slate-50 p-2 rounded border border-slate-100">
-                    {ref.notes}
-                  </p>
-                )}
-
-                {/* Metrics Breakdown */}
-                <div className="grid grid-cols-3 gap-2 text-center text-xs">
-                  <div className="p-2 bg-slate-50 border border-slate-200 rounded-lg">
-                    <div className="text-[10px] text-slate-500 uppercase">Filleuls</div>
-                    <div className="font-bold text-slate-900 text-base mt-0.5">
-                      {ref.totalFilleuls || 0}
-                    </div>
-                  </div>
-                  <div className="p-2 bg-emerald-50/50 border border-emerald-200 rounded-lg">
-                    <div className="text-[10px] text-emerald-700 uppercase">En Prod</div>
-                    <div className="font-bold text-emerald-900 text-base mt-0.5">
-                      {ref.enProduction || 0}
-                    </div>
-                  </div>
-                  <div className="p-2 bg-blue-50/50 border border-blue-200 rounded-lg">
-                    <div className="text-[10px] text-blue-700 uppercase">Conv.</div>
-                    <div className="font-bold text-blue-900 text-base mt-0.5">
-                      {ref.conversionRate || 0}%
-                    </div>
-                  </div>
-                </div>
-
-                {/* Detail funnel counters */}
-                <div className="text-[11px] text-slate-500 space-y-1 pt-1 border-t border-slate-100">
-                  <div className="flex justify-between">
-                    <span>En attente :</span>
-                    <span className="font-medium text-slate-700">{ref.enAttente || 0}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span>En formation / simulation :</span>
-                    <span className="font-medium text-amber-700">
-                      {(ref.enFormation || 0) + (ref.enSimulation || 0)}
+                    <span className="text-[10px] bg-slate-100 dark:bg-[#171026] text-slate-700 dark:text-[#d8d0eb] px-2 py-0.5 rounded font-mono font-medium border border-slate-200 dark:border-[#241a38] shrink-0">
+                      {ref.inviteCode}
                     </span>
                   </div>
-                  <div className="flex justify-between">
-                    <span>Refusés :</span>
-                    <span className="font-medium text-rose-700">{ref.refuses || 0}</span>
+
+                  {ref.notes && (
+                    <p className="text-xs text-slate-500 dark:text-[#9d93b8] italic bg-slate-50 dark:bg-[#171026] p-2 rounded border border-slate-100 dark:border-[#241a38]">
+                      {ref.notes}
+                    </p>
+                  )}
+
+                  {/* Metrics Breakdown */}
+                  <div className="grid grid-cols-3 gap-2 text-center text-xs">
+                    <div className="p-2 bg-slate-50 dark:bg-[#171026] border border-slate-200 dark:border-[#241a38] rounded-lg">
+                      <div className="text-[10px] text-slate-500 dark:text-[#9d93b8] uppercase">Filleuls</div>
+                      <div className="font-bold font-mono tabular-nums text-slate-900 dark:text-[#f4f1fa] text-base mt-0.5">
+                        {ref.totalFilleuls || 0}
+                      </div>
+                    </div>
+                    <div className="p-2 bg-slate-50 dark:bg-[#171026] border border-slate-200 dark:border-[#241a38] rounded-lg">
+                      <div className="text-[10px] text-emerald-700 dark:text-emerald-400 uppercase">En Prod</div>
+                      <div className="font-bold font-mono tabular-nums text-emerald-700 dark:text-emerald-300 text-base mt-0.5">
+                        {ref.enProduction || 0}
+                      </div>
+                    </div>
+                    <div className="p-2 bg-violet-50/70 dark:bg-violet-950/35 border border-violet-200 dark:border-violet-500/30 rounded-lg">
+                      <div className="text-[10px] text-violet-700 dark:text-violet-300 uppercase">Conv.</div>
+                      <div className="font-bold font-mono tabular-nums text-violet-700 dark:text-violet-200 text-base mt-0.5">
+                        {conv}%
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Visual Conversion Progress Track */}
+                  <div className="h-1.5 w-full rounded-full bg-slate-100 dark:bg-[#1a122b] overflow-hidden">
+                    <div
+                      className="h-full bg-violet-600 dark:bg-violet-500 rounded-full transition-all"
+                      style={{ width: `${Math.min(100, conv)}%` }}
+                    />
+                  </div>
+
+                  {/* Detail funnel counters */}
+                  <div className="text-[11px] text-slate-500 dark:text-[#9d93b8] space-y-1 pt-1 border-t border-slate-100 dark:border-[#241a38]">
+                    <div className="flex justify-between">
+                      <span>En attente</span>
+                      <span className="font-medium font-mono tabular-nums text-slate-700 dark:text-[#d8d0eb]">
+                        {ref.enAttente || 0}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>En formation / simulation</span>
+                      <span className="font-medium font-mono tabular-nums text-purple-700 dark:text-purple-300">
+                        {(ref.enFormation || 0) + (ref.enSimulation || 0)}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>Refusés</span>
+                      <span className="font-medium font-mono tabular-nums text-rose-700 dark:text-rose-400">
+                        {ref.refuses || 0}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Personal Invite Link copy bar */}
+                <div className="pt-3 border-t border-slate-100 dark:border-[#241a38] space-y-2">
+                  <div className="text-[11px] font-semibold text-slate-600 dark:text-[#d8d0eb]">
+                    Lien d'invitation Discord
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <input
+                      type="text"
+                      readOnly
+                      value={ref.inviteUrl}
+                      className="flex-1 text-[11px] font-mono p-1.5 border border-slate-200 dark:border-[#241a38] rounded bg-slate-50 dark:bg-[#08050f] text-slate-700 dark:text-[#d8d0eb] select-all focus:outline-none"
+                    />
+                    <button
+                      onClick={() => handleCopyLink(ref.inviteCode, ref.inviteUrl)}
+                      title="Copier le lien Discord"
+                      className="p-1.5 text-xs font-medium text-slate-700 dark:text-[#f4f1fa] bg-slate-100 dark:bg-[#171026] hover:bg-slate-200 dark:hover:bg-[#241a38] border border-transparent dark:border-[#241a38] rounded transition-colors flex items-center gap-1"
+                    >
+                      {copiedCode === ref.inviteCode ? (
+                        <Check className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                      ) : (
+                        <Copy className="w-3.5 h-3.5" />
+                      )}
+                    </button>
                   </div>
                 </div>
               </div>
-
-              {/* Personal Invite Link copy bar */}
-              <div className="pt-3 border-t border-slate-100 space-y-2">
-                <div className="text-[11px] font-semibold text-slate-600">
-                  Lien personnel d'invitation Discord :
-                </div>
-                <div className="flex items-center gap-1.5">
-                  <input
-                    type="text"
-                    readOnly
-                    value={ref.inviteUrl}
-                    className="flex-1 text-[11px] font-mono p-1.5 border border-slate-200 rounded bg-slate-50 text-slate-700 select-all"
-                  />
-                  <button
-                    onClick={() => handleCopyLink(ref.inviteCode, ref.inviteUrl)}
-                    title="Copier le lien Discord"
-                    className="p-1.5 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded transition-colors flex items-center gap-1"
-                  >
-                    {copiedCode === ref.inviteCode ? (
-                      <Check className="w-3.5 h-3.5 text-emerald-600" />
-                    ) : (
-                      <Copy className="w-3.5 h-3.5" />
-                    )}
-                  </button>
-                </div>
-              </div>
-            </div>
-          );
-        })}
-      </div>
+            );
+          })}
+        </div>
       )}
 
       {/* New Referrer Modal */}
       {isModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs">
-          <div className="bg-white rounded-xl shadow-xl border border-slate-200 w-full max-w-md overflow-hidden">
-            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 bg-slate-50/50">
-              <h3 className="font-semibold text-slate-900 text-sm">
-                Enregistrer un Nouveau Parrain
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 dark:bg-black/80 backdrop-blur-xs">
+          <div className="bg-white dark:bg-[#100b1a] rounded-xl shadow-xl border border-slate-200 dark:border-[#241a38] w-full max-w-md overflow-hidden">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 dark:border-[#241a38] bg-slate-50/50 dark:bg-[#171026]">
+              <h3 className="font-semibold text-slate-900 dark:text-[#f4f1fa] text-sm">
+                Nouveau Parrain
               </h3>
               <button
                 onClick={() => setIsModalOpen(false)}
-                className="text-slate-400 hover:text-slate-600 text-sm"
+                className="text-slate-400 hover:text-slate-600 dark:hover:text-[#f4f1fa] text-sm"
               >
                 ✕
               </button>
@@ -231,15 +238,15 @@ export const ReferrersView: React.FC<Props> = ({
 
             <form onSubmit={handleCreateReferrer} className="p-6 space-y-4">
               {error && (
-                <div className="p-3 text-xs bg-rose-50 border border-rose-200 text-rose-700 rounded-lg flex items-start gap-2">
-                  <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                <div className="p-3 text-xs bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-500/30 text-rose-700 dark:text-rose-300 rounded-lg flex items-start gap-2">
+                  <AlertCircle className="w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0 mt-0.5" />
                   <span>{error}</span>
                 </div>
               )}
 
               <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  Discord User ID du Parrain <span className="text-rose-600">*</span>
+                <label className="block text-xs font-semibold text-slate-700 dark:text-[#d8d0eb] mb-1">
+                  Discord User ID <span className="text-rose-600 dark:text-rose-400">*</span>
                 </label>
                 <input
                   type="text"
@@ -247,51 +254,51 @@ export const ReferrersView: React.FC<Props> = ({
                   placeholder="Ex: 100000000000000005"
                   value={discordUserId}
                   onChange={e => setDiscordUserId(e.target.value)}
-                  className="w-full text-xs p-2.5 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-900/10 focus:border-slate-900 text-slate-900 font-mono"
+                  className="w-full text-xs p-2.5 border border-slate-200 dark:border-[#241a38] rounded-lg focus:outline-none focus:ring-2 focus:ring-violet-500/20 focus:border-violet-500 text-slate-900 dark:text-[#f4f1fa] bg-white dark:bg-[#08050f] font-mono placeholder:text-slate-400 dark:placeholder:text-[#7c7296]"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  Code d'invitation personnalisé (Optionnel)
+                <label className="block text-xs font-semibold text-slate-700 dark:text-[#d8d0eb] mb-1">
+                  Code d'invitation (Optionnel)
                 </label>
                 <input
                   type="text"
-                  placeholder="Ex: PWK-ALEX-99 (généré automatiquement sinon)"
+                  placeholder="Ex: PWK-ALEX-99"
                   value={customCode}
                   onChange={e => setCustomCode(e.target.value)}
-                  className="w-full text-xs p-2.5 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-900/10 focus:border-slate-900 text-slate-900 uppercase font-mono"
+                  className="w-full text-xs p-2.5 border border-slate-200 dark:border-[#241a38] rounded-lg focus:outline-none focus:ring-2 focus:ring-violet-500/20 focus:border-violet-500 text-slate-900 dark:text-[#f4f1fa] bg-white dark:bg-[#08050f] uppercase font-mono placeholder:text-slate-400 dark:placeholder:text-[#7c7296]"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  Note ou pôle (Optionnel)
+                <label className="block text-xs font-semibold text-slate-700 dark:text-[#d8d0eb] mb-1">
+                  Note (Optionnel)
                 </label>
                 <input
                   type="text"
-                  placeholder="Ex: Parrain référent VA Instagram"
+                  placeholder="Ex: Pôle Instagram"
                   value={notes}
                   onChange={e => setNotes(e.target.value)}
-                  className="w-full text-xs p-2.5 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-900/10 focus:border-slate-900 text-slate-900"
+                  className="w-full text-xs p-2.5 border border-slate-200 dark:border-[#241a38] rounded-lg focus:outline-none focus:ring-2 focus:ring-violet-500/20 focus:border-violet-500 text-slate-900 dark:text-[#f4f1fa] bg-white dark:bg-[#08050f] placeholder:text-slate-400 dark:placeholder:text-[#7c7296]"
                 />
               </div>
 
-              <div className="flex items-center justify-end gap-2 pt-4 border-t border-slate-100">
+              <div className="flex items-center justify-end gap-2 pt-4 border-t border-slate-100 dark:border-[#241a38]">
                 <button
                   type="button"
                   onClick={() => setIsModalOpen(false)}
                   disabled={isSubmitting}
-                  className="px-4 py-2 text-xs font-medium text-slate-700 hover:bg-slate-100 rounded-lg transition-colors"
+                  className="px-4 py-2 text-xs font-medium text-slate-700 dark:text-[#d8d0eb] hover:bg-slate-100 dark:hover:bg-[#171026] rounded-lg transition-colors"
                 >
                   Annuler
                 </button>
                 <button
                   type="submit"
                   disabled={isSubmitting}
-                  className="px-4 py-2 text-xs font-medium text-white bg-slate-900 hover:bg-slate-800 rounded-lg transition-colors shadow-xs"
+                  className="px-4 py-2 text-xs font-semibold text-white bg-violet-600 hover:bg-violet-500 rounded-lg transition-colors shadow-xs"
                 >
-                  {isSubmitting ? 'Génération...' : 'Créer et générer le lien'}
+                  {isSubmitting ? 'Génération...' : 'Créer le parrain'}
                 </button>
               </div>
             </form>

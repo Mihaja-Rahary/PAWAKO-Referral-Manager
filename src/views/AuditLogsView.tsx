@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { AuditLog } from '../types';
 import { api } from '../api';
 import { formatDate } from '../utils/statusUtils';
-import { FileText, RefreshCw, Shield, Search } from 'lucide-react';
+import { RefreshCw, Search } from 'lucide-react';
 
 interface Props {
   refreshTrigger: number;
@@ -42,74 +42,69 @@ export const AuditLogsView: React.FC<Props> = ({ refreshTrigger }) => {
   return (
     <div className="space-y-4">
       {/* Header */}
-      <div className="bg-white border border-slate-200 rounded-xl p-5 flex flex-col sm:flex-row gap-3 items-start sm:items-center justify-between">
-        <div>
-          <h2 className="text-base font-bold text-slate-900 tracking-tight">
-            Journal d'Audit & Traçabilité Complète
-          </h2>
-          <p className="text-xs text-slate-500 mt-0.5">
-            Historique inaltérable de toutes les transitions de statut, réattributions de parrain, et événements du bot JARVIS.
-          </p>
-        </div>
+      <div className="bg-white dark:bg-[#100b1a] border border-slate-200 dark:border-[#241a38] rounded-xl p-5 flex flex-col sm:flex-row gap-3 items-start sm:items-center justify-between transition-colors">
+        <h2 className="text-base font-bold text-slate-900 dark:text-[#f4f1fa] tracking-tight">
+          Journal d'Audit
+        </h2>
 
         <div className="relative w-full sm:w-64">
-          <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+          <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 dark:text-[#7c7296]" />
           <input
             type="text"
             placeholder="Filtrer les logs..."
             value={search}
             onChange={e => setSearch(e.target.value)}
-            className="w-full pl-8 pr-3 py-1.5 text-xs border border-slate-200 rounded-lg text-slate-900 focus:outline-none focus:ring-1 focus:ring-slate-900"
+            className="w-full pl-8 pr-3 py-1.5 text-xs border border-slate-200 dark:border-[#241a38] rounded-lg text-slate-900 dark:text-[#f4f1fa] bg-white dark:bg-[#08050f] placeholder:text-slate-400 dark:placeholder:text-[#7c7296] focus:outline-none focus:ring-1 focus:ring-violet-500"
           />
         </div>
       </div>
 
       {/* Logs Table */}
-      <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-xs">
+      <div className="bg-white dark:bg-[#100b1a] border border-slate-200 dark:border-[#241a38] rounded-xl overflow-hidden shadow-xs transition-colors">
         <div className="overflow-x-auto">
           <table className="w-full text-left text-xs">
-            <thead className="bg-slate-50 text-slate-500 uppercase tracking-wider text-[11px] border-b border-slate-200">
+            <thead className="bg-slate-50 dark:bg-[#171026] text-slate-500 dark:text-[#9d93b8] uppercase tracking-wider text-[11px] border-b border-slate-200 dark:border-[#241a38]">
               <tr>
                 <th className="py-3 px-4 font-semibold">Date & Heure</th>
                 <th className="py-3 px-4 font-semibold">Action</th>
-                <th className="py-3 px-4 font-semibold">Auteur / Acteur</th>
+                <th className="py-3 px-4 font-semibold">Acteur</th>
                 <th className="py-3 px-4 font-semibold">Cible</th>
-                <th className="py-3 px-4 font-semibold">Détails & Justification</th>
+                <th className="py-3 px-4 font-semibold">Détails</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100 text-slate-700">
+            <tbody className="divide-y divide-slate-100 dark:divide-[#241a38]/80 text-slate-700 dark:text-[#d8d0eb]">
               {isLoading ? (
                 <tr>
-                  <td colSpan={5} className="py-8 text-center text-slate-400">
-                    <RefreshCw className="w-5 h-5 animate-spin mx-auto mb-1 text-slate-300" />
-                    Chargement du journal d'audit...
+                  <td colSpan={5} className="py-8 text-center text-slate-400 dark:text-[#9d93b8]">
+                    <RefreshCw className="w-5 h-5 animate-spin mx-auto mb-1 text-violet-500" />
+                    Chargement du journal...
                   </td>
                 </tr>
               ) : filteredLogs.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="py-8 text-center text-slate-400">
-                    Aucun événement d'audit enregistré.
+                  <td colSpan={5} className="py-8 text-center text-slate-400 dark:text-[#9d93b8]">
+                    Aucun événement enregistré.
                   </td>
                 </tr>
               ) : (
                 filteredLogs.map(log => (
-                  <tr key={log.id} className="hover:bg-slate-50/50 transition-colors">
-                    <td className="py-3 px-4 font-mono text-[11px] text-slate-500 whitespace-nowrap">
+                  <tr key={log.id} className="hover:bg-slate-50/50 dark:hover:bg-[#171026] transition-colors">
+                    <td className="py-3 px-4 font-mono text-[11px] text-slate-500 dark:text-[#9d93b8] whitespace-nowrap">
                       {formatDate(log.timestamp)}
                     </td>
                     <td className="py-3 px-4">
-                      <span className="font-mono text-[11px] font-semibold bg-slate-100 text-slate-800 px-2 py-0.5 rounded border border-slate-200">
+                      <span className="font-mono text-[11px] font-semibold bg-slate-100 dark:bg-[#171026] text-slate-800 dark:text-violet-200 px-2 py-0.5 rounded border border-slate-200 dark:border-[#241a38]">
                         {log.action}
                       </span>
                     </td>
                     <td className="py-3 px-4">
-                      <span className="font-medium text-slate-900">{log.actorName}</span>
+                      <span className="font-medium text-slate-900 dark:text-[#f4f1fa]">{log.actorName}</span>
                     </td>
-                    <td className="py-3 px-4 font-mono text-[11px] text-slate-600">
+                    <td className="py-3 px-4 font-mono text-[11px] text-slate-600 dark:text-[#9d93b8]">
                       {log.targetType}: {log.targetId}
                     </td>
-                    <td className="py-3 px-4 text-slate-600 max-w-md">
-                      <div className="text-[11px] font-mono bg-slate-50 p-1.5 rounded border border-slate-100 break-words">
+                    <td className="py-3 px-4 text-slate-600 dark:text-[#d8d0eb] max-w-md">
+                      <div className="text-[11px] font-mono bg-slate-50 dark:bg-[#08050f] p-1.5 rounded border border-slate-100 dark:border-[#241a38] break-words">
                         {JSON.stringify(log.details)}
                       </div>
                     </td>
