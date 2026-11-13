@@ -101,15 +101,50 @@ function getValidatedSessionSecret(env: Env): string {
   return secret;
 }
 
+const OFFICIAL_PRODUCTION_DISCORD_REDIRECT_URI =
+  'https://referral-manager.pawako-saas.workers.dev/auth/callback';
+
 function getDiscordRedirectUri(env: Env, requestUrl: string): string {
+  const isDevelopment = env.ENVIRONMENT === 'development' || env.NODE_ENV === 'development';
   const configured = (env.DISCORD_REDIRECT_URI || '').trim();
+
+  if (!isDevelopment) {
+    const candidate = configured || `${new URL(requestUrl).origin}/auth/callback`;
+    let parsed: URL;
+    try {
+      parsed = new URL(candidate);
+    } catch {
+      throw new Error('Configuration serveur invalide : DISCORD_REDIRECT_URI invalide.');
+    }
+
+    if (parsed.protocol !== 'https:') {
+      throw new Error(
+        'Configuration serveur invalide : DISCORD_REDIRECT_URI doit impérativement utiliser HTTPS en production.'
+      );
+    }
+
+    if (candidate !== OFFICIAL_PRODUCTION_DISCORD_REDIRECT_URI) {
+      throw new Error(
+        `Configuration serveur invalide : DISCORD_REDIRECT_URI doit correspondre exactement à ${OFFICIAL_PRODUCTION_DISCORD_REDIRECT_URI}.`
+      );
+    }
+
+    return OFFICIAL_PRODUCTION_DISCORD_REDIRECT_URI;
+  }
+
   if (configured) {
-    const parsed = new URL(configured);
+    let parsed: URL;
+    try {
+      parsed = new URL(configured);
+    } catch {
+      throw new Error('Configuration serveur invalide : DISCORD_REDIRECT_URI invalide.');
+    }
     if (parsed.protocol === 'https:' || parsed.protocol === 'http:') {
       return configured;
     }
     throw new Error('Configuration serveur invalide : DISCORD_REDIRECT_URI invalide.');
   }
+
   const workerOrigin = new URL(requestUrl).origin;
   return `${workerOrigin}/auth/callback`;
 }
