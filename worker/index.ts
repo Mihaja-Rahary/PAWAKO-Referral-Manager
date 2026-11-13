@@ -640,6 +640,7 @@ const handleAuthCallback = async (c: any) => {
     `, 403);
   }
 
+  let processingStage = 'DISCORD_CONFIG';
   try {
     const redirectUri = getDiscordRedirectUri(c.env, c.req.url);
     const clientId = c.env.DISCORD_CLIENT_ID?.trim() || '';
@@ -649,6 +650,7 @@ const handleAuthCallback = async (c: any) => {
       throw new Error('Configuration Discord OAuth2 incomplète.');
     }
 
+    processingStage = 'DISCORD_TOKEN_EXCHANGE';
     // Échange du code contre le token Discord
     const tokenRes = await fetch('https://discord.com/api/v10/oauth2/token', {
       method: 'POST',
@@ -663,18 +665,38 @@ const handleAuthCallback = async (c: any) => {
     });
 
     if (!tokenRes.ok) {
-      throw new Error('Échec de l échange de token Discord');
+      let discordErrCode = 'token_exchange_failed';
+      try {
+        const errBody = (await tokenRes.json()) as { error?: string };
+        if (errBody?.error && typeof errBody.error === 'string') {
+          discordErrCode = errBody.error.slice(0, 64);
+        }
+      } catch {
+        // Ignorer si réponse non JSON
+      }
+      const tokenErr: any = new Error(
+        `Échec de l'échange de token Discord (HTTP ${tokenRes.status}, ${discordErrCode})`
+      );
+      tokenErr.httpStatus = tokenRes.status;
+      tokenErr.errorCode = discordErrCode;
+      throw tokenErr;
     }
 
     const tokenData = (await tokenRes.json()) as { access_token: string };
 
+    processingStage = 'DISCORD_USER_PROFILE';
     // Récupération du profil utilisateur Discord réel
     const userRes = await fetch('https://discord.com/api/v10/users/@me', {
       headers: { Authorization: `Bearer ${tokenData.access_token}` },
     });
 
     if (!userRes.ok) {
-      throw new Error('Impossible de récupérer le profil Discord de l utilisateur');
+      const profileErr: any = new Error(
+        `Impossible de récupérer le profil Discord de l'utilisateur (HTTP ${userRes.status})`
+      );
+      profileErr.httpStatus = userRes.status;
+      profileErr.errorCode = `DISCORD_HTTP_${userRes.status}`;
+      throw profileErr;
     }
 
     const discordUser = (await userRes.json()) as {
@@ -688,6 +710,7 @@ const handleAuthCallback = async (c: any) => {
 
     // CONTRÔLE STRICT DES ACCÈS PAR PORTAIL
     if (portal === 'admin') {
+      processingStage = 'FIRESTORE_ADMIN_ACCESS_CHECK';
       const authCheck = await repo.canAccessAdmin(discordUser.id, configuredAdminId);
       if (!authCheck.authorized) {
         return c.html(`
@@ -723,6 +746,7 @@ const handleAuthCallback = async (c: any) => {
       }
     } else {
       // Espace Parrain
+      processingStage = 'FIRESTORE_PARRAIN_ACCESS_CHECK';
       const authCheck = await repo.canAccessParrain(discordUser.id);
       if (!authCheck.authorized) {
         return c.html(`
@@ -763,6 +787,7 @@ const handleAuthCallback = async (c: any) => {
       ? `https://cdn.discordapp.com/avatars/${discordUser.id}/${discordUser.avatar}.png`
       : null;
 
+    processingStage = 'FIRESTORE_USER_UPSERT';
     const user = await repo.upsertUser(
       {
         id: discordUser.id,
@@ -773,6 +798,7 @@ const handleAuthCallback = async (c: any) => {
       configuredAdminId
     );
 
+    processingStage = 'SESSION_SIGNING';
     // Génération du jeton de session cryptographique (exige SESSION_SECRET validé)
     const signedToken = await createSignedSessionToken(user.id, user.role, signingSecret);
 
@@ -819,11 +845,30 @@ const handleAuthCallback = async (c: any) => {
       }
     );
   } catch (err: any) {
+    const isFsErr = err instanceof FirestoreRestError;
+    const safeCategory = isFsErr ? err.category : processingStage;
+    const safeOperation = isFsErr ? err.operation : null;
+    const safeStatus = isFsErr ? (err.status ?? null) : (typeof err?.httpStatus === 'number' ? err.httpStatus : null);
+    const safeCode = isFsErr
+      ? (err.firestoreStatus || err.category)
+      : (typeof err?.errorCode === 'string' ? err.errorCode : null);
+
+    const safeDiagnosticLine = [
+      safeCategory,
+      safeOperation,
+      safeStatus ? `HTTP ${safeStatus}` : null,
+      safeCode ? `(${safeCode})` : null,
+    ]
+      .filter(Boolean)
+      .join(' · ');
+
     console.error('[OAuth2 Callback][PROCESSING_ERROR]', {
       portal,
-      isFirestoreError: err instanceof FirestoreRestError,
-      firestoreCategory: err instanceof FirestoreRestError ? err.category : null,
-      status: err instanceof FirestoreRestError ? err.status ?? null : null,
+      processingStage,
+      isFirestoreError: isFsErr,
+      firestoreCategory: isFsErr ? err.category : null,
+      status: safeStatus,
+      errorCode: safeCode,
       message: err?.message || 'Erreur inconnue lors du callback Discord',
     });
     return c.html(`
@@ -834,6 +879,7 @@ const handleAuthCallback = async (c: any) => {
           <div style="background: white; padding: 32px; border-radius: 12px; border: 1px solid #fecaca; text-align: center; max-width: 480px;">
             <h3 style="color: #991b1b; margin-top: 0;">Erreur d authentification</h3>
             <p style="color: #7f1d1d; font-size: 14px;">Une erreur est survenue lors de l authentification Discord. Veuillez réessayer.</p>
+            <p style="color: #991b1b; font-size: 11px; margin-top: 8px; font-family: monospace;">Diagnostic : ${escapeHtml(safeDiagnosticLine)}</p>
             <button id="btn-close" style="background: #e11d48; color: white; border: none; padding: 8px 18px; border-radius: 6px; cursor: pointer; font-size: 13px;">Fermer</button>
           </div>
           <script>
