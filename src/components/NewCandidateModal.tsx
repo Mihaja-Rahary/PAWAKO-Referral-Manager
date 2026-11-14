@@ -21,8 +21,6 @@ export const NewCandidateModal: React.FC<Props> = ({
   onClose,
   onSubmit,
 }) => {
-  if (!isOpen) return null;
-
   const [discordUserId, setDiscordUserId] = useState('');
   const [username, setUsername] = useState('');
   const [displayName, setDisplayName] = useState('');
@@ -30,6 +28,10 @@ export const NewCandidateModal: React.FC<Props> = ({
   const [inviteCodeUsed, setInviteCodeUsed] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  if (!isOpen) return null;
+
+  const selectableReferrers = referrers.filter(r => r.status !== 'ARCHIVED' && Boolean(r.inviteCode));
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -180,9 +182,9 @@ export const NewCandidateModal: React.FC<Props> = ({
               className="w-full text-xs p-2.5 border border-slate-200 dark:border-[#241a38] rounded-lg focus:outline-none focus:ring-2 focus:ring-violet-500/20 focus:border-violet-500 text-slate-900 dark:text-[#f4f1fa] bg-white dark:bg-[#171026]"
             >
               <option value="">Aucun</option>
-              {referrers.map(ref => (
+              {selectableReferrers.map(ref => (
                 <option key={ref.id} value={ref.inviteCode}>
-                  {ref.inviteCode} — {ref.discordDisplayName}
+                  {ref.discordDisplayName} (@{ref.discordUsername}) — {ref.inviteCode}
                 </option>
               ))}
             </select>

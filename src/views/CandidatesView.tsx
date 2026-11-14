@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Candidate, CandidateStatus, DiscordServerType, UserRole, VAType } from '../types';
+import { Candidate, CandidateStatus, Referrer, UserRole, VAType } from '../types';
 import { api } from '../api';
 import {
   getStatusBadgeClasses,
@@ -27,6 +27,7 @@ import {
 
 interface Props {
   currentUserRole: UserRole;
+  referrers?: Referrer[];
   initialStatusFilter?: string;
   initialVaTypeFilter?: string;
   initialAnomalyFilter?: boolean;
@@ -41,6 +42,7 @@ interface Props {
 
 export const CandidatesView: React.FC<Props> = ({
   currentUserRole,
+  referrers = [],
   initialStatusFilter,
   initialVaTypeFilter,
   initialAnomalyFilter,
@@ -127,6 +129,31 @@ export const CandidatesView: React.FC<Props> = ({
     setTimeout(() => setCopiedId(null), 2000);
   };
 
+  const findReferrerFor = (c: Candidate): Referrer | undefined => {
+    if (!c.referrerId && !c.referrerDiscordUserId) return undefined;
+    return referrers.find(
+      r =>
+        (c.referrerId && r.id === c.referrerId) ||
+        (c.referrerDiscordUserId && r.discordUserId === c.referrerDiscordUserId)
+    );
+  };
+
+  const getCandidateReferrerDisplay = (c: Candidate): { name: string; username?: string } => {
+    const matched = findReferrerFor(c);
+    const liveName = matched?.discordDisplayName?.trim();
+    const rawName = c.referrerName?.trim();
+    const isRawPlaceholder = !rawName || /^Parrain\s+\d{3,5}$/i.test(rawName);
+    const resolvedName = !isRawPlaceholder ? rawName : liveName || rawName || 'Non assigné';
+    return {
+      name: resolvedName,
+      username: matched?.discordUsername,
+    };
+  };
+
+  const activeFilterReferrer = referrerIdFilter
+    ? referrers.find(r => r.id === referrerIdFilter || r.discordUserId === referrerIdFilter)
+    : undefined;
+
   const uncertainCount = candidates.filter(c => c.attributionStatus === 'UNCERTAIN').length;
   const anomalyCount = candidates.filter(c => c.hasAnomaly).length;
 
@@ -149,7 +176,12 @@ export const CandidatesView: React.FC<Props> = ({
         {referrerIdFilter && (
           <div className="p-3 bg-violet-50 dark:bg-[#191129] border border-violet-200 dark:border-violet-500/35 rounded-xl flex items-center justify-between gap-3 text-xs text-violet-900 dark:text-violet-200">
             <span>
-              Filtré sur le parrain : <strong className="font-mono">{referrerIdFilter}</strong>
+              Filtré sur le parrain :{' '}
+              <strong>
+                {activeFilterReferrer
+                  ? `${activeFilterReferrer.discordDisplayName} (@${activeFilterReferrer.discordUsername})`
+                  : referrerIdFilter}
+              </strong>
             </span>
             <button
               onClick={() => {
@@ -442,12 +474,20 @@ export const CandidatesView: React.FC<Props> = ({
 
                     <div className="bg-slate-50 dark:bg-[#171026] border border-slate-100 dark:border-[#241a38] rounded-lg px-2.5 py-2">
                       <div className="text-[10px] uppercase tracking-wider text-slate-400 dark:text-[#7c7296]">Parrain</div>
-                      <div className="font-medium text-slate-900 dark:text-[#f4f1fa] truncate mt-0.5">
-                        {candidate.referrerName || 'Non assigné'}
-                      </div>
-                      <div className={`text-[10px] truncate ${attrInfo.text}`}>
-                        {attrInfo.label}
-                      </div>
+                      {(() => {
+                        const refDisplay = getCandidateReferrerDisplay(candidate);
+                        return (
+                          <>
+                            <div className="font-medium text-slate-900 dark:text-[#f4f1fa] truncate mt-0.5">
+                              {refDisplay.name}
+                            </div>
+                            <div className={`text-[10px] truncate ${attrInfo.text}`}>
+                              {refDisplay.username ? `@${refDisplay.username} · ` : ''}
+                              {attrInfo.label}
+                            </div>
+                          </>
+                        );
+                      })()}
                     </div>
                   </div>
 
@@ -616,14 +656,20 @@ export const CandidatesView: React.FC<Props> = ({
 
                       {/* Referrer */}
                       <td className="py-3 px-4">
-                        <div>
-                          <div className="font-medium text-slate-900 dark:text-[#f4f1fa] truncate max-w-[130px]">
-                            {candidate.referrerName || 'Non assigné'}
-                          </div>
-                          <div className={`text-[10px] ${attrInfo.text}`}>
-                            {attrInfo.label}
-                          </div>
-                        </div>
+                        {(() => {
+                          const refDisplay = getCandidateReferrerDisplay(candidate);
+                          return (
+                            <div>
+                              <div className="font-medium text-slate-900 dark:text-[#f4f1fa] truncate max-w-[160px]">
+                                {refDisplay.name}
+                              </div>
+                              <div className={`text-[10px] truncate max-w-[160px] ${attrInfo.text}`}>
+                                {refDisplay.username ? `@${refDisplay.username} · ` : ''}
+                                {attrInfo.label}
+                              </div>
+                            </div>
+                          );
+                        })()}
                       </td>
 
                       {/* Arrival Date */}

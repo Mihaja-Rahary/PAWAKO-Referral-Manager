@@ -8,9 +8,12 @@ import { FirestoreRestClient, FirestoreRestError } from './firestoreRest';
 import {
   DiscordBotConfig,
   DiscordInviteCreationResult,
+  DiscordResolvedUser,
   createRecruitmentDiscordInvite,
   extractDiscordInviteCode,
+  fetchDiscordUserById,
   isLegacyFakeInvite,
+  resolveDiscordUserIdentifier,
   revokeDiscordInvite,
   verifyDiscordInvite,
 } from './discordBot';
@@ -118,6 +121,14 @@ function stripFirestoreMeta<T extends Record<string, any>>(doc: T): T {
   return clean as T;
 }
 
+function isPlaceholderDiscordName(name?: string | null, username?: string | null): boolean {
+  const n = (name || '').trim();
+  const u = (username || '').trim();
+  if (!n || /^Parrain\s+\d{3,5}$/i.test(n)) return true;
+  if (!u || /^user_\d{3,5}$/i.test(u)) return true;
+  return false;
+}
+
 function normalizeReferrerDocument(raw: Referrer): Referrer {
   const effectiveStatus = getEffectiveReferrerStatus(raw);
   const legacyFake = isLegacyFakeInvite(raw.inviteCode, raw.inviteUrl);
@@ -134,8 +145,16 @@ function normalizeReferrerDocument(raw: Referrer): Referrer {
     inviteStatus = raw.inviteCode && inviteUrl ? 'ACTIVE' : 'UNCONFIGURED';
   }
 
+  const cleanDiscordUserId = String(raw.discordUserId || '');
+  const cleanUsername = String(raw.discordUsername || (cleanDiscordUserId ? `user_${cleanDiscordUserId.slice(-4)}` : 'parrain'));
+  const cleanDisplayName = String(raw.discordDisplayName || cleanUsername || 'Parrain');
+
   return {
     ...stripFirestoreMeta(raw),
+    id: String(raw.id || (cleanDiscordUserId ? `ref-${cleanDiscordUserId}` : '')),
+    discordUserId: cleanDiscordUserId,
+    discordUsername: cleanUsername,
+    discordDisplayName: cleanDisplayName,
     status: effectiveStatus,
     isActive: effectiveStatus === 'ACTIVE',
     inviteCode: raw.inviteCode || '',
@@ -1217,9 +1236,9 @@ export class FirestoreRepository {
       const q = options.search.trim().toLowerCase();
       enriched = enriched.filter(
         r =>
-          r.discordDisplayName.toLowerCase().includes(q) ||
-          r.discordUsername.toLowerCase().includes(q) ||
-          r.discordUserId.includes(q) ||
+          (r.discordDisplayName || '').toLowerCase().includes(q) ||
+          (r.discordUsername || '').toLowerCase().includes(q) ||
+          (r.discordUserId || '').includes(q) ||
           (r.inviteCode && r.inviteCode.toLowerCase().includes(q))
       );
     }
@@ -1273,20 +1292,82 @@ export class FirestoreRepository {
     actorUserId?: string;
     actorName?: string;
     discordBotConfig?: DiscordBotConfig;
+    guildIds?: string[];
   }): Promise<Referrer> {
-    const cleanDiscordId = params.discordUserId.trim();
-    if (!/^\d{17,20}$/.test(cleanDiscordId)) {
-      throw new Error('Discord User ID invalide (Snowflake numérique 17-20 chiffres requis).');
+    const rawIdentifier = (params.discordUserId || '').trim();
+    if (!rawIdentifier) {
+      throw new Error('Identifiant Discord (ID numérique ou @nom_utilisateur) requis.');
+    }
+
+    let cleanDiscordId = rawIdentifier;
+    let resolvedDiscordUser: DiscordResolvedUser | null = null;
+
+    if (!/^\d{17,20}$/.test(rawIdentifier)) {
+      if (!params.discordBotConfig?.botToken) {
+        throw new Error(
+          "Pour rechercher un parrain par @nom_utilisateur, DISCORD_BOT_TOKEN doit être configuré côté serveur (sinon saisissez son Discord User ID numérique à 17-20 chiffres)."
+        );
+      }
+      const lookup = await resolveDiscordUserIdentifier({
+        botToken: params.discordBotConfig.botToken,
+        guildIds: params.guildIds || [],
+        identifier: rawIdentifier,
+      });
+      if (!lookup.ok || !lookup.user) {
+        throw new Error(lookup.errorMessage || `Utilisateur Discord "${rawIdentifier}" introuvable.`);
+      }
+      cleanDiscordId = lookup.user.id;
+      resolvedDiscordUser = lookup.user;
     }
 
     const existing = await this.getReferrerByDiscordUserId(cleanDiscordId);
     if (existing) {
+      // Si l'ancien profil avait un nom générique "Parrain XXXX", profiter de l'occasion pour résoudre le vrai nom
+      if (isPlaceholderDiscordName(existing.discordDisplayName, existing.discordUsername)) {
+        if (!resolvedDiscordUser && params.discordBotConfig?.botToken) {
+          const lookup = await fetchDiscordUserById({
+            botToken: params.discordBotConfig.botToken,
+            discordUserId: cleanDiscordId,
+          }).catch(() => null);
+          if (lookup?.ok && lookup.user) resolvedDiscordUser = lookup.user;
+        }
+        if (resolvedDiscordUser) {
+          const refreshed: Referrer = {
+            ...stripFirestoreMeta(existing),
+            discordUsername: resolvedDiscordUser.username,
+            discordDisplayName: resolvedDiscordUser.displayName,
+            avatar: resolvedDiscordUser.avatar || existing.avatar || null,
+            updatedAt: new Date().toISOString(),
+          };
+          await this.client.setDocument('pawako_referrers', existing.id, refreshed).catch(() => null);
+          return refreshed;
+        }
+      }
       return existing;
     }
 
     const user = await this.getUserById(cleanDiscordId);
-    const username = user ? user.username : `user_${cleanDiscordId.slice(-4)}`;
-    const displayName = user ? user.displayName : `Parrain ${cleanDiscordId.slice(-4)}`;
+    if (!resolvedDiscordUser && params.discordBotConfig?.botToken) {
+      const lookup = await fetchDiscordUserById({
+        botToken: params.discordBotConfig.botToken,
+        discordUserId: cleanDiscordId,
+      }).catch(() => null);
+      if (lookup?.ok && lookup.user) {
+        resolvedDiscordUser = lookup.user;
+      }
+    }
+
+    const username =
+      resolvedDiscordUser?.username ||
+      (user?.username && !/^user_\d{3,5}$/i.test(user.username) ? user.username : '') ||
+      user?.username ||
+      `user_${cleanDiscordId.slice(-4)}`;
+    const displayName =
+      resolvedDiscordUser?.displayName ||
+      (user?.displayName && !/^Parrain\s+\d{3,5}$/i.test(user.displayName) ? user.displayName : '') ||
+      user?.displayName ||
+      `Parrain ${cleanDiscordId.slice(-4)}`;
+    const avatar = resolvedDiscordUser?.avatar || user?.avatar || null;
     const now = new Date().toISOString();
     const id = `ref-${cleanDiscordId}`;
 
@@ -1353,7 +1434,7 @@ export class FirestoreRepository {
       discordUserId: cleanDiscordId,
       discordUsername: username,
       discordDisplayName: displayName,
-      avatar: user?.avatar || null,
+      avatar,
       inviteCode: finalInviteCode,
       inviteUrl: finalInviteUrl,
       inviteStatus: finalInviteStatus,
@@ -1470,8 +1551,8 @@ export class FirestoreRepository {
 
     const enriched = this.enrichReferrerWithCandidates(raw, candidates);
     const filleuls = candidates
-      .filter(c => c.referrerId === id || c.referrerDiscordUserId === raw.discordUserId)
-      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      .filter(c => c.referrerId === id || (raw.discordUserId && c.referrerDiscordUserId === raw.discordUserId))
+      .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
 
     const linkedCandidatesCount = filleuls.length;
     const attributionHistoryCount = attributions.filter(
@@ -1547,6 +1628,32 @@ export class FirestoreRepository {
       precondition: raw._updateTime ? { updateTime: raw._updateTime } : undefined,
     });
 
+    const candidates = await this.client.listDocuments<Candidate>('pawako_candidates');
+    if (changes.discordDisplayName) {
+      const candidatesToSync = candidates
+        .filter(
+          c =>
+            (c.referrerId === id || (updated.discordUserId && c.referrerDiscordUserId === updated.discordUserId)) &&
+            c.referrerName !== updated.discordDisplayName
+        )
+        .map(c => ({
+          collection: 'pawako_candidates',
+          docId: c.id,
+          data: {
+            ...stripFirestoreMeta(c),
+            referrerName: updated.discordDisplayName,
+            updatedAt: now,
+          },
+        }));
+      if (candidatesToSync.length > 0) {
+        await this.client.batchSet(candidatesToSync).catch(() => null);
+        for (const item of candidatesToSync) {
+          const idx = candidates.findIndex(c => c.id === item.docId);
+          if (idx !== -1) candidates[idx] = item.data;
+        }
+      }
+    }
+
     await this.logAudit({
       action: 'REFERRER_UPDATED',
       actorUserId: actor.id,
@@ -1556,8 +1663,265 @@ export class FirestoreRepository {
       details: { changes },
     });
 
-    const candidates = await this.client.listDocuments<Candidate>('pawako_candidates');
     return this.enrichReferrerWithCandidates(updated, candidates);
+  }
+
+  async syncReferrerDiscordProfile(
+    id: string,
+    params: {
+      discordBotConfig?: DiscordBotConfig;
+      actor: { id: string; displayName: string };
+    }
+  ): Promise<{ referrer: Referrer; updated: boolean; errorMessage?: string } | null> {
+    const raw = await this.client.getDocument<Referrer>('pawako_referrers', id);
+    if (!raw) return null;
+
+    if (!params.discordBotConfig?.botToken) {
+      throw new Error(
+        'Secret DISCORD_BOT_TOKEN manquant côté serveur : impossible de récupérer les profils depuis Discord.'
+      );
+    }
+
+    const lookup = await fetchDiscordUserById({
+      botToken: params.discordBotConfig.botToken,
+      discordUserId: raw.discordUserId,
+    });
+
+    const candidates = await this.client.listDocuments<Candidate>('pawako_candidates');
+    if (!lookup.ok || !lookup.user) {
+      return {
+        referrer: this.enrichReferrerWithCandidates(raw, candidates),
+        updated: false,
+        errorMessage: lookup.errorMessage || 'Profil Discord introuvable.',
+      };
+    }
+
+    const discordUser = lookup.user;
+    const changed = Boolean(
+      raw.discordDisplayName !== discordUser.displayName ||
+        raw.discordUsername !== discordUser.username ||
+        (discordUser.avatar && raw.avatar !== discordUser.avatar)
+    );
+
+    const now = new Date().toISOString();
+    let finalRef = raw;
+    if (changed) {
+      finalRef = {
+        ...stripFirestoreMeta(raw),
+        discordUsername: discordUser.username,
+        discordDisplayName: discordUser.displayName,
+        avatar: discordUser.avatar || raw.avatar || null,
+        updatedAt: now,
+      };
+      await this.client.setDocument('pawako_referrers', id, finalRef);
+
+      // Synchroniser aussi le document pawako_users si présent (profil uniquement, jamais rôle/statut)
+      const linkedUser = await this.getUserById(raw.discordUserId).catch(() => null);
+      if (linkedUser) {
+        await this.client
+          .setDocument('pawako_users', linkedUser.id, {
+            ...stripFirestoreMeta(linkedUser),
+            username: discordUser.username,
+            displayName: discordUser.displayName,
+            avatar: discordUser.avatar || linkedUser.avatar || null,
+          })
+          .catch(() => null);
+      }
+
+      // Synchroniser referrerName sur tous les filleuls rattachés
+      const candidatesToSync = candidates
+        .filter(
+          c =>
+            (c.referrerId === id || (finalRef.discordUserId && c.referrerDiscordUserId === finalRef.discordUserId)) &&
+            c.referrerName !== finalRef.discordDisplayName
+        )
+        .map(c => ({
+          collection: 'pawako_candidates',
+          docId: c.id,
+          data: {
+            ...stripFirestoreMeta(c),
+            referrerName: finalRef.discordDisplayName,
+            updatedAt: now,
+          },
+        }));
+      if (candidatesToSync.length > 0) {
+        await this.client.batchSet(candidatesToSync).catch(() => null);
+        for (const item of candidatesToSync) {
+          const idx = candidates.findIndex(c => c.id === item.docId);
+          if (idx !== -1) candidates[idx] = item.data;
+        }
+      }
+
+      await this.logAudit({
+        action: 'REFERRER_DISCORD_SYNCED',
+        actorUserId: params.actor.id,
+        actorName: params.actor.displayName,
+        targetType: 'REFERRER',
+        targetId: id,
+        details: {
+          discordUserId: raw.discordUserId,
+          displayName: discordUser.displayName,
+          username: discordUser.username,
+        },
+      });
+    }
+
+    return {
+      referrer: this.enrichReferrerWithCandidates(finalRef, candidates),
+      updated: changed,
+    };
+  }
+
+  async syncAllReferrersDiscordProfiles(params: {
+    discordBotConfig?: DiscordBotConfig;
+    actor: { id: string; displayName: string };
+  }): Promise<{
+    updatedCount: number;
+    skippedCount: number;
+    errors: string[];
+    referrers: Referrer[];
+  }> {
+    if (!params.discordBotConfig?.botToken) {
+      throw new Error(
+        'Secret DISCORD_BOT_TOKEN manquant côté serveur : impossible de synchroniser les noms Discord.'
+      );
+    }
+
+    const botToken = params.discordBotConfig.botToken;
+    const [rawReferrers, candidates, users] = await Promise.all([
+      this.getReferrers(),
+      this.client.listDocuments<Candidate>('pawako_candidates'),
+      this.client.listDocuments<User>('pawako_users'),
+    ]);
+
+    const userMap = new Map(users.map(u => [u.id, u]));
+    const updatedReferrerWrites: Array<{ collection: string; docId: string; data: any }> = [];
+    const updatedUserWrites: Array<{ collection: string; docId: string; data: any }> = [];
+    const updatedCandidateWrites: Array<{ collection: string; docId: string; data: any }> = [];
+    const syncedNamesByRefId = new Map<string, { name: string; discordUserId: string }>();
+    const errors: string[] = [];
+    let updatedCount = 0;
+    let skippedCount = 0;
+    const now = new Date().toISOString();
+
+    const validRefs = rawReferrers.filter(r => /^\d{17,20}$/.test((r.discordUserId || '').trim()));
+    skippedCount += rawReferrers.length - validRefs.length;
+
+    const batchSize = 5;
+    for (let i = 0; i < validRefs.length; i += batchSize) {
+      const chunk = validRefs.slice(i, i + batchSize);
+      const lookups = await Promise.all(
+        chunk.map(async ref => ({
+          ref,
+          lookup: await fetchDiscordUserById({ botToken, discordUserId: ref.discordUserId }),
+        }))
+      );
+
+      for (const { ref, lookup } of lookups) {
+        if (!lookup.ok || !lookup.user) {
+          skippedCount += 1;
+          if (lookup.errorMessage) errors.push(`${ref.discordUserId}: ${lookup.errorMessage}`);
+          continue;
+        }
+
+        const du = lookup.user;
+        const refChanged =
+          ref.discordDisplayName !== du.displayName ||
+          ref.discordUsername !== du.username ||
+          Boolean(du.avatar && ref.avatar !== du.avatar);
+
+        syncedNamesByRefId.set(ref.id, { name: du.displayName, discordUserId: ref.discordUserId });
+
+        if (refChanged) {
+          updatedCount += 1;
+          const nextRef: Referrer = {
+            ...stripFirestoreMeta(ref),
+            discordUsername: du.username,
+            discordDisplayName: du.displayName,
+            avatar: du.avatar || ref.avatar || null,
+            updatedAt: now,
+          };
+          updatedReferrerWrites.push({ collection: 'pawako_referrers', docId: ref.id, data: nextRef });
+          const idx = rawReferrers.findIndex(r => r.id === ref.id);
+          if (idx !== -1) rawReferrers[idx] = nextRef;
+
+          const u = userMap.get(ref.discordUserId);
+          if (
+            u &&
+            (u.displayName !== du.displayName ||
+              u.username !== du.username ||
+              Boolean(du.avatar && u.avatar !== du.avatar))
+          ) {
+            updatedUserWrites.push({
+              collection: 'pawako_users',
+              docId: u.id,
+              data: {
+                ...stripFirestoreMeta(u),
+                username: du.username,
+                displayName: du.displayName,
+                avatar: du.avatar || u.avatar || null,
+              },
+            });
+          }
+        } else {
+          skippedCount += 1;
+        }
+      }
+    }
+
+    for (const c of candidates) {
+      for (const [refId, info] of syncedNamesByRefId.entries()) {
+        if (
+          (c.referrerId === refId || (info.discordUserId && c.referrerDiscordUserId === info.discordUserId)) &&
+          c.referrerName !== info.name
+        ) {
+          const nextCand = {
+            ...stripFirestoreMeta(c),
+            referrerName: info.name,
+            updatedAt: now,
+          };
+          updatedCandidateWrites.push({ collection: 'pawako_candidates', docId: c.id, data: nextCand });
+          const idx = candidates.findIndex(x => x.id === c.id);
+          if (idx !== -1) candidates[idx] = nextCand;
+          break;
+        }
+      }
+    }
+
+    if (updatedReferrerWrites.length > 0) {
+      await this.client.batchSet(updatedReferrerWrites);
+    }
+    if (updatedUserWrites.length > 0) {
+      await this.client.batchSet(updatedUserWrites).catch(() => null);
+    }
+    if (updatedCandidateWrites.length > 0) {
+      await this.client.batchSet(updatedCandidateWrites).catch(() => null);
+    }
+
+    await this.logAudit({
+      action: 'REFERRERS_DISCORD_PROFILES_SYNCED',
+      actorUserId: params.actor.id,
+      actorName: params.actor.displayName,
+      targetType: 'DISCORD',
+      targetId: 'pawako_referrers',
+      details: {
+        updatedCount,
+        candidatesSynced: updatedCandidateWrites.length,
+        skippedCount,
+        errorsCount: errors.length,
+      },
+    });
+
+    const enriched = rawReferrers
+      .map(r => this.enrichReferrerWithCandidates(r, candidates))
+      .sort((a, b) => (b.totalFilleuls || 0) - (a.totalFilleuls || 0));
+
+    return {
+      updatedCount,
+      skippedCount,
+      errors,
+      referrers: enriched,
+    };
   }
 
   async setReferrerStatus(
@@ -1599,7 +1963,7 @@ export class FirestoreRepository {
 
     // Synchroniser prudemment pawako_users UNIQUEMENT si l'utilisateur a le rôle PARRAIN
     // (ne jamais altérer un compte ADMINISTRATEUR ou RESPONSABLE via la gestion des parrains)
-    const linkedUser = await this.getUserById(raw.discordUserId);
+    const linkedUser = raw.discordUserId ? await this.getUserById(raw.discordUserId) : null;
     if (linkedUser && linkedUser.role === 'PARRAIN') {
       const targetUserStatus: UserStatus = targetStatus === 'ACTIVE' ? 'ACTIVE' : 'SUSPENDED';
       if (linkedUser.status !== targetUserStatus) {
@@ -1864,8 +2228,15 @@ export class FirestoreRepository {
   async deleteReferrerPhysically(
     id: string,
     confirm: boolean,
-    actor: { id: string; displayName: string }
-  ): Promise<{ deleted: boolean; summary: ReferrerDependencySummary }> {
+    actor: { id: string; displayName: string },
+    discordBotConfig?: DiscordBotConfig,
+    options?: { force?: boolean }
+  ): Promise<{
+    deleted: boolean;
+    summary: ReferrerDependencySummary;
+    detachedCandidatesCount?: number;
+    cleanedHistoryCount?: number;
+  }> {
     if (!confirm) {
       throw new Error('Confirmation explicite requise (confirm=true) pour supprimer définitivement un profil.');
     }
@@ -1875,14 +2246,16 @@ export class FirestoreRepository {
       throw new Error('Parrain introuvable.');
     }
 
-    if (getEffectiveReferrerStatus(ref) !== 'ARCHIVED') {
+    const force = Boolean(options?.force);
+
+    if (!force && getEffectiveReferrerStatus(ref) !== 'ARCHIVED') {
       throw new Error(
-        "Action refusée : vous devez d'abord archiver ce parrain avant toute tentative de suppression définitive."
+        "Action refusée : vous devez d'abord archiver ce parrain (ou confirmer la suppression forcée) avant toute suppression définitive."
       );
     }
 
     const deps = await this.analyzeReferrerDependencies(id);
-    if (!deps.canPhysicallyDelete) {
+    if (!deps.canPhysicallyDelete && !force) {
       const err: any = new Error(deps.blockingReason || 'Suppression physique impossible : dépendances existantes.');
       err.code = 'CONFLICT_DEPENDENCIES';
       err.status = 409;
@@ -1890,7 +2263,72 @@ export class FirestoreRepository {
       throw err;
     }
 
+    let detachedCandidatesCount = 0;
+    let cleanedHistoryCount = 0;
+    const now = new Date().toISOString();
+
+    if (force && !deps.canPhysicallyDelete) {
+      const [candidates, attributions] = await Promise.all([
+        this.client.listDocuments<Candidate>('pawako_candidates'),
+        this.client.listDocuments<ReferralAttributionHistoryEntry>('pawako_referral_attributions_history'),
+      ]);
+
+      const linkedCandidates = candidates.filter(
+        c => c.referrerId === id || (ref.discordUserId && c.referrerDiscordUserId === ref.discordUserId)
+      );
+
+      if (linkedCandidates.length > 0) {
+        const candidateWrites = linkedCandidates.map(c => ({
+          collection: 'pawako_candidates',
+          docId: c.id,
+          data: {
+            ...stripFirestoreMeta(c),
+            referrerId: null,
+            referrerDiscordUserId: null,
+            referrerName: null,
+            attributionStatus: 'UNCERTAIN' as const,
+            uncertaintyReason: `Parrain "${ref.discordDisplayName || id}" supprimé définitivement par l'administration.`,
+            updatedAt: now,
+          },
+        }));
+        await this.client.batchSet(candidateWrites);
+        detachedCandidatesCount = linkedCandidates.length;
+      }
+
+      const linkedAttributions = attributions.filter(
+        a => a.oldReferrerId === id || a.newReferrerId === id
+      );
+      if (linkedAttributions.length > 0) {
+        for (const entry of linkedAttributions) {
+          await this.client.deleteDocument('pawako_referral_attributions_history', entry.id).catch(() => false);
+        }
+        cleanedHistoryCount = linkedAttributions.length;
+      }
+    }
+
+    // Nettoyage best-effort de l'invitation Discord associée (sans bloquer la suppression si Discord échoue)
+    if (ref.inviteCode && !isLegacyFakeInvite(ref.inviteCode, ref.inviteUrl)) {
+      if (discordBotConfig?.botToken) {
+        await revokeDiscordInvite({
+          botToken: discordBotConfig.botToken,
+          inviteCode: ref.inviteCode,
+        }).catch(() => false);
+      }
+      await this.client.deleteDocument('pawako_discord_invites', ref.inviteCode).catch(() => false);
+    }
+
     await this.client.deleteDocument('pawako_referrers', id);
+
+    // Si le compte utilisateur lié a uniquement le rôle PARRAIN, le supprimer également
+    // pour éviter un compte orphelin bloqué en statut SUSPENDED (ne jamais toucher ADMIN/RESPONSABLE).
+    let deletedParainUser = false;
+    if (ref.discordUserId) {
+      const linkedUser = await this.getUserById(ref.discordUserId).catch(() => null);
+      if (linkedUser && linkedUser.role === 'PARRAIN') {
+        await this.client.deleteDocument('pawako_users', linkedUser.id).catch(() => false);
+        deletedParainUser = true;
+      }
+    }
 
     await this.logAudit({
       action: 'REFERRER_DELETED_PERMANENTLY',
@@ -1902,10 +2340,19 @@ export class FirestoreRepository {
         discordUserId: ref.discordUserId,
         discordDisplayName: ref.discordDisplayName,
         inviteCode: ref.inviteCode || null,
+        deletedParainUser,
+        forced: force,
+        detachedCandidatesCount,
+        cleanedHistoryCount,
       },
     });
 
-    return { deleted: true, summary: deps };
+    return {
+      deleted: true,
+      summary: deps,
+      detachedCandidatesCount,
+      cleanedHistoryCount,
+    };
   }
 
   // --- CANDIDATS ---
@@ -1944,9 +2391,9 @@ export class FirestoreRepository {
       const q = options.search.toLowerCase().trim();
       list = list.filter(
         c =>
-          c.username.toLowerCase().includes(q) ||
-          c.displayName.toLowerCase().includes(q) ||
-          c.discordUserId.includes(q) ||
+          (c.username || '').toLowerCase().includes(q) ||
+          (c.displayName || '').toLowerCase().includes(q) ||
+          (c.discordUserId || '').includes(q) ||
           (c.referrerName && c.referrerName.toLowerCase().includes(q))
       );
     }
@@ -1979,7 +2426,7 @@ export class FirestoreRepository {
       list = list.filter(c => c.hasAnomaly === options.hasAnomaly);
     }
 
-    list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    list.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
 
     const total = list.length;
     const page = Math.max(1, options?.page || 1);
@@ -3093,7 +3540,7 @@ export class FirestoreRepository {
     return list
       .filter(h => h.candidateId === candidateId)
       .map(h => stripFirestoreMeta(h))
-      .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+      .sort((a, b) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime());
   }
 
   async recordAttributionHistory(
@@ -3116,7 +3563,7 @@ export class FirestoreRepository {
     return list
       .filter(a => a.candidateId === candidateId)
       .map(a => stripFirestoreMeta(a))
-      .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+      .sort((a, b) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime());
   }
 
   async logAudit(entry: Omit<AuditLog, 'id' | 'timestamp'>): Promise<AuditLog> {
@@ -3133,7 +3580,7 @@ export class FirestoreRepository {
   async getAuditLogs(limit: number = 50): Promise<AuditLog[]> {
     const list = await this.client.listDocuments<AuditLog>('pawako_audit_logs');
     const clean = list.map(l => stripFirestoreMeta(l));
-    clean.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+    clean.sort((a, b) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime());
     return clean.slice(0, limit);
   }
 
@@ -3276,7 +3723,7 @@ export class FirestoreRepository {
     const myCandidates = allCandidates.filter(
       c => c.referrerId === rawReferrer.id || c.referrerDiscordUserId === discordUserId
     );
-    myCandidates.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    myCandidates.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
 
     // Suppression stricte des données confidentielles (refusalReason, décisionnaires, incertitudes internes)
     const sanitizedCandidates = myCandidates.map(c => ({

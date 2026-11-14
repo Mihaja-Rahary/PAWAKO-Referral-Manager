@@ -22,13 +22,13 @@ export const StatusChangeModal: React.FC<Props> = ({
   onClose,
   onSubmit,
 }) => {
-  if (!isOpen) return null;
-
   const [selectedStatus, setSelectedStatus] = useState<CandidateStatus>(candidate.status);
   const [refusalReason, setRefusalReason] = useState(candidate.refusalReason || '');
   const [notes, setNotes] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  if (!isOpen) return null;
 
   const isInstagram = candidate.vaType === 'INSTAGRAM';
 

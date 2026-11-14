@@ -53,6 +53,10 @@ class MockExternalServices {
   public failDiscordBotPermissions = false;
   public simulateInviteCommitRaceCount = 0;
   public revokedInvites: string[] = [];
+  public discordUsers = new Map<
+    string,
+    { id: string; username: string; global_name?: string | null; avatar?: string | null }
+  >();
 
   private getCollection(col: string): Map<string, StoredDoc> {
     let map = this.collections.get(col);
@@ -439,6 +443,38 @@ class MockExternalServices {
               headers: { 'Content-Type': 'application/json' },
             });
           }
+        }
+
+        const userLookupMatch = url.pathname.match(/^\/api\/v10\/users\/(\d{17,20})$/);
+        if (userLookupMatch && method === 'GET') {
+          const uid = userLookupMatch[1];
+          const found = this.discordUsers.get(uid);
+          if (!found) {
+            return new Response(JSON.stringify({ code: 10013, message: 'Unknown User' }), {
+              status: 404,
+              headers: { 'Content-Type': 'application/json' },
+            });
+          }
+          return new Response(JSON.stringify(found), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+
+        const memberSearchMatch = url.pathname.match(/^\/api\/v10\/guilds\/([^/]+)\/members\/search$/);
+        if (memberSearchMatch && method === 'GET') {
+          const q = (url.searchParams.get('query') || '').trim().toLowerCase();
+          const matched = Array.from(this.discordUsers.values())
+            .filter(
+              u =>
+                u.username.toLowerCase().includes(q) ||
+                (u.global_name && u.global_name.toLowerCase().includes(q))
+            )
+            .map(u => ({ user: u, nick: null }));
+          return new Response(JSON.stringify(matched), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          });
         }
       }
 
@@ -1438,4 +1474,298 @@ describe('PAWAKO Referral Manager — Tests Complets Isolés (Mockés)', () => {
     const updatedRef = await repo.getReferrerById(parrainRef!.id);
     assert.equal(updatedRef!.inviteStatus, 'EXPIRED_OR_DELETED');
   });
+
+  // =========================================================================
+  // 7. COMPATIBILITÉ DOCUMENTS HÉRITÉS, SUPPRESSION NETTOYÉE & DIAGNOSTIC ERREUR
+  // =========================================================================
+  it('7.1 Gère les documents hérités sans champ id, nettoie le compte PARRAIN à la suppression et permet une réinscription propre', async () => {
+    const adminUser = {
+      id: env.INITIAL_ADMIN_DISCORD_ID!,
+      username: 'super_admin',
+      global_name: 'Super Admin',
+      avatar: null,
+    };
+    const adminLogin = await loginViaWorkerOAuth(mock, env, 'admin', adminUser);
+    assert.equal(adminLogin.status, 200);
+
+    // Seed un document parrain hérité SANS champ `id`, SANS `discordDisplayName`, SANS `createdAt`
+    const legacyDiscordId = '200000000000000777';
+    const legacyDocId = 'legacy-ref-777';
+    mock.seedDoc('pawako_referrers', legacyDocId, {
+      discordUserId: legacyDiscordId,
+      isActive: true,
+      inviteCode: 'PWK-OLD123',
+      inviteUrl: 'https://discord.gg/PWK-OLD123',
+    });
+    mock.seedDoc('pawako_users', legacyDiscordId, {
+      id: legacyDiscordId,
+      username: 'legacy_parrain',
+      displayName: 'Legacy Parrain',
+      avatar: null,
+      role: 'PARRAIN',
+      status: 'ACTIVE',
+      createdAt: new Date().toISOString(),
+      lastLoginAt: new Date().toISOString(),
+    });
+
+    // 1. La recherche & liste sur /api/referrers ne plante pas malgré les champs manquants et extrait l'id du doc Firestore
+    const listRes = await app.fetch(
+      new Request(`${WORKER_ORIGIN}/api/referrers?search=${legacyDiscordId}`, {
+        headers: { Cookie: `pawako_session=${adminLogin.sessionCookie}`, Origin: FRONTEND_ORIGIN },
+      }),
+      env
+    );
+    assert.equal(listRes.status, 200);
+    const listJson = (await listRes.json()) as any;
+    assert.equal(listJson.referrers.length, 1);
+    assert.equal(listJson.referrers[0].id, legacyDocId);
+
+    // 2. Archiver puis supprimer physiquement le parrain hérité
+    const archiveRes = await app.fetch(
+      new Request(`${WORKER_ORIGIN}/api/referrers/${legacyDocId}/archive`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: `pawako_session=${adminLogin.sessionCookie}`,
+          Origin: FRONTEND_ORIGIN,
+        },
+        body: JSON.stringify({ reason: 'Nettoyage profil test hérité' }),
+      }),
+      env
+    );
+    assert.equal(archiveRes.status, 200);
+
+    const deleteRes = await app.fetch(
+      new Request(`${WORKER_ORIGIN}/api/referrers/${legacyDocId}?confirm=true`, {
+        method: 'DELETE',
+        headers: { Cookie: `pawako_session=${adminLogin.sessionCookie}`, Origin: FRONTEND_ORIGIN },
+      }),
+      env
+    );
+    assert.equal(deleteRes.status, 200);
+
+    const repo = createRepo(env);
+    assert.equal(await repo.getReferrerById(legacyDocId), null);
+    assert.equal(
+      await repo.getUserById(legacyDiscordId),
+      null,
+      'Le compte utilisateur PARRAIN orphelin doit être nettoyé lors de la suppression physique'
+    );
+
+    // 3. L'utilisateur supprimé peut se réinscrire proprement plus tard avec un nouveau vrai lien Discord
+    const reRegister = await loginViaWorkerOAuth(mock, env, 'parrain', {
+      id: legacyDiscordId,
+      username: 'legacy_parrain_reborn',
+      global_name: 'Legacy Reborn',
+      avatar: null,
+    });
+    assert.equal(reRegister.status, 200);
+    assert.ok(reRegister.sessionCookie);
+  });
+
+  it('7.2 Surface un diagnostic structuré avec CORS en cas d erreur Firestore au lieu d une erreur 500 opaque', async () => {
+    const brokenEnv = createTestEnv({
+      FIREBASE_CLIENT_EMAIL: '',
+      FIREBASE_PRIVATE_KEY: '',
+    });
+
+    // Simuler une requête authentifiée avec un cookie signé valide, alors que Firestore est mal configuré
+    const adminLogin = await loginViaWorkerOAuth(mock, env, 'admin', {
+      id: env.INITIAL_ADMIN_DISCORD_ID!,
+      username: 'super_admin',
+      global_name: 'Super Admin',
+      avatar: null,
+    });
+
+    const brokenRes = await app.fetch(
+      new Request(`${WORKER_ORIGIN}/api/admin/bootstrap`, {
+        headers: {
+          Cookie: `pawako_session=${adminLogin.sessionCookie}`,
+          Origin: FRONTEND_ORIGIN,
+        },
+      }),
+      brokenEnv
+    );
+    assert.equal(brokenRes.status, 503);
+    assert.equal(brokenRes.headers.get('Access-Control-Allow-Origin'), FRONTEND_ORIGIN);
+    const body = (await brokenRes.json()) as any;
+    assert.equal(body.category, 'CONFIG');
+    assert.match(body.error, /FIREBASE_CLIENT_EMAIL|FIREBASE_PRIVATE_KEY/i);
+  });
+
+  it('7.3 Résolution automatique des vrais noms Discord (ID, @username) et synchronisation globale', async () => {
+    const adminLogin = await loginViaWorkerOAuth(mock, env, 'admin', {
+      id: env.INITIAL_ADMIN_DISCORD_ID!,
+      username: 'super_admin',
+      global_name: 'Super Admin',
+      avatar: null,
+    });
+
+    mock.discordUsers.set('500000000000000501', {
+      id: '500000000000000501',
+      username: 'lucas_pawako',
+      global_name: 'Lucas PAWAKO',
+      avatar: 'avatarhash501',
+    });
+    mock.discordUsers.set('500000000000000502', {
+      id: '500000000000000502',
+      username: 'chloe.recrute',
+      global_name: 'Chloé Recrutement',
+      avatar: null,
+    });
+    mock.discordUsers.set('500000000000000503', {
+      id: '500000000000000503',
+      username: 'enzo_real',
+      global_name: 'Enzo Authentique',
+      avatar: 'enzoavatar',
+    });
+
+    // 1. Création par Discord User ID sans connexion OAuth préalable -> vrai nom + avatar résolus via Bot API
+    const createByIdRes = await app.fetch(
+      new Request(`${WORKER_ORIGIN}/api/referrers`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: `pawako_session=${adminLogin.sessionCookie}`,
+          Origin: FRONTEND_ORIGIN,
+        },
+        body: JSON.stringify({ discordUserId: '500000000000000501' }),
+      }),
+      env
+    );
+    assert.equal(createByIdRes.status, 201);
+    const byIdJson = (await createByIdRes.json()) as any;
+    assert.equal(byIdJson.referrer.discordDisplayName, 'Lucas PAWAKO');
+    assert.equal(byIdJson.referrer.discordUsername, 'lucas_pawako');
+    assert.match(byIdJson.referrer.avatar, /avatarhash501/);
+
+    // 2. Création par @username -> résolution via recherche membres Discord
+    const createByNameRes = await app.fetch(
+      new Request(`${WORKER_ORIGIN}/api/referrers`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: `pawako_session=${adminLogin.sessionCookie}`,
+          Origin: FRONTEND_ORIGIN,
+        },
+        body: JSON.stringify({ discordUserId: '@chloe.recrute' }),
+      }),
+      env
+    );
+    assert.equal(createByNameRes.status, 201);
+    const byNameJson = (await createByNameRes.json()) as any;
+    assert.equal(byNameJson.referrer.discordUserId, '500000000000000502');
+    assert.equal(byNameJson.referrer.discordDisplayName, 'Chloé Recrutement');
+    assert.equal(byNameJson.referrer.discordUsername, 'chloe.recrute');
+
+    // 3. Ancien parrain avec nom générique "Parrain 0503" + filleul associé -> POST /api/referrers/sync-discord met tout à jour
+    mock.seedDoc('pawako_referrers', 'ref-500000000000000503', {
+      id: 'ref-500000000000000503',
+      discordUserId: '500000000000000503',
+      discordUsername: 'user_0503',
+      discordDisplayName: 'Parrain 0503',
+      inviteCode: 'realLegacy503',
+      inviteUrl: 'https://discord.gg/realLegacy503',
+      inviteStatus: 'ACTIVE',
+      isActive: true,
+      status: 'ACTIVE',
+      createdAt: '2026-01-01T00:00:00.000Z',
+    });
+    const repo = createRepo(env);
+    const cand = await repo.createCandidate({
+      discordUserId: '600000000000000601',
+      username: 'filleul_sync',
+      displayName: 'Filleul Sync',
+      vaType: 'CHATTEUR',
+      inviteCodeUsed: 'realLegacy503',
+      originServer: 'RECRUTEMENT',
+    });
+    assert.equal(cand.referrerName, 'Parrain 0503');
+
+    const syncRes = await app.fetch(
+      new Request(`${WORKER_ORIGIN}/api/referrers/sync-discord`, {
+        method: 'POST',
+        headers: {
+          Cookie: `pawako_session=${adminLogin.sessionCookie}`,
+          Origin: FRONTEND_ORIGIN,
+        },
+      }),
+      env
+    );
+    assert.equal(syncRes.status, 200);
+    const syncJson = (await syncRes.json()) as any;
+    assert.ok(syncJson.updatedCount >= 1);
+
+    const updatedRef = await repo.getReferrerById('ref-500000000000000503');
+    assert.equal(updatedRef?.discordDisplayName, 'Enzo Authentique');
+    assert.equal(updatedRef?.discordUsername, 'enzo_real');
+
+    const updatedCand = await repo.getCandidateById(cand.id);
+    assert.equal(updatedCand?.referrerName, 'Enzo Authentique');
+  });
+
+  it('7.4 Suppression forcée d un parrain détache proprement les filleuls et nettoie les historiques', async () => {
+    const adminLogin = await loginViaWorkerOAuth(mock, env, 'admin', {
+      id: env.INITIAL_ADMIN_DISCORD_ID!,
+      username: 'super_admin',
+      global_name: 'Super Admin',
+      avatar: null,
+    });
+    await loginViaWorkerOAuth(mock, env, 'parrain', {
+      id: '500000000000000599',
+      username: 'parrain_force_del',
+      global_name: 'Parrain À Supprimer',
+      avatar: null,
+    });
+
+    const repo = createRepo(env);
+    const ref = await repo.getReferrerByDiscordUserId('500000000000000599');
+    assert.ok(ref);
+
+    const cand = await repo.createCandidate({
+      discordUserId: '600000000000000699',
+      username: 'filleul_orphelin',
+      displayName: 'Filleul Orphelin',
+      vaType: 'INSTAGRAM',
+      inviteCodeUsed: ref!.inviteCode,
+      originServer: 'RECRUTEMENT',
+    });
+
+    // Sans force=true, même archivé, le backend conserve la protection 409
+    await repo.setReferrerStatus(ref!.id, 'ARCHIVED', 'Test blocage standard', {
+      id: env.INITIAL_ADMIN_DISCORD_ID!,
+      displayName: 'Super Admin',
+    });
+    const blockedRes = await app.fetch(
+      new Request(`${WORKER_ORIGIN}/api/referrers/${ref!.id}?confirm=true`, {
+        method: 'DELETE',
+        headers: { Cookie: `pawako_session=${adminLogin.sessionCookie}`, Origin: FRONTEND_ORIGIN },
+      }),
+      env
+    );
+    assert.equal(blockedRes.status, 409);
+
+    // Avec force=true&confirm=true, le parrain est supprimé et le filleul est détaché proprement en UNCERTAIN
+    const forceRes = await app.fetch(
+      new Request(`${WORKER_ORIGIN}/api/referrers/${ref!.id}?confirm=true&force=true`, {
+        method: 'DELETE',
+        headers: { Cookie: `pawako_session=${adminLogin.sessionCookie}`, Origin: FRONTEND_ORIGIN },
+      }),
+      env
+    );
+    assert.equal(forceRes.status, 200);
+    const forceJson = (await forceRes.json()) as any;
+    assert.equal(forceJson.success, true);
+    assert.equal(forceJson.detachedCandidatesCount, 1);
+
+    assert.equal(await repo.getReferrerById(ref!.id), null);
+    assert.equal(await repo.getUserById('500000000000000599'), null);
+
+    const detachedCand = await repo.getCandidateById(cand.id);
+    assert.ok(detachedCand);
+    assert.equal(detachedCand.referrerId, null);
+    assert.equal(detachedCand.referrerName, null);
+    assert.equal(detachedCand.attributionStatus, 'UNCERTAIN');
+  });
 });
+

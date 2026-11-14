@@ -699,16 +699,28 @@ export const DashboardView: React.FC<Props> = ({
               return (
                 <div key={parrain.id} className="p-4 space-y-2.5 text-xs">
                   <div className="flex items-start justify-between gap-2">
-                    <div className="flex items-center gap-2 min-w-0">
+                    <div className="flex items-center gap-2.5 min-w-0">
                       <span className="font-mono tabular-nums text-[11px] text-slate-400 dark:text-[#7c7296] shrink-0">
                         #{idx + 1}
                       </span>
+                      {parrain.avatar ? (
+                        <img
+                          src={parrain.avatar}
+                          alt={parrain.discordDisplayName}
+                          referrerPolicy="no-referrer"
+                          className="w-7 h-7 rounded-full border border-slate-200 dark:border-[#2e224a] object-cover shrink-0"
+                        />
+                      ) : (
+                        <div className="w-7 h-7 rounded-full bg-violet-600/15 text-violet-700 dark:text-violet-300 flex items-center justify-center font-bold text-[10px] shrink-0">
+                          {(parrain.discordDisplayName || parrain.discordUsername || 'P').charAt(0).toUpperCase()}
+                        </div>
+                      )}
                       <div className="min-w-0">
                         <div className="font-semibold text-slate-900 dark:text-[#f4f1fa] truncate">
-                          {parrain.discordDisplayName}
+                          {parrain.discordDisplayName || parrain.discordUsername}
                         </div>
-                        <div className="text-[11px] text-slate-400 dark:text-[#7c7296] font-mono truncate">
-                          {parrain.discordUserId}
+                        <div className="text-[11px] text-slate-400 dark:text-[#7c7296] truncate">
+                          @{parrain.discordUsername} · <span className="font-mono">{parrain.discordUserId}</span>
                         </div>
                       </div>
                     </div>
@@ -791,16 +803,28 @@ export const DashboardView: React.FC<Props> = ({
                   return (
                     <tr key={parrain.id} className="hover:bg-slate-50/50 dark:hover:bg-[#171026] transition-colors">
                       <td className="py-3 px-4">
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-2.5">
                           <span className="font-mono tabular-nums text-[11px] text-slate-400 dark:text-[#7c7296] w-5">
                             #{idx + 1}
                           </span>
-                          <div>
-                            <div className="font-semibold text-slate-900 dark:text-[#f4f1fa]">
-                              {parrain.discordDisplayName}
+                          {parrain.avatar ? (
+                            <img
+                              src={parrain.avatar}
+                              alt={parrain.discordDisplayName}
+                              referrerPolicy="no-referrer"
+                              className="w-7 h-7 rounded-full border border-slate-200 dark:border-[#2e224a] object-cover shrink-0"
+                            />
+                          ) : (
+                            <div className="w-7 h-7 rounded-full bg-violet-600/15 text-violet-700 dark:text-violet-300 flex items-center justify-center font-bold text-[10px] shrink-0">
+                              {(parrain.discordDisplayName || parrain.discordUsername || 'P').charAt(0).toUpperCase()}
                             </div>
-                            <div className="text-[11px] text-slate-400 dark:text-[#7c7296] font-mono">
-                              {parrain.discordUserId}
+                          )}
+                          <div className="min-w-0">
+                            <div className="font-semibold text-slate-900 dark:text-[#f4f1fa] truncate max-w-[180px]">
+                              {parrain.discordDisplayName || parrain.discordUsername}
+                            </div>
+                            <div className="text-[11px] text-slate-400 dark:text-[#7c7296] truncate max-w-[200px]">
+                              @{parrain.discordUsername} · <span className="font-mono">{parrain.discordUserId}</span>
                             </div>
                           </div>
                         </div>

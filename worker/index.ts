@@ -73,9 +73,117 @@ function getEnvGuildIds(env: Env): Record<DiscordServerType, string> {
 
 const app = new Hono<{ Bindings: Env }>();
 
-// Gestionnaire global d'erreurs : ne jamais exposer de trace ni de secret
-app.onError((_err, c) => {
-  return c.json({ error: 'Erreur interne du serveur.' }, 500);
+function sanitizeDiagnosticText(raw: unknown): string {
+  if (!raw || typeof raw !== 'string') return '';
+  return raw
+    .replace(/-----BEGIN[^-]+-----[\s\S]*?-----END[^-]+-----/g, '[PEM_REDACTED]')
+    .replace(/Bearer\s+[A-Za-z0-9._-]+/gi, 'Bearer [REDACTED]')
+    .replace(/(client_secret|private_key|botToken|password|secret)=[^&\s]+/gi, '$1=[REDACTED]')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 160);
+}
+
+function isOriginAllowedForEnv(origin: string | undefined, env: Env): origin is string {
+  if (!origin) return false;
+  const frontendUrl = (env.FRONTEND_URL || '').trim();
+  let configuredFrontendOrigin: string | null = null;
+  if (frontendUrl) {
+    try {
+      const parsed = new URL(frontendUrl);
+      if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+        configuredFrontendOrigin = parsed.origin;
+      }
+    } catch {
+      configuredFrontendOrigin = null;
+    }
+  }
+  const isDevelopment = env.ENVIRONMENT === 'development' || env.NODE_ENV === 'development';
+  if (isDevelopment) {
+    const isLocalhost =
+      origin === 'http://localhost:3000' ||
+      origin === 'http://127.0.0.1:3000' ||
+      origin === 'http://localhost:5173' ||
+      origin === 'http://127.0.0.1:5173';
+    return isLocalhost || Boolean(configuredFrontendOrigin && origin === configuredFrontendOrigin);
+  }
+  return Boolean(configuredFrontendOrigin && origin === configuredFrontendOrigin);
+}
+
+// Gestionnaire global d'erreurs : journalisation structurée et diagnostic sûr sans jamais exposer de secret
+app.onError((err, c) => {
+  const origin = c.req.header('Origin');
+  const corsHeaders: Record<string, string> = isOriginAllowedForEnv(origin, c.env)
+    ? {
+        'Access-Control-Allow-Origin': origin,
+        'Access-Control-Allow-Credentials': 'true',
+      }
+    : {};
+
+  if (err instanceof FirestoreRestError) {
+    const safeMsg = sanitizeDiagnosticText(err.message) || 'Erreur Firestore.';
+    console.error('[Worker Unhandled FirestoreRestError]', {
+      method: c.req.method,
+      path: c.req.path,
+      category: err.category,
+      operation: err.operation,
+      status: err.status ?? null,
+      firestoreStatus: err.firestoreStatus ?? null,
+      message: safeMsg,
+    });
+
+    if (err.isPreconditionConflict) {
+      return c.json(
+        {
+          error: 'Conflit de mise à jour concurrente dans Firestore. Veuillez actualiser et réessayer.',
+          code: 'FIRESTORE_PRECONDITION_CONFLICT',
+          category: err.category,
+          operation: err.operation,
+        },
+        409,
+        corsHeaders
+      );
+    }
+
+    const httpStatus =
+      err.category === 'RATE_LIMIT'
+        ? 429
+        : ['AUTH', 'CONFIG', 'PERMISSION', 'NETWORK', 'TRANSIENT'].includes(err.category)
+          ? 503
+          : 500;
+
+    return c.json(
+      {
+        error: safeMsg,
+        code: err.firestoreStatus || err.category,
+        category: err.category,
+        operation: err.operation,
+        httpStatus: err.status ?? null,
+      },
+      httpStatus,
+      corsHeaders
+    );
+  }
+
+  const errName = (err as any)?.name || 'Error';
+  const safeMsg = sanitizeDiagnosticText((err as any)?.message);
+  console.error('[Worker Unhandled Error]', {
+    method: c.req.method,
+    path: c.req.path,
+    name: errName,
+    message: safeMsg,
+  });
+
+  return c.json(
+    {
+      error: safeMsg
+        ? `Erreur interne du serveur (${errName}: ${safeMsg}).`
+        : `Erreur interne du serveur (${errName}).`,
+      code: 'INTERNAL_SERVER_ERROR',
+    },
+    500,
+    corsHeaders
+  );
 });
 
 // Échappement HTML sécurisé pour toute injection dynamique
@@ -222,35 +330,7 @@ app.use('*', async (c, next) => {
     return next();
   }
 
-  const frontendUrl = (c.env.FRONTEND_URL || '').trim();
-  let configuredFrontendOrigin: string | null = null;
-  if (frontendUrl) {
-    try {
-      const parsed = new URL(frontendUrl);
-      if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
-        configuredFrontendOrigin = parsed.origin;
-      }
-    } catch {
-      configuredFrontendOrigin = null;
-    }
-  }
-
-  // Vérification explicite du mode développement
-  const isDevelopment = c.env.ENVIRONMENT === 'development' || c.env.NODE_ENV === 'development';
-
-  let isAllowedOrigin = false;
-  if (isDevelopment) {
-    const isLocalhost =
-      origin === 'http://localhost:3000' ||
-      origin === 'http://127.0.0.1:3000' ||
-      origin === 'http://localhost:5173' ||
-      origin === 'http://127.0.0.1:5173';
-    isAllowedOrigin = isLocalhost || Boolean(configuredFrontendOrigin && origin === configuredFrontendOrigin);
-  } else {
-    // En production : exclusivement l'origine exacte configurée dans FRONTEND_URL.
-    // Si FRONTEND_URL est absent ou invalide, tout accès CORS est strictement refusé.
-    isAllowedOrigin = Boolean(configuredFrontendOrigin && origin === configuredFrontendOrigin);
-  }
+  const isAllowedOrigin = isOriginAllowedForEnv(origin, c.env);
 
   // Traitement des requêtes pré-vol (OPTIONS)
   if (c.req.method === 'OPTIONS') {
@@ -1605,26 +1685,86 @@ app.post('/api/referrers', async c => {
     return c.json({ error: 'Accès réservé exclusivement aux Administrateurs' }, 403);
   }
 
-  const body = await c.req.json();
-  const { discordUserId, inviteCode, notes } = body;
+  const body = await c.req.json().catch(() => ({}));
+  const rawIdentifier =
+    (typeof body.discordUserId === 'string' && body.discordUserId.trim()) ||
+    (typeof body.identifier === 'string' && body.identifier.trim()) ||
+    '';
 
-  if (!discordUserId) {
-    return c.json({ error: 'discordUserId requis' }, 400);
+  if (!rawIdentifier) {
+    return c.json({ error: 'Discord User ID ou @nom_utilisateur requis.' }, 400);
   }
 
   try {
     const referrer = await repo.createReferrer({
-      discordUserId,
-      inviteCode,
-      notes,
+      discordUserId: rawIdentifier,
+      inviteCode: typeof body.inviteCode === 'string' ? body.inviteCode : undefined,
+      notes: typeof body.notes === 'string' ? body.notes : undefined,
       actorUserId: user.id,
       actorName: user.displayName,
       discordBotConfig: getDiscordBotConfig(c.env),
+      guildIds: Object.values(getEnvGuildIds(c.env)).filter(Boolean),
     });
 
     return c.json({ success: true, referrer }, 201);
   } catch (err: any) {
     return c.json({ error: err.message || 'Impossible de créer le parrain.' }, 400);
+  }
+});
+
+app.post('/api/referrers/sync-discord', async c => {
+  const repo = getRepository(c.env);
+  const user = await getAuthenticatedUser(c, repo);
+
+  if (!user) {
+    return c.json({ error: 'Session non authentifiée.' }, 401);
+  }
+
+  if (user.role !== 'ADMINISTRATEUR') {
+    return c.json({ error: 'Seuls les Administrateurs peuvent synchroniser les noms Discord.' }, 403);
+  }
+
+  try {
+    const result = await repo.syncAllReferrersDiscordProfiles({
+      discordBotConfig: getDiscordBotConfig(c.env),
+      actor: { id: user.id, displayName: user.displayName },
+    });
+    return c.json({ success: true, ...result });
+  } catch (err: any) {
+    if (err instanceof FirestoreRestError) throw err;
+    return c.json({ error: err?.message || 'Impossible de synchroniser les profils Discord.' }, 400);
+  }
+});
+
+app.post('/api/referrers/:id/sync-discord', async c => {
+  const repo = getRepository(c.env);
+  const user = await getAuthenticatedUser(c, repo);
+
+  if (!user) {
+    return c.json({ error: 'Session non authentifiée.' }, 401);
+  }
+
+  if (user.role !== 'ADMINISTRATEUR') {
+    return c.json({ error: 'Seuls les Administrateurs peuvent synchroniser ce profil Discord.' }, 403);
+  }
+
+  try {
+    const result = await repo.syncReferrerDiscordProfile(c.req.param('id'), {
+      discordBotConfig: getDiscordBotConfig(c.env),
+      actor: { id: user.id, displayName: user.displayName },
+    });
+    if (!result) {
+      return c.json({ error: 'Profil parrain introuvable.' }, 404);
+    }
+    return c.json({
+      success: !result.errorMessage,
+      updated: result.updated,
+      referrer: result.referrer,
+      errorMessage: result.errorMessage || null,
+    });
+  } catch (err: any) {
+    if (err instanceof FirestoreRestError) throw err;
+    return c.json({ error: err?.message || 'Impossible de synchroniser ce profil Discord.' }, 400);
   }
 });
 
@@ -1641,22 +1781,35 @@ app.patch('/api/referrers/:id', async c => {
   }
 
   const body = await c.req.json().catch(() => ({}));
-  const updated = await repo.updateReferrer(
-    c.req.param('id'),
-    {
-      notes: typeof body.notes === 'string' ? body.notes : undefined,
-      discordDisplayName:
-        typeof body.discordDisplayName === 'string' ? body.discordDisplayName : undefined,
-      discordUsername: typeof body.discordUsername === 'string' ? body.discordUsername : undefined,
-    },
-    { id: user.id, displayName: user.displayName }
-  );
+  try {
+    const updated = await repo.updateReferrer(
+      c.req.param('id'),
+      {
+        notes: typeof body.notes === 'string' ? body.notes : undefined,
+        discordDisplayName:
+          typeof body.discordDisplayName === 'string' ? body.discordDisplayName : undefined,
+        discordUsername: typeof body.discordUsername === 'string' ? body.discordUsername : undefined,
+      },
+      { id: user.id, displayName: user.displayName }
+    );
 
-  if (!updated) {
-    return c.json({ error: 'Profil parrain introuvable.' }, 404);
+    if (!updated) {
+      return c.json({ error: 'Profil parrain introuvable.' }, 404);
+    }
+
+    return c.json({ success: true, referrer: updated });
+  } catch (err: any) {
+    if (err instanceof FirestoreRestError) {
+      if (err.isPreconditionConflict) {
+        return c.json(
+          { error: 'Conflit concurrent lors de la mise à jour du parrain. Réessayez.' },
+          409
+        );
+      }
+      throw err;
+    }
+    return c.json({ error: err?.message || 'Impossible de mettre à jour ce profil parrain.' }, 400);
   }
-
-  return c.json({ success: true, referrer: updated });
 });
 
 app.patch('/api/referrers/:id/toggle', async c => {
@@ -1678,7 +1831,10 @@ app.patch('/api/referrers/:id/toggle', async c => {
     }
     return c.json({ success: true, referrer });
   } catch (err: any) {
-    return c.json({ error: err.message }, 400);
+    if (err instanceof FirestoreRestError && !err.isPreconditionConflict) {
+      throw err;
+    }
+    return c.json({ error: err.message }, err instanceof FirestoreRestError ? 409 : 400);
   }
 });
 
@@ -1697,16 +1853,29 @@ const handleReferrerStatusRoute = (targetStatus: ReferrerStatus) => async (c: an
   const body = await c.req.json().catch(() => ({}));
   const reason = typeof body?.reason === 'string' ? body.reason : undefined;
 
-  const updated = await repo.setReferrerStatus(c.req.param('id'), targetStatus, reason, {
-    id: user.id,
-    displayName: user.displayName,
-  });
+  try {
+    const updated = await repo.setReferrerStatus(c.req.param('id'), targetStatus, reason, {
+      id: user.id,
+      displayName: user.displayName,
+    });
 
-  if (!updated) {
-    return c.json({ error: 'Profil parrain introuvable.' }, 404);
+    if (!updated) {
+      return c.json({ error: 'Profil parrain introuvable.' }, 404);
+    }
+
+    return c.json({ success: true, referrer: updated });
+  } catch (err: any) {
+    if (err instanceof FirestoreRestError) {
+      if (err.isPreconditionConflict) {
+        return c.json(
+          { error: 'Conflit concurrent lors du changement de statut. Actualisez et réessayez.' },
+          409
+        );
+      }
+      throw err;
+    }
+    return c.json({ error: err?.message || 'Impossible de modifier le statut de ce parrain.' }, 400);
   }
-
-  return c.json({ success: true, referrer: updated });
 };
 
 app.post('/api/referrers/:id/activate', handleReferrerStatusRoute('ACTIVE'));
@@ -1768,15 +1937,30 @@ app.delete('/api/referrers/:id', async c => {
 
   const body = await c.req.json().catch(() => ({}));
   const confirm = c.req.query('confirm') === 'true' || body?.confirm === true;
+  const force = c.req.query('force') === 'true' || body?.force === true;
 
   try {
-    const result = await repo.deleteReferrerPhysically(c.req.param('id'), confirm, {
-      id: user.id,
-      displayName: user.displayName,
+    const result = await repo.deleteReferrerPhysically(
+      c.req.param('id'),
+      confirm,
+      {
+        id: user.id,
+        displayName: user.displayName,
+      },
+      getDiscordBotConfig(c.env),
+      { force }
+    );
+    return c.json({
+      success: result.deleted,
+      summary: result.summary,
+      detachedCandidatesCount: result.detachedCandidatesCount || 0,
+      cleanedHistoryCount: result.cleanedHistoryCount || 0,
     });
-    return c.json({ success: result.deleted, summary: result.summary });
   } catch (err: any) {
-    const status = err?.status === 409 ? 409 : 400;
+    if (err instanceof FirestoreRestError && !err.isPreconditionConflict) {
+      throw err;
+    }
+    const status = err?.status === 409 || err?.isPreconditionConflict ? 409 : 400;
     return c.json(
       {
         error: err.message,

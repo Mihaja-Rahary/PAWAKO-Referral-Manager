@@ -575,6 +575,16 @@ export function fromFirestoreDocument<T = any>(doc: any): T {
   for (const [k, v] of Object.entries(fields)) {
     data[k] = fromFirestoreValue(v);
   }
+  if ((!data.id || typeof data.id !== 'string') && typeof doc.name === 'string') {
+    const lastSegment = doc.name.split('/').filter(Boolean).pop();
+    if (lastSegment) {
+      try {
+        data.id = decodeURIComponent(lastSegment);
+      } catch {
+        data.id = lastSegment;
+      }
+    }
+  }
   if (doc.updateTime) {
     data._updateTime = doc.updateTime;
   }
@@ -820,6 +830,9 @@ export class FirestoreRestClient {
     docId: string,
     options?: { transaction?: string }
   ): Promise<(T & { _updateTime?: string }) | null> {
+    if (!docId || !String(docId).trim()) {
+      return null;
+    }
     let url = `${this.baseUrl}/${encodeURIComponent(collection)}/${encodeURIComponent(docId)}`;
     if (options?.transaction) {
       url += `?transaction=${encodeURIComponent(options.transaction)}`;
@@ -876,6 +889,12 @@ export class FirestoreRestClient {
       precondition?: { exists?: boolean; updateTime?: string };
     }
   ): Promise<T> {
+    if (!docId || !String(docId).trim()) {
+      throw new FirestoreRestError(`Identifiant de document invalide ou vide pour ${collection}.`, {
+        operation: `SET ${collection}`,
+        category: 'UNKNOWN',
+      });
+    }
     let url = `${this.baseUrl}/${encodeURIComponent(collection)}/${encodeURIComponent(docId)}`;
     if (options?.precondition) {
       const params = new URLSearchParams();
@@ -914,6 +933,12 @@ export class FirestoreRestClient {
     docId: string,
     options?: { precondition?: { exists?: boolean; updateTime?: string } }
   ): Promise<boolean> {
+    if (!docId || !String(docId).trim()) {
+      throw new FirestoreRestError(`Identifiant de document invalide ou vide pour ${collection}.`, {
+        operation: `DELETE ${collection}`,
+        category: 'UNKNOWN',
+      });
+    }
     let url = `${this.baseUrl}/${encodeURIComponent(collection)}/${encodeURIComponent(docId)}`;
     if (options?.precondition) {
       const params = new URLSearchParams();

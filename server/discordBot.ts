@@ -47,6 +47,284 @@ export interface DiscordInviteVerificationResult {
 
 const DISCORD_API_BASE = 'https://discord.com/api/v10';
 
+export interface DiscordResolvedUser {
+  id: string;
+  username: string;
+  displayName: string;
+  avatar: string | null;
+  resolvedFrom: 'API' | 'GUILD_SEARCH';
+}
+
+export interface DiscordUserLookupResult {
+  ok: boolean;
+  user: DiscordResolvedUser | null;
+  errorCode?:
+    | 'MISSING_DISCORD_BOT_TOKEN'
+    | 'DISCORD_USER_NOT_FOUND'
+    | 'DISCORD_INVALID_IDENTIFIER'
+    | 'DISCORD_API_ERROR'
+    | 'NETWORK_ERROR';
+  errorMessage?: string;
+}
+
+export function buildDiscordAvatarUrl(userId: string, avatarHash?: string | null): string | null {
+  const hash = (avatarHash || '').trim();
+  if (!hash) return null;
+  if (hash.startsWith('http://') || hash.startsWith('https://')) return hash;
+  return `https://cdn.discordapp.com/avatars/${encodeURIComponent(userId)}/${encodeURIComponent(hash)}.png`;
+}
+
+/**
+ * Récupère le profil réel d'un utilisateur Discord via son ID Snowflake (GET /users/{id}).
+ * Fonctionne même si l'utilisateur n'a pas encore rejoint le serveur ou lancé OAuth2.
+ */
+export async function fetchDiscordUserById(params: {
+  botToken?: string;
+  discordUserId: string;
+}): Promise<DiscordUserLookupResult> {
+  const token = (params.botToken || '').trim();
+  const cleanId = (params.discordUserId || '').trim();
+
+  if (!/^\d{17,20}$/.test(cleanId)) {
+    return {
+      ok: false,
+      user: null,
+      errorCode: 'DISCORD_INVALID_IDENTIFIER',
+      errorMessage: 'Discord User ID invalide (Snowflake 17-20 chiffres requis).',
+    };
+  }
+
+  if (!token) {
+    return {
+      ok: false,
+      user: null,
+      errorCode: 'MISSING_DISCORD_BOT_TOKEN',
+      errorMessage: 'Secret DISCORD_BOT_TOKEN manquant côté serveur.',
+    };
+  }
+
+  try {
+    const res = await fetch(`${DISCORD_API_BASE}/users/${encodeURIComponent(cleanId)}`, {
+      headers: {
+        Authorization: `Bot ${token}`,
+        'User-Agent': 'PawakoReferralManager/1.0',
+      },
+    });
+
+    if (res.status === 404) {
+      return {
+        ok: false,
+        user: null,
+        errorCode: 'DISCORD_USER_NOT_FOUND',
+        errorMessage: `Aucun compte Discord trouvé pour l'ID ${cleanId}.`,
+      };
+    }
+
+    if (!res.ok) {
+      const errJson = (await res.json().catch(() => null)) as { message?: string } | null;
+      return {
+        ok: false,
+        user: null,
+        errorCode: 'DISCORD_API_ERROR',
+        errorMessage: `Impossible de lire le profil Discord (HTTP ${res.status}${errJson?.message ? `: ${errJson.message}` : ''}).`,
+      };
+    }
+
+    const data = (await res.json()) as {
+      id: string;
+      username?: string;
+      global_name?: string | null;
+      avatar?: string | null;
+    };
+
+    const username = (data.username || '').trim() || `user_${cleanId.slice(-4)}`;
+    const displayName = (data.global_name || '').trim() || username;
+
+    return {
+      ok: true,
+      user: {
+        id: data.id || cleanId,
+        username,
+        displayName,
+        avatar: buildDiscordAvatarUrl(data.id || cleanId, data.avatar),
+        resolvedFrom: 'API',
+      },
+    };
+  } catch (err: any) {
+    return {
+      ok: false,
+      user: null,
+      errorCode: 'NETWORK_ERROR',
+      errorMessage: `Erreur réseau Discord : ${err?.message || 'inconnue'}`,
+    };
+  }
+}
+
+/**
+ * Recherche un utilisateur Discord par @username / pseudo sur les serveurs Discord PAWAKO configurés.
+ */
+export async function searchDiscordMemberByUsername(params: {
+  botToken?: string;
+  guildIds: string[];
+  query: string;
+}): Promise<DiscordUserLookupResult> {
+  const token = (params.botToken || '').trim();
+  const cleanQuery = (params.query || '')
+    .trim()
+    .replace(/^@+/, '')
+    .replace(/#0+$/, '')
+    .trim();
+
+  if (!cleanQuery || cleanQuery.length < 2) {
+    return {
+      ok: false,
+      user: null,
+      errorCode: 'DISCORD_INVALID_IDENTIFIER',
+      errorMessage: "Saisissez un Discord User ID (17-20 chiffres) ou un @nom_utilisateur valide (min. 2 caractères).",
+    };
+  }
+
+  if (!token) {
+    return {
+      ok: false,
+      user: null,
+      errorCode: 'MISSING_DISCORD_BOT_TOKEN',
+      errorMessage:
+        'DISCORD_BOT_TOKEN est requis pour rechercher un utilisateur par @pseudo. Saisissez directement son Discord User ID numérique.',
+    };
+  }
+
+  const validGuilds = Array.from(
+    new Set((params.guildIds || []).map(g => (g || '').trim()).filter(g => /^\d{17,20}$/.test(g)))
+  );
+
+  if (validGuilds.length === 0) {
+    return {
+      ok: false,
+      user: null,
+      errorCode: 'DISCORD_API_ERROR',
+      errorMessage:
+        'Aucun serveur Discord PAWAKO configuré pour rechercher un pseudo. Saisissez directement le Discord User ID numérique.',
+    };
+  }
+
+  const normalizedQuery = cleanQuery.toLowerCase();
+  const candidates: Array<DiscordResolvedUser & { exact: boolean }> = [];
+  const seenIds = new Set<string>();
+  let anyGuildSucceeded = false;
+
+  for (const guildId of validGuilds) {
+    try {
+      const res = await fetch(
+        `${DISCORD_API_BASE}/guilds/${encodeURIComponent(guildId)}/members/search?query=${encodeURIComponent(cleanQuery)}&limit=10`,
+        {
+          headers: {
+            Authorization: `Bot ${token}`,
+            'User-Agent': 'PawakoReferralManager/1.0',
+          },
+        }
+      );
+
+      if (!res.ok) continue;
+      anyGuildSucceeded = true;
+
+      const members = (await res.json().catch(() => [])) as Array<{
+        nick?: string | null;
+        user?: {
+          id?: string;
+          username?: string;
+          global_name?: string | null;
+          avatar?: string | null;
+        };
+      }>;
+
+      for (const m of Array.isArray(members) ? members : []) {
+        const u = m?.user;
+        if (!u?.id || seenIds.has(u.id)) continue;
+        seenIds.add(u.id);
+
+        const uname = (u.username || '').trim();
+        const gname = (u.global_name || '').trim();
+        const nick = (m.nick || '').trim();
+        const displayName = gname || nick || uname || `user_${u.id.slice(-4)}`;
+
+        const exact =
+          uname.toLowerCase() === normalizedQuery ||
+          gname.toLowerCase() === normalizedQuery ||
+          nick.toLowerCase() === normalizedQuery;
+
+        candidates.push({
+          id: u.id,
+          username: uname || `user_${u.id.slice(-4)}`,
+          displayName,
+          avatar: buildDiscordAvatarUrl(u.id, u.avatar),
+          resolvedFrom: 'GUILD_SEARCH',
+          exact,
+        });
+      }
+    } catch {
+      // Continuer sur les autres serveurs
+    }
+  }
+
+  const exactMatches = candidates.filter(c => c.exact);
+  if (exactMatches.length === 1) {
+    const { exact: _exact, ...user } = exactMatches[0];
+    return { ok: true, user };
+  }
+
+  if (exactMatches.length > 1) {
+    const { exact: _exact, ...user } = exactMatches[0];
+    return { ok: true, user };
+  }
+
+  if (candidates.length === 1) {
+    const { exact: _exact, ...user } = candidates[0];
+    return { ok: true, user };
+  }
+
+  if (candidates.length > 1) {
+    const sample = candidates
+      .slice(0, 3)
+      .map(c => `@${c.username} (${c.id})`)
+      .join(', ');
+    return {
+      ok: false,
+      user: null,
+      errorCode: 'DISCORD_USER_NOT_FOUND',
+      errorMessage: `Plusieurs membres correspondent à "${cleanQuery}" (${sample}). Précisez le @username exact ou saisissez le Discord User ID.`,
+    };
+  }
+
+  return {
+    ok: false,
+    user: null,
+    errorCode: 'DISCORD_USER_NOT_FOUND',
+    errorMessage: anyGuildSucceeded
+      ? `Aucun membre "${cleanQuery}" trouvé sur les serveurs Discord PAWAKO. Vérifiez l'orthographe ou saisissez directement son Discord User ID (17-20 chiffres).`
+      : `Le bot Discord n'a pas accès aux serveurs pour chercher "${cleanQuery}". Saisissez directement son Discord User ID (17-20 chiffres) ou ajoutez le bot sur le serveur.`,
+  };
+}
+
+/**
+ * Résout indifféremment un Discord User ID (Snowflake) ou un @username via l'API Discord v10.
+ */
+export async function resolveDiscordUserIdentifier(params: {
+  botToken?: string;
+  guildIds?: string[];
+  identifier: string;
+}): Promise<DiscordUserLookupResult> {
+  const clean = (params.identifier || '').trim();
+  if (/^\d{17,20}$/.test(clean)) {
+    return fetchDiscordUserById({ botToken: params.botToken, discordUserId: clean });
+  }
+  return searchDiscordMemberByUsername({
+    botToken: params.botToken,
+    guildIds: params.guildIds || [],
+    query: clean,
+  });
+}
+
 /**
  * Détecte les anciens codes factices générés avant l'intégration réelle Discord Bot (PWK-... ou URL factice)
  */

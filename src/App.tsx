@@ -186,7 +186,6 @@ export default function App() {
 
       if (eventType === 'OAUTH_AUTH_SUCCESS') {
         setOauthError(null);
-        await loadAuthAndGlobals();
         triggerRefresh();
         const portal = (event.data as { portal?: string }).portal;
         if (portal === 'parrain') {
@@ -561,6 +560,7 @@ export default function App() {
             {activeTab === 'candidates' && (
               <CandidatesView
                 currentUserRole={currentUser?.role || 'ADMINISTRATEUR'}
+                referrers={referrers}
                 initialStatusFilter={candidateStatusFilter}
                 initialVaTypeFilter={candidateVaTypeFilter}
                 initialAnomalyFilter={candidateAnomalyFilter}

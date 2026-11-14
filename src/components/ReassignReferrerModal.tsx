@@ -17,12 +17,15 @@ export const ReassignReferrerModal: React.FC<Props> = ({
   onClose,
   onSubmit,
 }) => {
-  if (!isOpen) return null;
-
-  const [selectedReferrerId, setSelectedReferrerId] = useState(candidate.referrerId || (referrers[0]?.id ?? ''));
+  const selectableReferrers = referrers.filter(r => r.status !== 'ARCHIVED');
+  const [selectedReferrerId, setSelectedReferrerId] = useState(
+    candidate.referrerId || (selectableReferrers[0]?.id ?? referrers[0]?.id ?? '')
+  );
   const [reason, setReason] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  if (!isOpen) return null;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -93,9 +96,9 @@ export const ReassignReferrerModal: React.FC<Props> = ({
               onChange={e => setSelectedReferrerId(e.target.value)}
               className="w-full text-xs p-2.5 border border-slate-200 dark:border-[#241a38] rounded-lg focus:outline-none focus:ring-2 focus:ring-violet-500/20 focus:border-violet-500 text-slate-900 dark:text-[#f4f1fa] bg-white dark:bg-[#171026]"
             >
-              {referrers.map(ref => (
+              {selectableReferrers.map(ref => (
                 <option key={ref.id} value={ref.id}>
-                  {ref.discordDisplayName} ({ref.inviteCode})
+                  {ref.discordDisplayName} (@{ref.discordUsername}){ref.inviteCode ? ` — ${ref.inviteCode}` : ''}
                 </option>
               ))}
             </select>

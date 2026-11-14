@@ -371,10 +371,39 @@ export const api = {
     });
   },
 
+  async syncReferrerDiscordProfile(id: string): Promise<{
+    success: boolean;
+    updated: boolean;
+    referrer: Referrer;
+    errorMessage: string | null;
+  }> {
+    return request(`/api/referrers/${id}/sync-discord`, {
+      method: 'POST',
+    });
+  },
+
+  async syncAllReferrersDiscordProfiles(): Promise<{
+    success: boolean;
+    updatedCount: number;
+    skippedCount: number;
+    errors: string[];
+    referrers: Referrer[];
+  }> {
+    return request('/api/referrers/sync-discord', {
+      method: 'POST',
+    });
+  },
+
   async deleteReferrerPhysically(
-    id: string
-  ): Promise<{ success: boolean; summary: ReferrerDependencySummary }> {
-    return request(`/api/referrers/${id}?confirm=true`, {
+    id: string,
+    force = false
+  ): Promise<{
+    success: boolean;
+    summary: ReferrerDependencySummary;
+    detachedCandidatesCount?: number;
+    cleanedHistoryCount?: number;
+  }> {
+    return request(`/api/referrers/${id}?confirm=true${force ? '&force=true' : ''}`, {
       method: 'DELETE',
     });
   },

@@ -88,6 +88,9 @@ export const ReferrersView: React.FC<Props> = ({
   const [isLoading, setIsLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
+  const [copiedDiscordId, setCopiedDiscordId] = useState<string | null>(null);
+  const [isSyncingAll, setIsSyncingAll] = useState(false);
+  const [pageFeedback, setPageFeedback] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
 
   // Filters
   const [search, setSearch] = useState('');
@@ -117,18 +120,27 @@ export const ReferrersView: React.FC<Props> = ({
   const [manualInviteCode, setManualInviteCode] = useState('');
   const [actionReason, setActionReason] = useState('');
   const [pendingAction, setPendingAction] = useState<
-    null | 'ACTIVATE' | 'SUSPEND' | 'REACTIVATE' | 'ARCHIVE' | 'RESTORE' | 'DELETE_PHYSICAL'
+    | null
+    | 'ACTIVATE'
+    | 'SUSPEND'
+    | 'REACTIVATE'
+    | 'ARCHIVE'
+    | 'RESTORE'
+    | 'DELETE_PHYSICAL'
+    | 'ARCHIVE_AND_DELETE'
+    | 'DELETE_FORCE'
   >(null);
   const [isActionLoading, setIsActionLoading] = useState(false);
   const [actionFeedback, setActionFeedback] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
 
   const isAdmin = currentUserRole === 'ADMINISTRATEUR';
+  const hasBootstrapReferrers = initialReferrers !== undefined;
 
   useEffect(() => {
-    if (initialReferrers && initialReferrers.length > 0 && refreshTrigger === 0) {
+    if (initialReferrers !== undefined) {
       setReferrers(initialReferrers);
     }
-  }, [initialReferrers, refreshTrigger]);
+  }, [initialReferrers]);
 
   const fetchReferrers = useCallback(async () => {
     try {
@@ -144,11 +156,14 @@ export const ReferrersView: React.FC<Props> = ({
   }, []);
 
   useEffect(() => {
-    if (initialReferrers && initialReferrers.length > 0 && refreshTrigger === 0) {
+    // Évite un double scan Firestore au montage quand App.tsx fournit déjà initialReferrers via /api/admin/bootstrap
+    if (hasBootstrapReferrers && refreshTrigger === 0) {
       return;
     }
-    fetchReferrers();
-  }, [refreshTrigger, fetchReferrers, initialReferrers]);
+    if (!hasBootstrapReferrers) {
+      fetchReferrers();
+    }
+  }, [refreshTrigger, fetchReferrers, hasBootstrapReferrers]);
 
   const loadReferrerDetails = useCallback(async (id: string) => {
     try {
@@ -165,9 +180,15 @@ export const ReferrersView: React.FC<Props> = ({
     }
   }, []);
 
-  const openDetails = (id: string) => {
+  const openDetails = (
+    id: string,
+    initialPendingAction?:
+      | 'DELETE_PHYSICAL'
+      | 'ARCHIVE_AND_DELETE'
+      | 'DELETE_FORCE'
+  ) => {
     setSelectedReferrerId(id);
-    setPendingAction(null);
+    setPendingAction(initialPendingAction || null);
     setActionReason('');
     setManualInviteCode('');
     setActionFeedback(null);
@@ -188,11 +209,76 @@ export const ReferrersView: React.FC<Props> = ({
     setTimeout(() => setCopiedCode(null), 2000);
   };
 
+  const handleCopyDiscordId = (discordId: string) => {
+    if (!discordId) return;
+    navigator.clipboard.writeText(discordId);
+    setCopiedDiscordId(discordId);
+    setTimeout(() => setCopiedDiscordId(null), 2000);
+  };
+
+  const handleSyncAllDiscordNames = async () => {
+    if (!isAdmin || isSyncingAll) return;
+    try {
+      setIsSyncingAll(true);
+      setPageFeedback(null);
+      const res = await api.syncAllReferrersDiscordProfiles();
+      if (Array.isArray(res.referrers)) {
+        setReferrers(res.referrers);
+      }
+      if (onRefreshAll) onRefreshAll();
+      setPageFeedback({
+        type: 'ok',
+        text:
+          res.updatedCount > 0
+            ? `${res.updatedCount} profil(s) parrain(s) et filleul(s) associés mis à jour depuis Discord.`
+            : 'Tous les noms et avatars Discord des parrains sont déjà à jour.',
+      });
+    } catch (err: any) {
+      setPageFeedback({
+        type: 'err',
+        text: err?.message || 'Impossible de synchroniser les profils Discord.',
+      });
+    } finally {
+      setIsSyncingAll(false);
+    }
+  };
+
+  const handleSyncSingleDiscordProfile = async () => {
+    if (!selectedReferrerId || !isAdmin || isActionLoading) return;
+    try {
+      setIsActionLoading(true);
+      setActionFeedback(null);
+      const res = await api.syncReferrerDiscordProfile(selectedReferrerId);
+      await Promise.all([loadReferrerDetails(selectedReferrerId), fetchReferrers()]);
+      if (onRefreshAll) onRefreshAll();
+      if (res.success) {
+        setActionFeedback({
+          type: 'ok',
+          text: res.updated
+            ? `Profil Discord synchronisé : ${res.referrer.discordDisplayName} (@${res.referrer.discordUsername}).`
+            : `Profil déjà à jour (${res.referrer.discordDisplayName}).`,
+        });
+      } else {
+        setActionFeedback({
+          type: 'err',
+          text: res.errorMessage || 'Profil Discord introuvable.',
+        });
+      }
+    } catch (err: any) {
+      setActionFeedback({
+        type: 'err',
+        text: err?.message || 'Erreur lors de la synchronisation Discord.',
+      });
+    } finally {
+      setIsActionLoading(false);
+    }
+  };
+
   const handleCreateReferrer = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
     if (!discordUserId.trim()) {
-      setError('Le Discord User ID est obligatoire.');
+      setError("Le Discord User ID ou @nom_utilisateur est obligatoire.");
       return;
     }
 
@@ -283,9 +369,33 @@ export const ReferrersView: React.FC<Props> = ({
         await api.archiveReferrer(selectedReferrerId, reason);
       } else if (pendingAction === 'RESTORE') {
         await api.restoreReferrer(selectedReferrerId, reason);
-      } else if (pendingAction === 'DELETE_PHYSICAL') {
-        await api.deleteReferrerPhysically(selectedReferrerId);
+      } else if (pendingAction === 'ARCHIVE_AND_DELETE') {
+        const deletedId = selectedReferrerId;
+        const deletedLabel = detailData?.referrer.discordDisplayName || deletedId;
+        if (detailStatus !== 'ARCHIVED') {
+          await api.archiveReferrer(deletedId, 'Archivage avant suppression définitive');
+        }
+        await api.deleteReferrerPhysically(deletedId, false);
+        setReferrers(prev => prev.filter(r => r.id !== deletedId));
         closeDetails();
+        setPageFeedback({ type: 'ok', text: `Parrain "${deletedLabel}" supprimé définitivement.` });
+        await fetchReferrers();
+        if (onRefreshAll) onRefreshAll();
+        return;
+      } else if (pendingAction === 'DELETE_PHYSICAL' || pendingAction === 'DELETE_FORCE') {
+        const deletedId = selectedReferrerId;
+        const deletedLabel = detailData?.referrer.discordDisplayName || deletedId;
+        const forceDelete = pendingAction === 'DELETE_FORCE';
+        const res = await api.deleteReferrerPhysically(deletedId, forceDelete);
+        setReferrers(prev => prev.filter(r => r.id !== deletedId));
+        closeDetails();
+        setPageFeedback({
+          type: 'ok',
+          text:
+            res.detachedCandidatesCount && res.detachedCandidatesCount > 0
+              ? `Parrain "${deletedLabel}" supprimé (${res.detachedCandidatesCount} filleul(s) détaché(s) en attribution incertaine).`
+              : `Parrain "${deletedLabel}" supprimé définitivement.`,
+        });
         await fetchReferrers();
         if (onRefreshAll) onRefreshAll();
         return;
@@ -342,13 +452,24 @@ export const ReferrersView: React.FC<Props> = ({
             </p>
           </div>
           {isAdmin && (
-            <button
-              onClick={() => setIsModalOpen(true)}
-              className="min-h-[42px] flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-violet-600 hover:bg-violet-500 rounded-lg transition-colors shadow-xs shadow-violet-600/20 whitespace-nowrap shrink-0 cursor-pointer"
-            >
-              <Plus className="w-4 h-4" />
-              <span>Nouveau Parrain</span>
-            </button>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={handleSyncAllDiscordNames}
+                disabled={isSyncingAll}
+                className="min-h-[42px] flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-700 dark:text-[#e9e5f5] bg-slate-100 dark:bg-[#171026] hover:bg-slate-200 dark:hover:bg-[#231839] border border-slate-200 dark:border-[#241a38] rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-50"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isSyncingAll ? 'animate-spin text-violet-500' : ''}`} />
+                <span>{isSyncingAll ? 'Synchronisation...' : 'Synchroniser noms Discord'}</span>
+              </button>
+              <button
+                onClick={() => setIsModalOpen(true)}
+                className="min-h-[42px] flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-violet-600 hover:bg-violet-500 rounded-lg transition-colors shadow-xs shadow-violet-600/20 whitespace-nowrap shrink-0 cursor-pointer"
+              >
+                <Plus className="w-4 h-4" />
+                <span>Nouveau Parrain</span>
+              </button>
+            </div>
           )}
         </div>
 
@@ -389,6 +510,29 @@ export const ReferrersView: React.FC<Props> = ({
           </div>
         </div>
       </div>
+
+      {pageFeedback && (
+        <div
+          className={`p-3.5 rounded-xl border flex items-center justify-between gap-3 text-xs ${
+            pageFeedback.type === 'ok'
+              ? 'bg-emerald-50 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-500/30 text-emerald-800 dark:text-emerald-200'
+              : 'bg-rose-50 dark:bg-rose-950/30 border-rose-200 dark:border-rose-500/30 text-rose-800 dark:text-rose-200'
+          }`}
+        >
+          <div className="flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 shrink-0" />
+            <span>{pageFeedback.text}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setPageFeedback(null)}
+            aria-label="Fermer la notification"
+            className="p-1 opacity-70 hover:opacity-100 cursor-pointer"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
 
       {loadError && (
         <div className="p-3.5 bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-500/30 rounded-xl flex items-center justify-between gap-3 text-xs text-rose-800 dark:text-rose-200">
@@ -458,8 +602,22 @@ export const ReferrersView: React.FC<Props> = ({
                         <h3 className="font-bold text-slate-900 dark:text-[#f4f1fa] text-sm truncate">
                           {ref.discordDisplayName || ref.discordUsername}
                         </h3>
-                        <div className="text-[11px] text-slate-400 dark:text-[#7c7296] font-mono truncate">
-                          {ref.discordUserId}
+                        <div className="flex items-center gap-1 text-[11px] text-slate-500 dark:text-[#9d93b8] truncate">
+                          <span className="truncate">@{ref.discordUsername}</span>
+                          <span aria-hidden="true">·</span>
+                          <span className="font-mono truncate">{ref.discordUserId}</span>
+                          <button
+                            type="button"
+                            onClick={() => handleCopyDiscordId(ref.discordUserId)}
+                            title="Copier le Discord User ID"
+                            className="p-0.5 text-slate-400 hover:text-slate-700 dark:hover:text-[#f4f1fa] cursor-pointer shrink-0"
+                          >
+                            {copiedDiscordId === ref.discordUserId ? (
+                              <Check className="w-3 h-3 text-emerald-500" />
+                            ) : (
+                              <Copy className="w-3 h-3" />
+                            )}
+                          </button>
                         </div>
                       </div>
                     </div>
@@ -583,10 +741,10 @@ export const ReferrersView: React.FC<Props> = ({
                     </div>
                   )}
 
-                  <div className="grid grid-cols-2 gap-2 pt-1">
+                  <div className="flex items-center gap-2 pt-1">
                     <button
                       onClick={() => openDetails(ref.id)}
-                      className="min-h-[38px] px-2.5 py-1.5 text-xs font-semibold text-white bg-violet-600 hover:bg-violet-500 rounded-lg transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
+                      className="flex-1 min-h-[38px] px-2.5 py-1.5 text-xs font-semibold text-white bg-violet-600 hover:bg-violet-500 rounded-lg transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
                     >
                       <SlidersHorizontal className="w-3.5 h-3.5" />
                       <span>Gérer / Détails</span>
@@ -594,11 +752,32 @@ export const ReferrersView: React.FC<Props> = ({
 
                     <button
                       onClick={() => onSelectReferrerFilter(ref.id)}
-                      className="min-h-[38px] px-2.5 py-1.5 text-xs font-semibold text-slate-700 dark:text-[#e9e5f5] bg-slate-100 dark:bg-[#171026] hover:bg-slate-200 dark:hover:bg-[#231839] border border-slate-200 dark:border-[#241a38] rounded-lg transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
+                      className="flex-1 min-h-[38px] px-2.5 py-1.5 text-xs font-semibold text-slate-700 dark:text-[#e9e5f5] bg-slate-100 dark:bg-[#171026] hover:bg-slate-200 dark:hover:bg-[#231839] border border-slate-200 dark:border-[#241a38] rounded-lg transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
                     >
                       <Users className="w-3.5 h-3.5" />
                       <span>Filleuls</span>
                     </button>
+
+                    {isAdmin && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          openDetails(
+                            ref.id,
+                            (ref.totalFilleuls || 0) > 0
+                              ? 'DELETE_FORCE'
+                              : effStatus === 'ARCHIVED'
+                                ? 'DELETE_PHYSICAL'
+                                : 'ARCHIVE_AND_DELETE'
+                          )
+                        }
+                        title="Supprimer ce parrain"
+                        aria-label={`Supprimer ${ref.discordDisplayName || ref.discordUserId}`}
+                        className="min-h-[38px] min-w-[38px] flex items-center justify-center p-2 text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/30 hover:bg-rose-100 dark:hover:bg-rose-950/50 border border-rose-200 dark:border-rose-500/30 rounded-lg transition-colors cursor-pointer shrink-0"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    )}
                   </div>
                 </div>
               </div>
@@ -634,16 +813,19 @@ export const ReferrersView: React.FC<Props> = ({
 
               <div>
                 <label className="block text-xs font-semibold text-slate-700 dark:text-[#d8d0eb] mb-1">
-                  Discord User ID <span className="text-rose-600 dark:text-rose-400">*</span>
+                  Discord User ID ou @nom_utilisateur <span className="text-rose-600 dark:text-rose-400">*</span>
                 </label>
                 <input
                   type="text"
                   required
-                  placeholder="Ex: 100000000000000005"
+                  placeholder="Ex: 100000000000000005 ou @pseudo"
                   value={discordUserId}
                   onChange={e => setDiscordUserId(e.target.value)}
                   className="w-full text-xs p-2.5 border border-slate-200 dark:border-[#241a38] rounded-lg focus:outline-none focus:ring-2 focus:ring-violet-500/20 focus:border-violet-500 text-slate-900 dark:text-[#f4f1fa] bg-white dark:bg-[#08050f] font-mono placeholder:text-slate-400 dark:placeholder:text-[#7c7296]"
                 />
+                <p className="text-[11px] text-slate-500 dark:text-[#9d93b8] mt-1">
+                  Le nom d'affichage, le @pseudo et l'avatar sont récupérés automatiquement depuis Discord via le bot.
+                </p>
               </div>
 
               <div>
@@ -787,14 +969,27 @@ export const ReferrersView: React.FC<Props> = ({
                         </div>
                       </div>
                     </div>
-                    <span
-                      className={`inline-flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded font-semibold border shrink-0 ${
-                        getReferrerStatusBadge(detailStatus).classes
-                      }`}
-                    >
-                      <span className={`w-1.5 h-1.5 rounded-full ${getReferrerStatusBadge(detailStatus).dot}`} />
-                      {getReferrerStatusBadge(detailStatus).label}
-                    </span>
+                    <div className="flex flex-col items-end gap-1.5 shrink-0">
+                      <span
+                        className={`inline-flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded font-semibold border ${
+                          getReferrerStatusBadge(detailStatus).classes
+                        }`}
+                      >
+                        <span className={`w-1.5 h-1.5 rounded-full ${getReferrerStatusBadge(detailStatus).dot}`} />
+                        {getReferrerStatusBadge(detailStatus).label}
+                      </span>
+                      {isAdmin && (
+                        <button
+                          type="button"
+                          onClick={handleSyncSingleDiscordProfile}
+                          disabled={isActionLoading}
+                          className="px-2.5 py-1 text-[11px] font-semibold text-violet-700 dark:text-violet-300 bg-violet-50 dark:bg-violet-950/35 hover:bg-violet-100 dark:hover:bg-violet-950/60 border border-violet-200 dark:border-violet-500/30 rounded-lg flex items-center gap-1 transition-colors cursor-pointer disabled:opacity-50"
+                        >
+                          <RefreshCw className={`w-3 h-3 ${isActionLoading ? 'animate-spin' : ''}`} />
+                          <span>Sync Discord</span>
+                        </button>
+                      )}
+                    </div>
                   </div>
 
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-2 border-t border-slate-200 dark:border-[#241a38] text-[11px]">
@@ -985,7 +1180,7 @@ export const ReferrersView: React.FC<Props> = ({
                         </>
                       )}
 
-                      {detailStatus === 'ARCHIVED' && (
+                      {detailStatus === 'ARCHIVED' ? (
                         <>
                           <button
                             type="button"
@@ -995,16 +1190,44 @@ export const ReferrersView: React.FC<Props> = ({
                             <RotateCcw className="w-3.5 h-3.5" />
                             <span>Restaurer (Activer)</span>
                           </button>
-                          <button
-                            type="button"
-                            disabled={!detailData.dependencies.canPhysicallyDelete}
-                            onClick={() => setPendingAction('DELETE_PHYSICAL')}
-                            className="min-h-[38px] px-3 py-1.5 bg-rose-50 dark:bg-rose-950/30 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-500/30 hover:bg-rose-100 rounded-lg font-semibold flex items-center gap-1.5 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                            <span>Supprimer définitivement</span>
-                          </button>
+                          {detailData.dependencies.canPhysicallyDelete ? (
+                            <button
+                              type="button"
+                              onClick={() => setPendingAction('DELETE_PHYSICAL')}
+                              className="min-h-[38px] px-3 py-1.5 bg-rose-50 dark:bg-rose-950/30 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-500/30 hover:bg-rose-100 rounded-lg font-semibold flex items-center gap-1.5 cursor-pointer"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                              <span>Supprimer définitivement</span>
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => setPendingAction('DELETE_FORCE')}
+                              className="min-h-[38px] px-3 py-1.5 bg-rose-50 dark:bg-rose-950/30 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-500/30 hover:bg-rose-100 rounded-lg font-semibold flex items-center gap-1.5 cursor-pointer"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                              <span>Forcer la suppression (détacher filleuls)</span>
+                            </button>
+                          )}
                         </>
+                      ) : detailData.dependencies.canPhysicallyDelete ? (
+                        <button
+                          type="button"
+                          onClick={() => setPendingAction('ARCHIVE_AND_DELETE')}
+                          className="min-h-[38px] px-3 py-1.5 bg-rose-50 dark:bg-rose-950/30 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-500/30 hover:bg-rose-100 rounded-lg font-semibold flex items-center gap-1.5 cursor-pointer"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          <span>Archiver &amp; Supprimer</span>
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => setPendingAction('DELETE_FORCE')}
+                          className="min-h-[38px] px-3 py-1.5 bg-rose-50 dark:bg-rose-950/30 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-500/30 hover:bg-rose-100 rounded-lg font-semibold flex items-center gap-1.5 cursor-pointer"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          <span>Forcer la suppression (détacher filleuls)</span>
+                        </button>
                       )}
                     </div>
 
@@ -1021,7 +1244,7 @@ export const ReferrersView: React.FC<Props> = ({
                       historique(s) d'attribution.
                       {detailData.dependencies.blockingReason && (
                         <div className="text-amber-700 dark:text-amber-300 mt-1">
-                          {detailData.dependencies.blockingReason} Utilisez Suspendre ou Archiver pour préserver l'intégrité historique.
+                          La suppression forcée détachera les filleuls rattachés (statut d'attribution passé en Incertain) et supprimera définitivement ce parrain.
                         </div>
                       )}
                     </div>
@@ -1029,7 +1252,7 @@ export const ReferrersView: React.FC<Props> = ({
                     {pendingAction && (
                       <div className="p-3 bg-rose-50/70 dark:bg-[#1a0f21] border border-rose-200 dark:border-rose-500/35 rounded-xl space-y-2.5">
                         <div className="font-bold text-rose-900 dark:text-rose-200 flex items-center gap-1.5">
-                          <AlertTriangle className="w-4 h-4 text-rose-600 dark:text-rose-400" />
+                          <AlertTriangle className="w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0" />
                           <span>
                             {pendingAction === 'SUSPEND' && 'Confirmer la suspension de ce parrain ?'}
                             {pendingAction === 'REACTIVATE' && 'Confirmer la réactivation de ce parrain ?'}
@@ -1038,18 +1261,24 @@ export const ReferrersView: React.FC<Props> = ({
                             {pendingAction === 'RESTORE' && 'Confirmer la restauration de ce parrain ?'}
                             {pendingAction === 'DELETE_PHYSICAL' &&
                               'Suppression physique irréversible — confirmer ?'}
+                            {pendingAction === 'ARCHIVE_AND_DELETE' &&
+                              'Archiver et supprimer définitivement ce parrain ?'}
+                            {pendingAction === 'DELETE_FORCE' &&
+                              `Forcer la suppression (${detailData.dependencies.linkedCandidatesCount} filleul(s) seront détachés) ?`}
                           </span>
                         </div>
 
-                        {pendingAction !== 'DELETE_PHYSICAL' && (
-                          <input
-                            type="text"
-                            value={actionReason}
-                            onChange={e => setActionReason(e.target.value)}
-                            placeholder="Motif (tracé dans le journal d'audit)..."
-                            className="w-full min-h-[36px] px-3 py-1.5 text-xs border border-slate-200 dark:border-[#241a38] rounded-lg bg-white dark:bg-[#08050f] text-slate-900 dark:text-[#f4f1fa]"
-                          />
-                        )}
+                        {pendingAction !== 'DELETE_PHYSICAL' &&
+                          pendingAction !== 'ARCHIVE_AND_DELETE' &&
+                          pendingAction !== 'DELETE_FORCE' && (
+                            <input
+                              type="text"
+                              value={actionReason}
+                              onChange={e => setActionReason(e.target.value)}
+                              placeholder="Motif (tracé dans le journal d'audit)..."
+                              className="w-full min-h-[36px] px-3 py-1.5 text-xs border border-slate-200 dark:border-[#241a38] rounded-lg bg-white dark:bg-[#08050f] text-slate-900 dark:text-[#f4f1fa]"
+                            />
+                          )}
 
                         <div className="flex items-center justify-end gap-2">
                           <button

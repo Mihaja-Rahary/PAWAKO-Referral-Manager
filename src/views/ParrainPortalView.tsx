@@ -224,6 +224,9 @@ export const ParrainPortalView: React.FC<Props> = ({
                   </span>
                 )}
               </div>
+              <div className="text-[11px] text-slate-500 dark:text-[#9d93b8] mt-0.5 truncate">
+                @{referrer.discordUsername} · <span className="font-mono">{referrer.discordUserId}</span>
+              </div>
               <p className="text-xs text-slate-500 dark:text-[#9d93b8] mt-0.5">
                 Filleuls attribués :{' '}
                 <strong className="font-mono tabular-nums text-slate-900 dark:text-[#f4f1fa]">
