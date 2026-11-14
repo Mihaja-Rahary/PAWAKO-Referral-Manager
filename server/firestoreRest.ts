@@ -608,6 +608,22 @@ export class FirestoreRestClient {
     this.privateKey = config.privateKey;
   }
 
+  private get documentsResourcePath(): string {
+    return `projects/${this.projectId}/databases/${this.databaseId}/documents`;
+  }
+
+  private buildDocumentName(collection: string, docId: string): string {
+    const cleanCollection = String(collection || '').replace(/^\/+|\/+$/g, '');
+    const cleanDocId = String(docId || '').replace(/^\/+|\/+$/g, '');
+    if (!cleanCollection || !cleanDocId) {
+      throw new FirestoreRestError(
+        `Chemin de document Firestore invalide (${collection}/${docId}).`,
+        { operation: 'BUILD_DOCUMENT_NAME', category: 'UNKNOWN' }
+      );
+    }
+    return `${this.documentsResourcePath}/${cleanCollection}/${cleanDocId}`;
+  }
+
   private get baseUrl(): string {
     return `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(this.projectId)}/databases/${encodeURIComponent(this.databaseId)}/documents`;
   }
@@ -860,7 +876,7 @@ export class FirestoreRestClient {
    * Démarre une transaction Firestore REST native
    */
   async beginTransaction(): Promise<string> {
-    const url = `https://firestore.googleapis.com/v1/projects/${this.projectId}/databases/${this.databaseId}/documents:beginTransaction`;
+    const url = `${this.baseUrl}:beginTransaction`;
     const headers = await this.getHeaders();
     const res = await this.executeFetch('BEGIN_TRANSACTION', url, {
       method: 'POST',
@@ -1009,12 +1025,12 @@ export class FirestoreRestClient {
     const chunkSize = 400;
     for (let i = 0; i < writes.length; i += chunkSize) {
       const chunk = writes.slice(i, i + chunkSize);
-      const url = `https://firestore.googleapis.com/v1/projects/${this.projectId}/databases/${this.databaseId}/documents:commit`;
+      const url = `${this.baseUrl}:commit`;
       const headers = await this.getHeaders();
 
       const firestoreWrites = chunk.map(w => ({
         update: {
-          name: `${this.baseUrl}/${encodeURIComponent(w.collection)}/${encodeURIComponent(w.docId)}`,
+          name: this.buildDocumentName(w.collection, w.docId),
           fields: toFirestoreDocument(w.data).fields,
         },
       }));
@@ -1045,13 +1061,13 @@ export class FirestoreRestClient {
     }>;
   }): Promise<void> {
     if (params.writes.length === 0) return;
-    const url = `https://firestore.googleapis.com/v1/projects/${this.projectId}/databases/${this.databaseId}/documents:commit`;
+    const url = `${this.baseUrl}:commit`;
     const headers = await this.getHeaders();
 
     const firestoreWrites = params.writes.map(w => {
       const writeObj: any = {
         update: {
-          name: `${this.baseUrl}/${encodeURIComponent(w.collection)}/${encodeURIComponent(w.docId)}`,
+          name: this.buildDocumentName(w.collection, w.docId),
           fields: toFirestoreDocument(w.data).fields,
         },
       };

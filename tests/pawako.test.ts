@@ -167,6 +167,22 @@ class MockExternalServices {
           };
           const writes = parsed.writes || [];
 
+          for (const w of writes) {
+            if (!w.update) continue;
+            if (!/^projects\/[^/]+\/databases\/[^/]+\/documents\/[^/]+\/.+$/.test(w.update.name || '')) {
+              return new Response(
+                JSON.stringify({
+                  error: {
+                    code: 400,
+                    status: 'INVALID_ARGUMENT',
+                    message: `Document name "${w.update.name}" is not valid. Expected projects/{project}/databases/{db}/documents/{collection}/{docId}.`,
+                  },
+                }),
+                { status: 400, headers: { 'Content-Type': 'application/json' } }
+              );
+            }
+          }
+
           // Option pour simuler une collision sur la création concurrente de pawako_referrers
           if (
             this.simulateInviteCommitRaceCount > 0 &&
@@ -176,7 +192,7 @@ class MockExternalServices {
             // Exécuter d'abord comme si une requête concurrente avait déjà gagné
             for (const w of writes) {
               if (!w.update) continue;
-              const p = this.parseDocPath(new URL(`https://firestore.googleapis.com${w.update.name.startsWith('/') ? '' : '/v1/'}${w.update.name}`).pathname);
+              const p = this.parseDocPath(`/${w.update.name}`);
               if (!p?.docId) continue;
               const colMap = this.getCollection(p.col);
               const existing = colMap.get(p.docId);
@@ -198,7 +214,7 @@ class MockExternalServices {
           // Vérification atomique de toutes les préconditions avant écriture
           for (const w of writes) {
             if (!w.update) continue;
-            const pathInfo = this.parseDocPath(new URL(`https://firestore.googleapis.com/v1/${w.update.name}`).pathname);
+            const pathInfo = this.parseDocPath(`/${w.update.name}`);
             if (!pathInfo?.docId) continue;
             const existing = this.getCollection(pathInfo.col).get(pathInfo.docId);
             const check = this.checkPrecondition(existing, w.currentDocument);
@@ -213,7 +229,7 @@ class MockExternalServices {
           // Appliquer toutes les écritures
           for (const w of writes) {
             if (!w.update) continue;
-            const pathInfo = this.parseDocPath(new URL(`https://firestore.googleapis.com/v1/${w.update.name}`).pathname);
+            const pathInfo = this.parseDocPath(`/${w.update.name}`);
             if (!pathInfo?.docId) continue;
             const colMap = this.getCollection(pathInfo.col);
             const existing = colMap.get(pathInfo.docId);
