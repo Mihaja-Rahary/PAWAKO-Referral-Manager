@@ -9,7 +9,11 @@
 import { Hono } from 'hono';
 import { FirestoreRestClient, FirestoreRestError, diagnosePrivateKeyPem } from '../server/firestoreRest';
 import { FirestoreRepository, getEffectiveReferrerStatus } from '../server/firestoreRepository';
-import { DiscordBotConfig, discoverDiscordBotEnvironment } from '../server/discordBot';
+import {
+  DiscordBotConfig,
+  discoverDiscordBotEnvironment,
+  normalizeDiscordBotToken,
+} from '../server/discordBot';
 import {
   AdminStatus,
   Candidate,
@@ -58,7 +62,7 @@ export interface Env {
 
 function getDiscordBotConfig(env: Env): DiscordBotConfig {
   return {
-    botToken: env.DISCORD_BOT_TOKEN?.trim(),
+    botToken: normalizeDiscordBotToken(env.DISCORD_BOT_TOKEN),
     recruitmentGuildId: env.DISCORD_RECRUITMENT_GUILD_ID?.trim(),
     inviteChannelId: env.DISCORD_RECRUITMENT_INVITE_CHANNEL_ID?.trim(),
   };
@@ -1253,7 +1257,9 @@ app.get('/api/auth/me', async c => {
   const isOAuthConfigured = Boolean(
     c.env.DISCORD_CLIENT_ID?.trim() && c.env.DISCORD_CLIENT_SECRET?.trim() && hasValidSecret
   );
-  const isBotConfigured = Boolean(c.env.DISCORD_BOT_TOKEN?.trim() || c.env.JARVIS_WEBHOOK_SECRET?.trim());
+  const isBotConfigured = Boolean(
+    normalizeDiscordBotToken(c.env.DISCORD_BOT_TOKEN) || c.env.JARVIS_WEBHOOK_SECRET?.trim()
+  );
 
   // Vérification cryptographique du cookie AVANT toute requête Firestore
   let verifiedUserId: string | null = null;
@@ -1901,8 +1907,12 @@ app.post('/api/referrers/sync-discord', async c => {
   }
 
   try {
+    const effectiveDiscord = await repo.getEffectiveDiscordSettings(
+      getDiscordBotConfig(c.env),
+      getEnvGuildIds(c.env)
+    );
     const result = await repo.syncAllReferrersDiscordProfiles({
-      discordBotConfig: getDiscordBotConfig(c.env),
+      discordBotConfig: effectiveDiscord.botConfig,
       actor: { id: user.id, displayName: user.displayName },
     });
     return c.json({ success: true, ...result });
@@ -1925,8 +1935,12 @@ app.post('/api/referrers/:id/sync-discord', async c => {
   }
 
   try {
+    const effectiveDiscord = await repo.getEffectiveDiscordSettings(
+      getDiscordBotConfig(c.env),
+      getEnvGuildIds(c.env)
+    );
     const result = await repo.syncReferrerDiscordProfile(c.req.param('id'), {
-      discordBotConfig: getDiscordBotConfig(c.env),
+      discordBotConfig: effectiveDiscord.botConfig,
       actor: { id: user.id, displayName: user.displayName },
     });
     if (!result) {
@@ -2120,6 +2134,10 @@ app.delete('/api/referrers/:id', async c => {
   const force = c.req.query('force') === 'true' || body?.force === true;
 
   try {
+    const effectiveDiscord = await repo.getEffectiveDiscordSettings(
+      getDiscordBotConfig(c.env),
+      getEnvGuildIds(c.env)
+    );
     const result = await repo.deleteReferrerPhysically(
       c.req.param('id'),
       confirm,
@@ -2127,7 +2145,7 @@ app.delete('/api/referrers/:id', async c => {
         id: user.id,
         displayName: user.displayName,
       },
-      getDiscordBotConfig(c.env),
+      effectiveDiscord.botConfig,
       { force }
     );
     return c.json({
@@ -2218,7 +2236,7 @@ app.get('/api/discord/bot/discover', async c => {
   }
 
   const envGuildIds = getEnvGuildIds(c.env);
-  const savedServers = await repo.getDiscordServers(envGuildIds);
+  const savedServers = await repo.getDiscordServers(envGuildIds).catch(() => []);
   const redirectUri = getDiscordRedirectUri(c.env, c.req.url);
   let botInstallState: string | undefined;
   try {
@@ -2228,7 +2246,7 @@ app.get('/api/discord/bot/discover', async c => {
   }
 
   const full = await discoverDiscordBotEnvironment({
-    botToken: c.env.DISCORD_BOT_TOKEN?.trim(),
+    botToken: normalizeDiscordBotToken(c.env.DISCORD_BOT_TOKEN),
     clientId: c.env.DISCORD_CLIENT_ID?.trim(),
     redirectUri,
     botInstallState,
@@ -2263,7 +2281,7 @@ app.post('/api/discord/bot/auto-configure', async c => {
   }
 
   const result = await repo.autoConfigureFromDiscordBot({
-    botToken: c.env.DISCORD_BOT_TOKEN?.trim(),
+    botToken: normalizeDiscordBotToken(c.env.DISCORD_BOT_TOKEN),
     clientId: c.env.DISCORD_CLIENT_ID?.trim(),
     redirectUri,
     botInstallState,

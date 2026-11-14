@@ -10,6 +10,7 @@ import {
   generateSecureOAuthState,
   constantTimeEqual,
 } from './cryptoUtils';
+import { discoverDiscordBotEnvironment, normalizeDiscordBotToken } from './discordBot';
 
 export const apiRouter = Router();
 
@@ -570,6 +571,21 @@ apiRouter.get('/stats/overview', requireResponsableOrAdmin, (req: Request, res: 
 apiRouter.get('/discord/servers', requireResponsableOrAdmin, (req: Request, res: Response) => {
   const servers = db.getDiscordServers();
   res.json({ servers });
+});
+
+apiRouter.get('/discord/bot/discover', requireResponsableOrAdmin, async (req: Request, res: Response) => {
+  const savedServers = db.getDiscordServers();
+  const originUrl = `${req.protocol}://${req.get('host')}`;
+  const redirectUri = (process.env.DISCORD_REDIRECT_URI || '').trim() || `${originUrl}/auth/callback`;
+  const full = await discoverDiscordBotEnvironment({
+    botToken: normalizeDiscordBotToken(process.env.DISCORD_BOT_TOKEN),
+    clientId: process.env.DISCORD_CLIENT_ID?.trim(),
+    redirectUri,
+    savedServers,
+    includeMembers: false,
+  });
+  const { guildMembersByGuildId: _ignored, ...publicDiscovery } = full;
+  res.json(publicDiscovery);
 });
 
 apiRouter.get('/discord/role-mappings', requireAuth, (req: Request, res: Response) => {

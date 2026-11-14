@@ -36,6 +36,7 @@ export const DiscordSyncView: React.FC<Props> = ({
 }) => {
   const [servers, setServers] = useState<DiscordServerInfo[]>(initialServers || []);
   const [discovery, setDiscovery] = useState<DiscordBotDiscoveryResult | null>(null);
+  const [discoveryError, setDiscoveryError] = useState<{ status?: number; message: string } | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isDiscovering, setIsDiscovering] = useState(false);
   const [isAutoConfiguring, setIsAutoConfiguring] = useState(false);
@@ -55,10 +56,16 @@ export const DiscordSyncView: React.FC<Props> = ({
   const fetchDiscovery = async () => {
     try {
       setIsDiscovering(true);
+      setDiscoveryError(null);
       const res = await api.discoverDiscordBot();
       setDiscovery(res);
     } catch (err: any) {
       console.error('Failed to discover Discord bot environment:', err);
+      setDiscovery(null);
+      setDiscoveryError({
+        status: typeof err?.status === 'number' ? err.status : undefined,
+        message: err?.message || "Impossible de contacter l'endpoint /api/discord/bot/discover.",
+      });
     } finally {
       setIsDiscovering(false);
     }
@@ -261,8 +268,12 @@ export const DiscordSyncView: React.FC<Props> = ({
               <p className="text-xs text-slate-500 dark:text-[#9d93b8] mt-0.5">
                 {discovery?.bot
                   ? `@${discovery.bot.username} (${discovery.bot.id}) — Détection automatique des serveurs, salons, rôles et invitations.`
-                  : discovery?.errorMessage ||
-                    'Vérifiez que DISCORD_BOT_TOKEN est configuré dans les secrets du Worker Cloudflare.'}
+                  : discoveryError
+                    ? discoveryError.status === 404
+                      ? "Endpoint /api/discord/bot/discover introuvable (HTTP 404) : le Worker Cloudflare « referral-manager » doit être redéployé."
+                      : `${discoveryError.message}${discoveryError.status ? ` (HTTP ${discoveryError.status})` : ''}`
+                    : discovery?.errorMessage ||
+                      'Impossible de vérifier le bot Discord. Cliquez sur « Scanner » pour réessayer.'}
               </p>
             </div>
           </div>
@@ -317,6 +328,50 @@ export const DiscordSyncView: React.FC<Props> = ({
           <div className="p-3 bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-500/30 text-rose-800 dark:text-rose-200 rounded-lg text-xs flex items-start gap-2">
             <AlertCircle className="w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0 mt-0.5" />
             <span>{actionError}</span>
+          </div>
+        )}
+
+        {discoveryError && (
+          <div className="p-3 bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-500/30 text-rose-800 dark:text-rose-200 rounded-lg text-xs flex items-start gap-2.5">
+            <AlertCircle className="w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0 mt-0.5" />
+            <div className="space-y-1">
+              <div>
+                <strong>
+                  Erreur API bot{discoveryError.status ? ` (HTTP ${discoveryError.status})` : ''} :
+                </strong>{' '}
+                {discoveryError.message}
+              </div>
+              {discoveryError.status === 404 && (
+                <div className="text-[11px] opacity-90">
+                  Relancer uniquement le build Cloudflare Pages ne met pas à jour le backend Worker. Exécutez{' '}
+                  <code className="px-1 py-0.5 rounded bg-rose-100 dark:bg-rose-900/50 font-mono">
+                    npm run deploy:worker
+                  </code>{' '}
+                  pour déployer les nouvelles routes bot sur le Worker Cloudflare.
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {!discoveryError && discovery && !discovery.ok && discovery.errorCode === 'MISSING_DISCORD_BOT_TOKEN' && (
+          <div className="p-3 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-500/30 text-amber-900 dark:text-amber-200 rounded-lg text-xs flex items-start gap-2.5">
+            <AlertCircle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+            <div className="space-y-1">
+              <div>
+                <strong>Secret absent sur le Worker « referral-manager » :</strong> le Worker ne reçoit pas{' '}
+                <code className="px-1 py-0.5 rounded bg-amber-100 dark:bg-amber-900/50 font-mono">
+                  DISCORD_BOT_TOKEN
+                </code>
+                .
+              </div>
+              <div className="text-[11px] opacity-90">
+                Vérifiez que la variable/secret est bien enregistrée dans le projet <strong>Worker</strong> (
+                <code className="font-mono">npx wrangler secret put DISCORD_BOT_TOKEN</code> ou{' '}
+                <em>Workers &amp; Pages → referral-manager → Variables and Secrets</em>), et non uniquement dans
+                Cloudflare Pages.
+              </div>
+            </div>
           </div>
         )}
 

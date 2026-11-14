@@ -65,16 +65,21 @@ export const SettingsOAuthView: React.FC = () => {
   useEffect(() => {
     const load = async () => {
       try {
-        const [authRes, rolesRes, fsRes, discRes] = await Promise.all([
+        const [authRes, rolesRes, fsRes] = await Promise.all([
           api.getOAuthUrl(),
           api.getRoleMappings(),
           api.getFirestoreStatus().catch(() => null),
-          api.discoverDiscordBot().catch(() => null),
         ]);
         setOauthInfo(authRes);
         setRoleMappings(rolesRes.mappings);
         if (fsRes) setFirestoreStatus(fsRes);
-        if (discRes) setDiscovery(discRes);
+
+        try {
+          const discRes = await api.discoverDiscordBot();
+          setDiscovery(discRes);
+        } catch (discErr: any) {
+          console.error('Failed to discover Discord bot environment:', discErr);
+        }
       } catch (err) {
         console.error('Failed to load settings data:', err);
       }

@@ -58,6 +58,23 @@ export interface DiscordInviteVerificationResult {
 
 const DISCORD_API_BASE = 'https://discord.com/api/v10';
 
+/**
+ * Nettoie un token Bot Discord (supprime guillemets accidentels, espaces et préfixe "Bot " redondant).
+ */
+export function normalizeDiscordBotToken(raw?: string): string {
+  let token = (raw || '').trim();
+  if (
+    (token.startsWith('"') && token.endsWith('"')) ||
+    (token.startsWith("'") && token.endsWith("'"))
+  ) {
+    token = token.slice(1, -1).trim();
+  }
+  if (/^Bot\s+/i.test(token)) {
+    token = token.replace(/^Bot\s+/i, '').trim();
+  }
+  return token;
+}
+
 export interface DiscordResolvedUser {
   id: string;
   username: string;
@@ -93,7 +110,7 @@ export async function fetchDiscordUserById(params: {
   botToken?: string;
   discordUserId: string;
 }): Promise<DiscordUserLookupResult> {
-  const token = (params.botToken || '').trim();
+  const token = normalizeDiscordBotToken(params.botToken);
   const cleanId = (params.discordUserId || '').trim();
 
   if (!/^\d{17,20}$/.test(cleanId)) {
@@ -179,7 +196,7 @@ export async function searchDiscordMemberByUsername(params: {
   guildIds: string[];
   query: string;
 }): Promise<DiscordUserLookupResult> {
-  const token = (params.botToken || '').trim();
+  const token = normalizeDiscordBotToken(params.botToken);
   const cleanQuery = (params.query || '')
     .trim()
     .replace(/^@+/, '')
@@ -415,7 +432,7 @@ export async function createRecruitmentDiscordInvite(params: {
   inviteChannelId?: string;
   reason?: string;
 }): Promise<DiscordInviteCreationResult> {
-  const botToken = (params.botToken || '').trim();
+  const botToken = normalizeDiscordBotToken(params.botToken);
   const guildId = (params.recruitmentGuildId || '').trim();
   const explicitChannelId = (params.inviteChannelId || '').trim();
 
@@ -723,8 +740,9 @@ export async function verifyDiscordInvite(params: {
   const headers: Record<string, string> = {
     'User-Agent': 'PawakoReferralManager/1.0',
   };
-  if (params.botToken?.trim()) {
-    headers.Authorization = `Bot ${params.botToken.trim()}`;
+  const normalizedBotToken = normalizeDiscordBotToken(params.botToken);
+  if (normalizedBotToken) {
+    headers.Authorization = `Bot ${normalizedBotToken}`;
   }
 
   try {
@@ -807,7 +825,7 @@ export async function verifyDiscordInvite(params: {
  * Suppression best-effort d'une invitation Discord (ex: nettoyage si création concurrente)
  */
 export async function revokeDiscordInvite(params: { botToken?: string; inviteCode: string }): Promise<boolean> {
-  const token = (params.botToken || '').trim();
+  const token = normalizeDiscordBotToken(params.botToken);
   const code = extractDiscordInviteCode(params.inviteCode);
   if (!token || !code) return false;
 
@@ -984,7 +1002,7 @@ export async function fetchBotIdentity(params: {
   errorCode?: string;
   errorMessage?: string;
 }> {
-  const token = (params.botToken || '').trim();
+  const token = normalizeDiscordBotToken(params.botToken);
   if (!token) {
     return {
       ok: false,
@@ -1010,7 +1028,18 @@ export async function fetchBotIdentity(params: {
         ok: false,
         bot: null,
         errorCode: 'INVALID_DISCORD_BOT_TOKEN',
-        errorMessage: 'DISCORD_BOT_TOKEN rejeté par Discord (HTTP 401). Vérifiez ou régénérez le token du bot.',
+        errorMessage:
+          'DISCORD_BOT_TOKEN rejeté par Discord (HTTP 401). Vérifiez qu’il s’agit bien du Bot Token (onglet Bot → Reset Token) et non du Client Secret.',
+      };
+    }
+
+    if (res.status === 429) {
+      const retryAfter = res.headers.get('Retry-After');
+      return {
+        ok: false,
+        bot: null,
+        errorCode: 'DISCORD_RATE_LIMITED',
+        errorMessage: `Limite temporaire de l'API Discord (HTTP 429)${retryAfter ? ` — réessayez dans ${retryAfter}s` : ''}.`,
       };
     }
 
@@ -1104,7 +1133,7 @@ export async function discoverDiscordBotEnvironment(params: {
   savedServers?: DiscordServerInfo[];
   includeMembers?: boolean;
 }): Promise<DiscordBotDiscoveryWithMembersResult> {
-  const token = (params.botToken || '').trim();
+  const token = normalizeDiscordBotToken(params.botToken);
   const hasBotToken = Boolean(token);
 
   const identity = await fetchBotIdentity({

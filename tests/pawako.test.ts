@@ -2207,6 +2207,21 @@ describe('PAWAKO Referral Manager — Tests Complets Isolés (Mockés)', () => {
     );
     assert.equal(directRes.status, 200);
     assert.equal(directRes.headers.get('Set-Cookie'), null);
+
+    // Vérifier le nettoyage d'un token entouré de guillemets ou préfixé par "Bot "
+    const messyTokenRes = await app.fetch(
+      new Request(`${WORKER_ORIGIN}/api/discord/bot/discover`, {
+        headers: {
+          Cookie: `pawako_session=${adminLogin.sessionCookie}`,
+          Origin: FRONTEND_ORIGIN,
+        },
+      }),
+      { ...env, DISCORD_BOT_TOKEN: ' "Bot test-discord-bot-token" ' }
+    );
+    assert.equal(messyTokenRes.status, 200);
+    const messyJson = (await messyTokenRes.json()) as any;
+    assert.equal(messyJson.ok, true);
+    assert.equal(messyJson.bot.username, 'pawako_bot');
   });
 });
 
