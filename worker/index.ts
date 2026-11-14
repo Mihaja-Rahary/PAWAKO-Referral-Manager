@@ -9,7 +9,7 @@
 import { Hono } from 'hono';
 import { FirestoreRestClient, FirestoreRestError, diagnosePrivateKeyPem } from '../server/firestoreRest';
 import { FirestoreRepository, getEffectiveReferrerStatus } from '../server/firestoreRepository';
-import { DiscordBotConfig } from '../server/discordBot';
+import { DiscordBotConfig, discoverDiscordBotEnvironment } from '../server/discordBot';
 import {
   AdminStatus,
   Candidate,
@@ -917,6 +917,10 @@ const handleAuthCallback = async (c: any) => {
       // Espace Parrain : inscription ouverte, idempotente, atomique, avec véritable invitation Discord
       // tout en bloquant strictement les profils suspendus ou archivés.
       processingStage = 'FIRESTORE_PARRAIN_REGISTER_OR_LOGIN';
+      const effectiveDiscord = await repo.getEffectiveDiscordSettings(
+        getDiscordBotConfig(c.env),
+        getEnvGuildIds(c.env)
+      );
       const parrainAuth = await repo.authenticateOrRegisterParrain({
         discordUser: {
           id: discordUser.id,
@@ -924,7 +928,7 @@ const handleAuthCallback = async (c: any) => {
           displayName: discordUser.global_name || discordUser.username,
           avatar: avatarUrl,
         },
-        discordBotConfig: getDiscordBotConfig(c.env),
+        discordBotConfig: effectiveDiscord.botConfig,
       });
 
       if (!parrainAuth.authorized || !parrainAuth.user) {
@@ -1085,7 +1089,7 @@ app.get('/api/auth/me', async c => {
   const isOAuthConfigured = Boolean(
     c.env.DISCORD_CLIENT_ID?.trim() && c.env.DISCORD_CLIENT_SECRET?.trim() && hasValidSecret
   );
-  const isBotConfigured = Boolean(c.env.JARVIS_WEBHOOK_SECRET?.trim());
+  const isBotConfigured = Boolean(c.env.DISCORD_BOT_TOKEN?.trim() || c.env.JARVIS_WEBHOOK_SECRET?.trim());
 
   // Vérification cryptographique du cookie AVANT toute requête Firestore
   let verifiedUserId: string | null = null;
@@ -1208,7 +1212,7 @@ app.get('/api/admin/bootstrap', async c => {
     isOAuthConfigured: Boolean(
       c.env.DISCORD_CLIENT_ID?.trim() && c.env.DISCORD_CLIENT_SECRET?.trim() && hasValidSecret
     ),
-    isBotConfigured: Boolean(c.env.JARVIS_WEBHOOK_SECRET?.trim()),
+    isBotConfigured: Boolean(c.env.DISCORD_BOT_TOKEN?.trim() || c.env.JARVIS_WEBHOOK_SECRET?.trim()),
     isInitialAdminClaimed: bootstrap.isInitialAdminClaimed,
     stats: bootstrap.stats,
     referrers: bootstrap.referrers,
@@ -1280,7 +1284,11 @@ app.post('/api/parrain/invite/ensure', async c => {
   }
 
   try {
-    const result = await repo.ensureParrainInvite(user.id, getDiscordBotConfig(c.env));
+    const effectiveDiscord = await repo.getEffectiveDiscordSettings(
+      getDiscordBotConfig(c.env),
+      getEnvGuildIds(c.env)
+    );
+    const result = await repo.ensureParrainInvite(user.id, effectiveDiscord.botConfig);
     if (!result) {
       return c.json({ error: 'Profil parrain introuvable.' }, 404);
     }
@@ -1696,14 +1704,18 @@ app.post('/api/referrers', async c => {
   }
 
   try {
+    const effectiveDiscord = await repo.getEffectiveDiscordSettings(
+      getDiscordBotConfig(c.env),
+      getEnvGuildIds(c.env)
+    );
     const referrer = await repo.createReferrer({
       discordUserId: rawIdentifier,
       inviteCode: typeof body.inviteCode === 'string' ? body.inviteCode : undefined,
       notes: typeof body.notes === 'string' ? body.notes : undefined,
       actorUserId: user.id,
       actorName: user.displayName,
-      discordBotConfig: getDiscordBotConfig(c.env),
-      guildIds: Object.values(getEnvGuildIds(c.env)).filter(Boolean),
+      discordBotConfig: effectiveDiscord.botConfig,
+      guildIds: Object.values(effectiveDiscord.guildIds).filter(Boolean),
     });
 
     return c.json({ success: true, referrer }, 201);
@@ -1901,8 +1913,12 @@ app.post('/api/referrers/:id/invite/regenerate', async c => {
     typeof body?.manualInviteCode === 'string' ? body.manualInviteCode.trim() : undefined;
 
   try {
+    const effectiveDiscord = await repo.getEffectiveDiscordSettings(
+      getDiscordBotConfig(c.env),
+      getEnvGuildIds(c.env)
+    );
     const result = await repo.regenerateReferrerInvite(c.req.param('id'), {
-      discordBotConfig: getDiscordBotConfig(c.env),
+      discordBotConfig: effectiveDiscord.botConfig,
       manualInviteCode,
       actorUserId: user.id,
       actorName: user.displayName,
@@ -1991,6 +2007,92 @@ app.get('/api/discord/servers', async c => {
   return c.json({ servers });
 });
 
+app.put('/api/discord/servers', async c => {
+  const repo = getRepository(c.env);
+  const user = await getAuthenticatedUser(c, repo);
+
+  if (!user) {
+    return c.json({ error: 'Session non authentifiée.' }, 401);
+  }
+
+  if (user.role !== 'ADMINISTRATEUR') {
+    return c.json({ error: 'Seuls les Administrateurs peuvent associer les serveurs Discord.' }, 403);
+  }
+
+  const body = await c.req.json().catch(() => ({}));
+  const bindings = Array.isArray(body?.bindings) ? body.bindings : null;
+  if (!bindings) {
+    return c.json({ error: 'Tableau bindings requis.' }, 400);
+  }
+
+  const validBindings = bindings.filter(
+    (b: any) =>
+      b &&
+      ['RECRUTEMENT', 'FORMATION', 'PRODUCTION_CHATTING', 'PRODUCTION_INSTAGRAM'].includes(b.id)
+  );
+
+  const servers = await repo.updateServerBindings({
+    bindings: validBindings,
+    actorUserId: user.id,
+    actorName: user.displayName,
+    envGuildIds: getEnvGuildIds(c.env),
+  });
+
+  return c.json({ success: true, servers });
+});
+
+app.get('/api/discord/bot/discover', async c => {
+  const repo = getRepository(c.env);
+  const user = await getAuthenticatedUser(c, repo);
+
+  if (!user) {
+    return c.json({ error: 'Session non authentifiée.' }, 401);
+  }
+
+  if (user.role !== 'ADMINISTRATEUR' && user.role !== 'RESPONSABLE') {
+    return c.json({ error: 'Accès réservé à la Direction et aux Responsables.' }, 403);
+  }
+
+  const envGuildIds = getEnvGuildIds(c.env);
+  const savedServers = await repo.getDiscordServers(envGuildIds);
+  const full = await discoverDiscordBotEnvironment({
+    botToken: c.env.DISCORD_BOT_TOKEN?.trim(),
+    clientId: c.env.DISCORD_CLIENT_ID?.trim(),
+    envGuildIds,
+    savedServers,
+    includeMembers: false,
+  });
+
+  const { guildMembersByGuildId: _ignored, ...publicDiscovery } = full;
+  return c.json(publicDiscovery);
+});
+
+app.post('/api/discord/bot/auto-configure', async c => {
+  const repo = getRepository(c.env);
+  const user = await getAuthenticatedUser(c, repo);
+
+  if (!user) {
+    return c.json({ error: 'Session non authentifiée.' }, 401);
+  }
+
+  if (user.role !== 'ADMINISTRATEUR') {
+    return c.json({ error: 'Seuls les Administrateurs peuvent lancer l auto-détection complète du bot.' }, 403);
+  }
+
+  const body = await c.req.json().catch(() => ({}));
+  const result = await repo.autoConfigureFromDiscordBot({
+    botToken: c.env.DISCORD_BOT_TOKEN?.trim(),
+    clientId: c.env.DISCORD_CLIENT_ID?.trim(),
+    envGuildIds: getEnvGuildIds(c.env),
+    overwriteExisting: Boolean(body?.overwriteExisting),
+    syncInvites: body?.syncInvites !== false,
+    syncMembers: body?.syncMembers !== false,
+    actor: { id: user.id, displayName: user.displayName },
+  });
+
+  return c.json(result, result.ok ? 200 : 400);
+});
+
 app.get('/api/discord/role-mappings', async c => {
   const repo = getRepository(c.env);
   const user = await getAuthenticatedUser(c, repo);
@@ -2053,12 +2155,13 @@ app.post('/api/discord/sync-members', async c => {
     return c.json({ error: 'Tableau members requis.' }, 400);
   }
 
+  const effective = await repo.getEffectiveDiscordSettings(getDiscordBotConfig(c.env), getEnvGuildIds(c.env));
   const result = await repo.syncServerMembers({
     serverId,
     members,
     actorUserId: user.id,
     actorName: user.displayName,
-    envGuildIds: getEnvGuildIds(c.env),
+    envGuildIds: effective.guildIds,
   });
 
   return c.json({ success: true, ...result });

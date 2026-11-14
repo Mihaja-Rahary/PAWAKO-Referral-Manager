@@ -14,7 +14,9 @@ import {
   UserStatus,
   VAType,
   DiscordServerInfo,
+  DiscordServerType,
   DiscordRoleMapping,
+  DiscordBotDiscoveryResult,
   AuditLog,
 } from './types';
 
@@ -452,6 +454,53 @@ export const api = {
   // Discord Servers & Role Mappings
   async getDiscordServers(): Promise<{ servers: DiscordServerInfo[] }> {
     return request('/api/discord/servers');
+  },
+
+  async updateDiscordServerBindings(
+    bindings: Array<{
+      id: DiscordServerType;
+      guildId: string;
+      inviteChannelId?: string | null;
+      inviteChannelName?: string | null;
+      discordGuildName?: string | null;
+      discordIconUrl?: string | null;
+      memberCount?: number;
+      botConnected?: boolean;
+    }>
+  ): Promise<{ success: boolean; servers: DiscordServerInfo[] }> {
+    return request('/api/discord/servers', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ bindings }),
+    });
+  },
+
+  async discoverDiscordBot(): Promise<DiscordBotDiscoveryResult> {
+    return request('/api/discord/bot/discover');
+  },
+
+  async autoConfigureDiscordBot(options?: {
+    overwriteExisting?: boolean;
+    syncInvites?: boolean;
+    syncMembers?: boolean;
+  }): Promise<{
+    ok: boolean;
+    discovery: DiscordBotDiscoveryResult;
+    serversUpdated: number;
+    rolesMapped: number;
+    invitesSynced: number;
+    referrerInvitesCreated: number;
+    membersSynced: number;
+    anomaliesCount: number;
+    membersAccessible: boolean;
+    servers: DiscordServerInfo[];
+    mappings: DiscordRoleMapping[];
+  }> {
+    return request('/api/discord/bot/auto-configure', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(options || {}),
+    });
   },
 
   async getRoleMappings(): Promise<{ mappings: DiscordRoleMapping[] }> {

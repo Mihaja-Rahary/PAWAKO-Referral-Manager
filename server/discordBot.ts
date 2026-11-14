@@ -4,7 +4,18 @@
  * Règle critique : ne jamais fabriquer de faux liens (ex: PWK-...) en les présentant comme des invitations Discord réelles.
  */
 
-import { ReferrerInviteStatus } from './types';
+import {
+  DiscordBotDiscoveryResult,
+  DiscordBotIdentity,
+  DiscordDiscoveredChannel,
+  DiscordDiscoveredGuild,
+  DiscordDiscoveredInvite,
+  DiscordDiscoveredRole,
+  DiscordServerInfo,
+  DiscordServerType,
+  PawakoRoleType,
+  ReferrerInviteStatus,
+} from './types';
 
 export interface DiscordBotConfig {
   botToken?: string;
@@ -813,3 +824,470 @@ export async function revokeDiscordInvite(params: { botToken?: string; inviteCod
     return false;
   }
 }
+
+// =============================================================================
+// AUTO-DÉCOUVERTE & IDENTIFICATION BOT DISCORD (SERVEURS, SALONS, RÔLES, INVITATIONS, MEMBRES)
+// =============================================================================
+
+export interface DiscordGuildFetchedMember {
+  discordUserId: string;
+  username: string;
+  displayName: string;
+  avatar: string | null;
+  roleIds: string[];
+}
+
+export interface DiscordBotDiscoveryWithMembersResult extends DiscordBotDiscoveryResult {
+  guildMembersByGuildId: Record<string, DiscordGuildFetchedMember[]>;
+}
+
+function buildDiscordGuildIconUrl(guildId: string, iconHash?: string | null): string | null {
+  const hash = (iconHash || '').trim();
+  if (!hash) return null;
+  if (hash.startsWith('http://') || hash.startsWith('https://')) return hash;
+  return `https://cdn.discordapp.com/icons/${encodeURIComponent(guildId)}/${encodeURIComponent(hash)}.png`;
+}
+
+export function normalizeDiscordLabel(raw?: string | null): string {
+  return (raw || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+export function suggestServerTypeForGuildName(guildName?: string | null): DiscordServerType | null {
+  const name = normalizeDiscordLabel(guildName);
+  if (!name) return null;
+
+  if (/(recrut|recruit|candidat|embauche|selection|onboarding)/.test(name)) {
+    return 'RECRUTEMENT';
+  }
+  if (/(formation|training|ecole|academ|apprenti|bootcamp)/.test(name)) {
+    return 'FORMATION';
+  }
+  if (/(insta|instagram|\big\b|reel|smma)/.test(name)) {
+    return 'PRODUCTION_INSTAGRAM';
+  }
+  if (/(chatting|chatteur|chatter|\bchat\b|onlyfans|mym)/.test(name)) {
+    return 'PRODUCTION_CHATTING';
+  }
+  if (/(production|\bprod\b)/.test(name)) {
+    return 'PRODUCTION_CHATTING';
+  }
+  return null;
+}
+
+const SERVER_ROLE_RULES: Record<
+  DiscordServerType,
+  Array<{ roleType: PawakoRoleType; positive: RegExp[]; negative?: RegExp[] }>
+> = {
+  RECRUTEMENT: [
+    {
+      roleType: 'CANDIDAT_ACCEPTE',
+      positive: [/\bcandidat accepte\b/, /\baccepte\b/, /\baccepted\b/, /\badmis\b/, /\bretenu\b/, /\brecrute\b/],
+      negative: [/\brefus/, /\brejet/],
+    },
+    {
+      roleType: 'CANDIDAT_REFUSE',
+      positive: [/\bcandidat refuse\b/, /\brefuse\b/, /\brefus\b/, /\brefused\b/, /\brejete\b/, /\bdeclin\b/],
+    },
+    {
+      roleType: 'CANDIDAT',
+      positive: [/\bcandidat\b/, /\bpostulant\b/, /\bapplicant\b/, /\brecrue\b/, /\bnouveau\b/, /\ben attente\b/],
+      negative: [/\baccepte\b/, /\brefus/, /\bvalide\b/, /\bformateur\b/, /\bstaff\b/, /\badmin\b/],
+    },
+  ],
+  FORMATION: [
+    {
+      roleType: 'VA_VALIDE',
+      positive: [/\bva valide\b/, /\bvalide\b/, /\bcertifie\b/, /\bcertified\b/, /\bdiplome\b/, /\bpret\b/],
+      negative: [/\ben formation\b/, /\bsimulation\b/],
+    },
+    {
+      roleType: 'EN_SIMULATION',
+      positive: [/\ben simulation\b/, /\bsimulation\b/, /\bsimu\b/, /\btest\b/],
+    },
+    {
+      roleType: 'EN_FORMATION',
+      positive: [/\ben formation\b/, /\bformation\b/, /\btraining\b/, /\bstagiaire\b/, /\beleve\b/, /\bapprenti\b/],
+      negative: [/\bformateur\b/, /\btrainer\b/, /\bcoach\b/, /\bstaff\b/],
+    },
+  ],
+  PRODUCTION_CHATTING: [
+    {
+      roleType: 'VA_PRODUCTION',
+      positive: [/\bva production\b/, /\bva chatting\b/, /\bproduction\b/, /\bprod\b/, /\bchatteur\b/, /\bchatter\b/, /\bva\b/],
+      negative: [/\badmin\b/, /\bmanager\b/, /\bresponsable\b/, /\bstaff\b/, /\bmoderateur\b/],
+    },
+  ],
+  PRODUCTION_INSTAGRAM: [
+    {
+      roleType: 'VA_PRODUCTION',
+      positive: [/\bva production\b/, /\bva instagram\b/, /\bproduction\b/, /\bprod\b/, /\binstagram\b/, /\binsta\b/, /\bva\b/],
+      negative: [/\badmin\b/, /\bmanager\b/, /\bresponsable\b/, /\bstaff\b/, /\bmoderateur\b/],
+    },
+  ],
+};
+
+export function suggestRoleMappingsForGuild(
+  serverType: DiscordServerType,
+  roles: DiscordDiscoveredRole[]
+): Partial<Record<PawakoRoleType, { roleId: string; roleName: string }>> {
+  const rules = SERVER_ROLE_RULES[serverType] || [];
+  const eligible = roles.filter(r => !r.managed && r.name !== '@everyone');
+  const usedRoleIds = new Set<string>();
+  const mappings: Partial<Record<PawakoRoleType, { roleId: string; roleName: string }>> = {};
+
+  for (const rule of rules) {
+    let bestRole: DiscordDiscoveredRole | null = null;
+    let bestScore = 0;
+
+    for (const role of eligible) {
+      if (usedRoleIds.has(role.id)) continue;
+      const norm = normalizeDiscordLabel(role.name);
+      if (!norm) continue;
+      if (rule.negative?.some(rx => rx.test(norm))) continue;
+
+      let score = 0;
+      rule.positive.forEach((rx, idx) => {
+        if (rx.test(norm)) {
+          score += (rule.positive.length - idx) * 10;
+        }
+      });
+
+      if (score > bestScore) {
+        bestScore = score;
+        bestRole = role;
+      }
+    }
+
+    if (bestRole) {
+      usedRoleIds.add(bestRole.id);
+      mappings[rule.roleType] = { roleId: bestRole.id, roleName: bestRole.name };
+    }
+  }
+
+  return mappings;
+}
+
+export async function fetchBotIdentity(params: {
+  botToken?: string;
+  clientId?: string;
+}): Promise<{
+  ok: boolean;
+  bot: DiscordBotIdentity | null;
+  errorCode?: string;
+  errorMessage?: string;
+}> {
+  const token = (params.botToken || '').trim();
+  if (!token) {
+    return {
+      ok: false,
+      bot: null,
+      errorCode: 'MISSING_DISCORD_BOT_TOKEN',
+      errorMessage: 'Secret DISCORD_BOT_TOKEN manquant côté Worker Cloudflare.',
+    };
+  }
+
+  try {
+    const res = await fetch(`${DISCORD_API_BASE}/users/@me`, {
+      headers: {
+        Authorization: `Bot ${token}`,
+        'User-Agent': 'PawakoReferralManager/1.0',
+      },
+    });
+
+    if (res.status === 401) {
+      return {
+        ok: false,
+        bot: null,
+        errorCode: 'INVALID_DISCORD_BOT_TOKEN',
+        errorMessage: 'DISCORD_BOT_TOKEN rejeté par Discord (HTTP 401). Vérifiez ou régénérez le token du bot.',
+      };
+    }
+
+    if (!res.ok) {
+      const errJson = (await res.json().catch(() => null)) as { message?: string } | null;
+      return {
+        ok: false,
+        bot: null,
+        errorCode: 'DISCORD_API_ERROR',
+        errorMessage: `Erreur API Discord lors de la vérification du bot (HTTP ${res.status}${errJson?.message ? `: ${errJson.message}` : ''}).`,
+      };
+    }
+
+    const data = (await res.json()) as {
+      id: string;
+      username?: string;
+      global_name?: string | null;
+      avatar?: string | null;
+    };
+
+    const appId = (params.clientId || '').trim() || data.id;
+    const inviteBotUrl = `https://discord.com/oauth2/authorize?client_id=${encodeURIComponent(
+      appId
+    )}&permissions=8&scope=bot%20applications.commands`;
+
+    return {
+      ok: true,
+      bot: {
+        id: data.id,
+        username: data.username || 'pawako-bot',
+        displayName: (data.global_name || data.username || 'Bot PAWAKO').trim(),
+        avatar: buildDiscordAvatarUrl(data.id, data.avatar),
+        inviteBotUrl,
+      },
+    };
+  } catch (err: any) {
+    return {
+      ok: false,
+      bot: null,
+      errorCode: 'NETWORK_ERROR',
+      errorMessage: `Impossible de contacter Discord : ${err?.message || 'erreur réseau'}`,
+    };
+  }
+}
+
+export async function discoverDiscordBotEnvironment(params: {
+  botToken?: string;
+  clientId?: string;
+  envGuildIds?: Partial<Record<DiscordServerType, string>>;
+  savedServers?: DiscordServerInfo[];
+  includeMembers?: boolean;
+}): Promise<DiscordBotDiscoveryWithMembersResult> {
+  const token = (params.botToken || '').trim();
+  const hasBotToken = Boolean(token);
+
+  const identity = await fetchBotIdentity({ botToken: token, clientId: params.clientId });
+  if (!identity.ok || !identity.bot) {
+    return {
+      ok: false,
+      hasBotToken,
+      bot: null,
+      guilds: [],
+      matchedServers: {},
+      guildMembersByGuildId: {},
+      errorCode: identity.errorCode || 'DISCORD_BOT_ERROR',
+      errorMessage: identity.errorMessage || 'Bot Discord indisponible.',
+    };
+  }
+
+  const headers: Record<string, string> = {
+    Authorization: `Bot ${token}`,
+    'User-Agent': 'PawakoReferralManager/1.0',
+  };
+
+  let rawGuilds: Array<{ id: string; name: string; icon?: string | null; approximate_member_count?: number }> = [];
+  try {
+    const guildsRes = await fetch(`${DISCORD_API_BASE}/users/@me/guilds?with_counts=true&limit=200`, { headers });
+    if (!guildsRes.ok) {
+      const errJson = (await guildsRes.json().catch(() => null)) as { message?: string } | null;
+      return {
+        ok: false,
+        hasBotToken,
+        bot: identity.bot,
+        guilds: [],
+        matchedServers: {},
+        guildMembersByGuildId: {},
+        errorCode: 'DISCORD_API_ERROR',
+        errorMessage: `Impossible de lister les serveurs du bot (HTTP ${guildsRes.status}${errJson?.message ? `: ${errJson.message}` : ''}).`,
+      };
+    }
+    const parsed = await guildsRes.json().catch(() => []);
+    rawGuilds = Array.isArray(parsed) ? parsed : [];
+  } catch (err: any) {
+    return {
+      ok: false,
+      hasBotToken,
+      bot: identity.bot,
+      guilds: [],
+      matchedServers: {},
+      guildMembersByGuildId: {},
+      errorCode: 'NETWORK_ERROR',
+      errorMessage: `Erreur réseau lors de la lecture des serveurs Discord : ${err?.message || 'inconnue'}`,
+    };
+  }
+
+  const guildMembersByGuildId: Record<string, DiscordGuildFetchedMember[]> = {};
+  const inspectedGuilds: DiscordDiscoveredGuild[] = [];
+
+  // Inspecter chaque serveur présent sur le bot en tranches de 4
+  const chunkSize = 4;
+  for (let i = 0; i < rawGuilds.length; i += chunkSize) {
+    const chunk = rawGuilds.slice(i, i + chunkSize);
+    const results = await Promise.all(
+      chunk.map(async g => {
+        const [guildRes, rolesRes, channelsRes, invitesRes, membersRes] = await Promise.all([
+          fetch(`${DISCORD_API_BASE}/guilds/${encodeURIComponent(g.id)}?with_counts=true`, { headers }).catch(() => null),
+          fetch(`${DISCORD_API_BASE}/guilds/${encodeURIComponent(g.id)}/roles`, { headers }).catch(() => null),
+          fetch(`${DISCORD_API_BASE}/guilds/${encodeURIComponent(g.id)}/channels`, { headers }).catch(() => null),
+          fetch(`${DISCORD_API_BASE}/guilds/${encodeURIComponent(g.id)}/invites`, { headers }).catch(() => null),
+          params.includeMembers
+            ? fetch(`${DISCORD_API_BASE}/guilds/${encodeURIComponent(g.id)}/members?limit=1000`, { headers }).catch(
+                () => null
+              )
+            : Promise.resolve(null),
+        ]);
+
+        const guildJson = guildRes && guildRes.ok ? ((await guildRes.json().catch(() => null)) as any) : null;
+        const rawRoles = rolesRes && rolesRes.ok ? ((await rolesRes.json().catch(() => [])) as any[]) : [];
+        const rawChannels = channelsRes && channelsRes.ok ? ((await channelsRes.json().catch(() => [])) as any[]) : [];
+        const rawInvites = invitesRes && invitesRes.ok ? ((await invitesRes.json().catch(() => [])) as any[]) : [];
+
+        const roles: DiscordDiscoveredRole[] = (Array.isArray(rawRoles) ? rawRoles : [])
+          .filter(r => r && r.id)
+          .map(r => ({
+            id: String(r.id),
+            name: String(r.name || ''),
+            color: Number(r.color || 0),
+            position: Number(r.position || 0),
+            managed: Boolean(r.managed),
+          }))
+          .sort((a, b) => b.position - a.position);
+
+        const channels: DiscordDiscoveredChannel[] = (Array.isArray(rawChannels) ? rawChannels : [])
+          .filter(ch => ch && ch.id && (ch.type === 0 || ch.type === 5))
+          .map(ch => ({
+            id: String(ch.id),
+            name: String(ch.name || ''),
+            type: Number(ch.type || 0),
+            position: Number(ch.position || 0),
+          }))
+          .sort((a, b) => a.position - b.position);
+
+        const preferredChannelIds = new Set<string>();
+        if (guildJson?.rules_channel_id) preferredChannelIds.add(String(guildJson.rules_channel_id));
+        if (guildJson?.system_channel_id) preferredChannelIds.add(String(guildJson.system_channel_id));
+
+        const sortedInviteChannels = [...channels].sort(
+          (a, b) => scoreRecruitmentChannel(b, preferredChannelIds) - scoreRecruitmentChannel(a, preferredChannelIds)
+        );
+        const bestInviteChannel = sortedInviteChannels[0] || null;
+
+        const invites: DiscordDiscoveredInvite[] = (Array.isArray(rawInvites) ? rawInvites : [])
+          .filter(inv => inv && inv.code)
+          .map(inv => ({
+            code: String(inv.code),
+            url: `https://discord.gg/${inv.code}`,
+            channelId: inv.channel?.id ? String(inv.channel.id) : null,
+            channelName: inv.channel?.name ? String(inv.channel.name) : null,
+            inviterUserId: inv.inviter?.id ? String(inv.inviter.id) : null,
+            inviterUsername: inv.inviter?.username ? String(inv.inviter.username) : null,
+            uses: typeof inv.uses === 'number' ? inv.uses : 0,
+            maxAge: typeof inv.max_age === 'number' ? inv.max_age : 0,
+            temporary: Boolean(inv.temporary),
+          }));
+
+        let membersAccessible = false;
+        const parsedMembers: DiscordGuildFetchedMember[] = [];
+        if (membersRes && membersRes.ok) {
+          membersAccessible = true;
+          const rawMembers = (await membersRes.json().catch(() => [])) as any[];
+          for (const m of Array.isArray(rawMembers) ? rawMembers : []) {
+            if (!m?.user?.id || m.user.bot) continue;
+            const uid = String(m.user.id);
+            const uname = String(m.user.username || `user_${uid.slice(-4)}`);
+            const dname = String(m.user.global_name || m.nick || uname).trim();
+            parsedMembers.push({
+              discordUserId: uid,
+              username: uname,
+              displayName: dname,
+              avatar: buildDiscordAvatarUrl(uid, m.user.avatar),
+              roleIds: Array.isArray(m.roles) ? m.roles.map(String) : [],
+            });
+          }
+          guildMembersByGuildId[g.id] = parsedMembers;
+        }
+
+        const suggestedType = suggestServerTypeForGuildName(guildJson?.name || g.name);
+        const memberCount = Number(
+          guildJson?.approximate_member_count ?? g.approximate_member_count ?? parsedMembers.length ?? 0
+        );
+
+        return {
+          id: g.id,
+          name: String(guildJson?.name || g.name || g.id),
+          iconUrl: buildDiscordGuildIconUrl(g.id, guildJson?.icon ?? g.icon),
+          memberCount,
+          ownerId: guildJson?.owner_id ? String(guildJson.owner_id) : null,
+          rulesChannelId: guildJson?.rules_channel_id ? String(guildJson.rules_channel_id) : null,
+          systemChannelId: guildJson?.system_channel_id ? String(guildJson.system_channel_id) : null,
+          suggestedServerType: suggestedType,
+          roles,
+          channels,
+          suggestedInviteChannelId: bestInviteChannel?.id || null,
+          suggestedInviteChannelName: bestInviteChannel?.name || null,
+          invites,
+          suggestedRoleMappings: suggestedType ? suggestRoleMappingsForGuild(suggestedType, roles) : {},
+          membersAccessible,
+          membersFetchedCount: parsedMembers.length,
+        } satisfies DiscordDiscoveredGuild;
+      })
+    );
+    inspectedGuilds.push(...results);
+  }
+
+  // Correspondance sans doublon entre les 4 types de serveurs PAWAKO et les serveurs trouvés
+  const matchedServers: Partial<Record<DiscordServerType, string>> = {};
+  const assignedGuildIds = new Set<string>();
+  const guildById = new Map(inspectedGuilds.map(g => [g.id, g]));
+  const serverOrder: DiscordServerType[] = [
+    'RECRUTEMENT',
+    'FORMATION',
+    'PRODUCTION_CHATTING',
+    'PRODUCTION_INSTAGRAM',
+  ];
+
+  // Priorité 1 : variables d'environnement explicites (si présentes sur le bot)
+  for (const sType of serverOrder) {
+    const envId = (params.envGuildIds?.[sType] || '').trim();
+    if (envId && guildById.has(envId) && !assignedGuildIds.has(envId)) {
+      matchedServers[sType] = envId;
+      assignedGuildIds.add(envId);
+    }
+  }
+
+  // Priorité 2 : serveurs déjà enregistrés en base Firestore
+  for (const sType of serverOrder) {
+    if (matchedServers[sType]) continue;
+    const savedId = (params.savedServers?.find(s => s.id === sType)?.guildId || '').trim();
+    if (savedId && guildById.has(savedId) && !assignedGuildIds.has(savedId)) {
+      matchedServers[sType] = savedId;
+      assignedGuildIds.add(savedId);
+    }
+  }
+
+  // Priorité 3 : détection automatique intelligente par le nom du serveur Discord
+  for (const sType of serverOrder) {
+    if (matchedServers[sType]) continue;
+    const matchedGuild = inspectedGuilds.find(g => !assignedGuildIds.has(g.id) && g.suggestedServerType === sType);
+    if (matchedGuild) {
+      matchedServers[sType] = matchedGuild.id;
+      assignedGuildIds.add(matchedGuild.id);
+    }
+  }
+
+  // Recalculer suggestedRoleMappings & suggestedServerType selon l'association finale
+  for (const [sType, gId] of Object.entries(matchedServers) as Array<[DiscordServerType, string]>) {
+    const g = guildById.get(gId);
+    if (g) {
+      g.suggestedServerType = sType;
+      g.suggestedRoleMappings = suggestRoleMappingsForGuild(sType, g.roles);
+    }
+  }
+
+  return {
+    ok: true,
+    hasBotToken,
+    bot: identity.bot,
+    guilds: inspectedGuilds,
+    matchedServers,
+    guildMembersByGuildId,
+    errorCode: null,
+    errorMessage: null,
+  };
+}
+

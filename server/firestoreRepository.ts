@@ -10,11 +10,13 @@ import {
   DiscordInviteCreationResult,
   DiscordResolvedUser,
   createRecruitmentDiscordInvite,
+  discoverDiscordBotEnvironment,
   extractDiscordInviteCode,
   fetchDiscordUserById,
   isLegacyFakeInvite,
   resolveDiscordUserIdentifier,
   revokeDiscordInvite,
+  suggestRoleMappingsForGuild,
   verifyDiscordInvite,
 } from './discordBot';
 import {
@@ -31,6 +33,7 @@ import {
   ReferralAttributionHistoryEntry,
   DiscordServerInfo,
   DiscordRoleMapping,
+  DiscordBotDiscoveryResult,
   RecruitmentEvent,
   AuditLog,
   AdminStatus,
@@ -2965,6 +2968,467 @@ export class FirestoreRepository {
     });
 
     return this.getRoleMappings();
+  }
+
+  /**
+   * Fusionne la configuration Discord issue des variables d'environnement avec les serveurs/salons
+   * découverts et enregistrés dans Firestore (permet la liaison 100% dynamique sans redeployer wrangler.jsonc).
+   */
+  async getEffectiveDiscordSettings(
+    baseBotConfig: DiscordBotConfig,
+    envGuildIds?: Partial<Record<DiscordServerType, string>>
+  ): Promise<{
+    botConfig: DiscordBotConfig;
+    guildIds: Record<DiscordServerType, string>;
+    servers: DiscordServerInfo[];
+  }> {
+    const servers = await this.getDiscordServers(envGuildIds as Record<DiscordServerType, string>);
+    const serverMap = new Map(servers.map(s => [s.id, s]));
+
+    const guildIds: Record<DiscordServerType, string> = {
+      RECRUTEMENT: (envGuildIds?.RECRUTEMENT || '').trim() || serverMap.get('RECRUTEMENT')?.guildId || '',
+      FORMATION: (envGuildIds?.FORMATION || '').trim() || serverMap.get('FORMATION')?.guildId || '',
+      PRODUCTION_CHATTING:
+        (envGuildIds?.PRODUCTION_CHATTING || '').trim() || serverMap.get('PRODUCTION_CHATTING')?.guildId || '',
+      PRODUCTION_INSTAGRAM:
+        (envGuildIds?.PRODUCTION_INSTAGRAM || '').trim() || serverMap.get('PRODUCTION_INSTAGRAM')?.guildId || '',
+    };
+
+    const recServer = serverMap.get('RECRUTEMENT');
+    const botConfig: DiscordBotConfig = {
+      botToken: baseBotConfig.botToken,
+      recruitmentGuildId: (baseBotConfig.recruitmentGuildId || '').trim() || guildIds.RECRUTEMENT || '',
+      inviteChannelId: (baseBotConfig.inviteChannelId || '').trim() || recServer?.inviteChannelId || '',
+    };
+
+    return { botConfig, guildIds, servers };
+  }
+
+  async updateServerBindings(params: {
+    bindings: Array<{
+      id: DiscordServerType;
+      guildId: string;
+      inviteChannelId?: string | null;
+      inviteChannelName?: string | null;
+      discordGuildName?: string | null;
+      discordIconUrl?: string | null;
+      memberCount?: number;
+      botConnected?: boolean;
+    }>;
+    actorUserId: string;
+    actorName: string;
+    envGuildIds?: Partial<Record<DiscordServerType, string>>;
+  }): Promise<DiscordServerInfo[]> {
+    const existing = await this.getDiscordServers(params.envGuildIds as Record<DiscordServerType, string>);
+    const now = new Date().toISOString();
+    const bindingMap = new Map(params.bindings.map(b => [b.id, b]));
+    const writes: Array<{ collection: string; docId: string; data: Record<string, any> }> = [];
+
+    const updatedServers = existing.map(srv => {
+      const clean = stripFirestoreMeta(srv);
+      const b = bindingMap.get(clean.id);
+      if (!b) return clean;
+      const nextGuildId = (b.guildId || '').trim();
+      const next: DiscordServerInfo = {
+        ...clean,
+        guildId: nextGuildId,
+        discordGuildName: b.discordGuildName !== undefined ? b.discordGuildName : clean.discordGuildName || null,
+        discordIconUrl: b.discordIconUrl !== undefined ? b.discordIconUrl : clean.discordIconUrl || null,
+        inviteChannelId:
+          b.inviteChannelId !== undefined ? b.inviteChannelId || null : clean.inviteChannelId || null,
+        inviteChannelName:
+          b.inviteChannelName !== undefined ? b.inviteChannelName || null : clean.inviteChannelName || null,
+        memberCount: typeof b.memberCount === 'number' ? b.memberCount : clean.memberCount,
+        botConnected: b.botConnected !== undefined ? Boolean(b.botConnected) : Boolean(nextGuildId),
+        lastSyncAt: now,
+      };
+      writes.push({ collection: 'pawako_discord_servers', docId: clean.id, data: next });
+      return next;
+    });
+
+    if (writes.length > 0) {
+      await this.client.batchSet(writes);
+      await this.logAudit({
+        action: 'DISCORD_SERVERS_BOUND',
+        actorUserId: params.actorUserId,
+        actorName: params.actorName,
+        targetType: 'SERVER',
+        targetId: 'ALL',
+        details: {
+          boundServers: params.bindings.map(b => ({ id: b.id, guildId: b.guildId })),
+        },
+      });
+    }
+
+    return updatedServers;
+  }
+
+  async autoConfigureFromDiscordBot(params: {
+    botToken?: string;
+    clientId?: string;
+    envGuildIds?: Partial<Record<DiscordServerType, string>>;
+    overwriteExisting?: boolean;
+    syncInvites?: boolean;
+    syncMembers?: boolean;
+    actor: { id: string; displayName: string };
+  }): Promise<{
+    ok: boolean;
+    discovery: DiscordBotDiscoveryResult;
+    serversUpdated: number;
+    rolesMapped: number;
+    invitesSynced: number;
+    referrerInvitesCreated: number;
+    membersSynced: number;
+    anomaliesCount: number;
+    membersAccessible: boolean;
+    servers: DiscordServerInfo[];
+    mappings: DiscordRoleMapping[];
+  }> {
+    const [existingServers, existingMappings] = await Promise.all([
+      this.getDiscordServers(params.envGuildIds as Record<DiscordServerType, string>),
+      this.getRoleMappings(),
+    ]);
+
+    const fullDiscovery = await discoverDiscordBotEnvironment({
+      botToken: params.botToken,
+      clientId: params.clientId,
+      envGuildIds: params.envGuildIds,
+      savedServers: existingServers,
+      includeMembers: params.syncMembers !== false,
+    });
+
+    const { guildMembersByGuildId, ...publicDiscovery } = fullDiscovery;
+
+    if (!fullDiscovery.ok) {
+      return {
+        ok: false,
+        discovery: publicDiscovery,
+        serversUpdated: 0,
+        rolesMapped: 0,
+        invitesSynced: 0,
+        referrerInvitesCreated: 0,
+        membersSynced: 0,
+        anomaliesCount: 0,
+        membersAccessible: false,
+        servers: existingServers,
+        mappings: existingMappings,
+      };
+    }
+
+    const now = new Date().toISOString();
+    const guildById = new Map(fullDiscovery.guilds.map(g => [g.id, g]));
+    let serversUpdated = 0;
+    const serverWrites: Array<{ collection: string; docId: string; data: Record<string, any> }> = [];
+
+    const nextServers = existingServers.map(srv => {
+      const clean = stripFirestoreMeta(srv);
+      const matchedGuildId = fullDiscovery.matchedServers[clean.id];
+      const guild = matchedGuildId ? guildById.get(matchedGuildId) : undefined;
+      if (!guild) return clean;
+
+      let nextInviteChannelId = clean.inviteChannelId || null;
+      let nextInviteChannelName = clean.inviteChannelName || null;
+      if (clean.id === 'RECRUTEMENT') {
+        const currentChannelStillExists =
+          nextInviteChannelId && guild.channels.some(ch => ch.id === nextInviteChannelId);
+        if (!currentChannelStillExists || params.overwriteExisting) {
+          nextInviteChannelId = guild.suggestedInviteChannelId || null;
+          nextInviteChannelName = guild.suggestedInviteChannelName || null;
+        } else if (nextInviteChannelId) {
+          nextInviteChannelName =
+            guild.channels.find(ch => ch.id === nextInviteChannelId)?.name || nextInviteChannelName;
+        }
+      }
+
+      const nextSrv: DiscordServerInfo = {
+        ...clean,
+        guildId: guild.id,
+        discordGuildName: guild.name,
+        discordIconUrl: guild.iconUrl,
+        inviteChannelId: nextInviteChannelId,
+        inviteChannelName: nextInviteChannelName,
+        memberCount: guild.memberCount,
+        botConnected: true,
+        lastSyncAt: now,
+      };
+      serversUpdated += 1;
+      serverWrites.push({ collection: 'pawako_discord_servers', docId: clean.id, data: nextSrv });
+      return nextSrv;
+    });
+
+    if (serverWrites.length > 0) {
+      await this.client.batchSet(serverWrites);
+    }
+
+    // 2. Identification et mise à jour automatique des correspondances de rôles Discord
+    const mappingWrites: Array<{ collection: string; docId: string; data: Record<string, any> }> = [];
+    let rolesMapped = 0;
+
+    const mergedMappings = existingMappings.map(m => {
+      const clean = stripFirestoreMeta(m);
+      const matchedGuildId = fullDiscovery.matchedServers[clean.serverId];
+      const guild = matchedGuildId ? guildById.get(matchedGuildId) : undefined;
+      if (!guild) return clean;
+
+      const guildRoleMap = new Map(guild.roles.map(r => [r.id, r]));
+      const existingRoleValid = Boolean(clean.discordRoleId && guildRoleMap.has(clean.discordRoleId));
+      const suggestedMap = suggestRoleMappingsForGuild(clean.serverId, guild.roles);
+      const suggested = suggestedMap[clean.roleType];
+
+      if (suggested && (!existingRoleValid || params.overwriteExisting)) {
+        rolesMapped += 1;
+        const nextMapping: DiscordRoleMapping = {
+          ...clean,
+          discordRoleId: suggested.roleId,
+          roleName: suggested.roleName,
+          updatedAt: now,
+          updatedBy: params.actor.displayName,
+        };
+        mappingWrites.push({
+          collection: 'pawako_discord_role_mappings',
+          docId: `${clean.serverId}_${clean.roleType}`,
+          data: nextMapping,
+        });
+        return nextMapping;
+      }
+
+      if (existingRoleValid && clean.discordRoleId) {
+        const liveRole = guildRoleMap.get(clean.discordRoleId)!;
+        if (clean.roleName !== liveRole.name) {
+          const nextMapping: DiscordRoleMapping = {
+            ...clean,
+            roleName: liveRole.name,
+            updatedAt: now,
+            updatedBy: params.actor.displayName,
+          };
+          mappingWrites.push({
+            collection: 'pawako_discord_role_mappings',
+            docId: `${clean.serverId}_${clean.roleType}`,
+            data: nextMapping,
+          });
+          return nextMapping;
+        }
+      }
+
+      return clean;
+    });
+
+    if (mappingWrites.length > 0) {
+      await this.client.batchSet(mappingWrites);
+    }
+
+    // 3. Synchronisation des invitations Discord du serveur RECRUTEMENT & liaison parrains
+    let invitesSynced = 0;
+    let referrerInvitesCreated = 0;
+    const recGuildId = fullDiscovery.matchedServers.RECRUTEMENT;
+    const recGuild = recGuildId ? guildById.get(recGuildId) : undefined;
+    const recServerDoc = nextServers.find(s => s.id === 'RECRUTEMENT');
+
+    if (params.syncInvites !== false && recGuild && params.botToken) {
+      const [referrers, existingInvites] = await Promise.all([
+        this.getReferrers(),
+        this.client.listDocuments<DiscordInviteRecord>('pawako_discord_invites'),
+      ]);
+      const inviteDocMap = new Map(existingInvites.map(inv => [inv.inviteCode, inv]));
+      const liveInviteByCode = new Map(recGuild.invites.map(inv => [inv.code, inv]));
+      const inviteWrites: Array<{ collection: string; docId: string; data: Record<string, any> }> = [];
+      const referrerWrites: Array<{ collection: string; docId: string; data: Record<string, any> }> = [];
+
+      // Enregistrer toutes les invitations actives découvertes sur Discord
+      for (const live of recGuild.invites) {
+        const prev = inviteDocMap.get(live.code);
+        const linkedRef =
+          referrers.find(r => r.inviteCode === live.code) ||
+          (live.inviterUserId ? referrers.find(r => r.discordUserId === live.inviterUserId) : undefined);
+
+        const nextInviteDoc: DiscordInviteRecord = {
+          inviteCode: live.code,
+          inviteUrl: live.url,
+          guildId: recGuild.id,
+          serverId: 'RECRUTEMENT',
+          channelId: live.channelId || prev?.channelId || null,
+          inviterDiscordUserId: live.inviterUserId || prev?.inviterDiscordUserId || null,
+          referrerId: linkedRef?.id || prev?.referrerId || null,
+          active: true,
+          createdAt: prev?.createdAt || now,
+          deletedAt: null,
+          uses: live.uses,
+        };
+        inviteWrites.push({ collection: 'pawako_discord_invites', docId: live.code, data: nextInviteDoc });
+        invitesSynced += 1;
+      }
+
+      // Synchroniser / réparer les liens de parrainage sur les parrains actifs
+      for (const rawRef of referrers) {
+        const ref = stripFirestoreMeta(rawRef);
+        const effStatus = getEffectiveReferrerStatus(ref);
+        const liveMatch = ref.inviteCode ? liveInviteByCode.get(ref.inviteCode) : undefined;
+
+        if (liveMatch) {
+          const nextUses = Math.max(ref.usesCount || 0, liveMatch.uses);
+          if (ref.inviteStatus !== 'ACTIVE' || ref.inviteError || nextUses !== ref.usesCount) {
+            referrerWrites.push({
+              collection: 'pawako_referrers',
+              docId: ref.id,
+              data: {
+                ...ref,
+                inviteStatus: 'ACTIVE',
+                inviteError: null,
+                inviteChannelId: liveMatch.channelId || ref.inviteChannelId || null,
+                usesCount: nextUses,
+                updatedAt: now,
+              },
+            });
+          }
+          continue;
+        }
+
+        if (effStatus === 'ACTIVE' && (!ref.inviteCode || ref.inviteStatus !== 'ACTIVE')) {
+          // Chercher si le parrain a déjà une invitation permanente existante sur le serveur Recrutement
+          const existingOwnedInvite = recGuild.invites.find(
+            inv => inv.inviterUserId === ref.discordUserId && inv.maxAge === 0 && !inv.temporary
+          );
+          if (existingOwnedInvite) {
+            referrerWrites.push({
+              collection: 'pawako_referrers',
+              docId: ref.id,
+              data: {
+                ...ref,
+                inviteCode: existingOwnedInvite.code,
+                inviteUrl: existingOwnedInvite.url,
+                inviteStatus: 'ACTIVE',
+                inviteChannelId: existingOwnedInvite.channelId,
+                inviteError: null,
+                usesCount: Math.max(ref.usesCount || 0, existingOwnedInvite.uses),
+                updatedAt: now,
+              },
+            });
+            invitesSynced += 1;
+          } else {
+            // Générer une véritable invitation Discord pour ce parrain actif
+            const created = await createRecruitmentDiscordInvite({
+              botToken: params.botToken,
+              recruitmentGuildId: recGuild.id,
+              inviteChannelId: recServerDoc?.inviteChannelId || undefined,
+              reason: `Synchronisation auto bot PAWAKO : ${ref.discordUsername} (${ref.discordUserId})`,
+            });
+            if (created.ok) {
+              referrerInvitesCreated += 1;
+              referrerWrites.push({
+                collection: 'pawako_referrers',
+                docId: ref.id,
+                data: {
+                  ...ref,
+                  inviteCode: created.code,
+                  inviteUrl: created.url,
+                  inviteStatus: 'ACTIVE',
+                  inviteChannelId: created.channelId || null,
+                  inviteError: null,
+                  inviteCreatedAt: now,
+                  updatedAt: now,
+                },
+              });
+              inviteWrites.push({
+                collection: 'pawako_discord_invites',
+                docId: created.code,
+                data: {
+                  inviteCode: created.code,
+                  inviteUrl: created.url,
+                  guildId: recGuild.id,
+                  serverId: 'RECRUTEMENT',
+                  channelId: created.channelId || null,
+                  inviterDiscordUserId: ref.discordUserId,
+                  referrerId: ref.id,
+                  active: true,
+                  createdAt: now,
+                  uses: 0,
+                },
+              });
+            }
+          }
+        }
+      }
+
+      if (inviteWrites.length > 0) {
+        await this.client.batchSet(inviteWrites).catch(() => null);
+      }
+      if (referrerWrites.length > 0) {
+        await this.client.batchSet(referrerWrites).catch(() => null);
+      }
+    }
+
+    // 4. Synchronisation des membres Discord (si l'intent Server Members est actif sur le bot)
+    let membersSynced = 0;
+    let anomaliesCount = 0;
+    const membersAccessible = fullDiscovery.guilds.some(g => g.membersAccessible);
+
+    if (params.syncMembers !== false && membersAccessible) {
+      const serverOrder: DiscordServerType[] = [
+        'RECRUTEMENT',
+        'FORMATION',
+        'PRODUCTION_CHATTING',
+        'PRODUCTION_INSTAGRAM',
+      ];
+      for (const sType of serverOrder) {
+        const gId = fullDiscovery.matchedServers[sType];
+        if (!gId) continue;
+        const members = guildMembersByGuildId[gId] || [];
+        if (members.length === 0) continue;
+
+        const mappedRoleIds = new Set(
+          mergedMappings
+            .filter(m => m.serverId === sType && m.discordRoleId)
+            .map(m => m.discordRoleId)
+        );
+        if (mappedRoleIds.size === 0) continue;
+
+        const relevantMembers = members.filter(m => m.roleIds.some(r => mappedRoleIds.has(r)));
+        if (relevantMembers.length === 0) continue;
+
+        const syncRes = await this.syncServerMembers({
+          serverId: sType,
+          members: relevantMembers,
+          actorUserId: params.actor.id,
+          actorName: params.actor.displayName,
+          envGuildIds: fullDiscovery.matchedServers,
+        });
+        membersSynced += syncRes.synchronizedCount;
+        anomaliesCount += syncRes.anomaliesCount;
+      }
+    }
+
+    await this.logAudit({
+      action: 'DISCORD_BOT_AUTO_CONFIGURED',
+      actorUserId: params.actor.id,
+      actorName: params.actor.displayName,
+      targetType: 'DISCORD',
+      targetId: fullDiscovery.bot?.id || 'BOT',
+      details: {
+        guildsFound: fullDiscovery.guilds.length,
+        matchedServers: fullDiscovery.matchedServers,
+        serversUpdated,
+        rolesMapped,
+        invitesSynced,
+        referrerInvitesCreated,
+        membersSynced,
+        anomaliesCount,
+        membersAccessible,
+      },
+    });
+
+    return {
+      ok: true,
+      discovery: publicDiscovery,
+      serversUpdated,
+      rolesMapped,
+      invitesSynced,
+      referrerInvitesCreated,
+      membersSynced,
+      anomaliesCount,
+      membersAccessible,
+      servers: nextServers,
+      mappings: mergedMappings,
+    };
   }
 
   private resolveServerType(

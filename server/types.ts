@@ -210,6 +210,74 @@ export interface DiscordServerInfo {
   memberCount: number;
   botConnected: boolean;
   lastSyncAt: string;
+  inviteChannelId?: string | null;
+  inviteChannelName?: string | null;
+  discordGuildName?: string | null;
+  discordIconUrl?: string | null;
+}
+
+export interface DiscordDiscoveredRole {
+  id: string;
+  name: string;
+  color: number;
+  position: number;
+  managed: boolean;
+}
+
+export interface DiscordDiscoveredChannel {
+  id: string;
+  name: string;
+  type: number;
+  position: number;
+}
+
+export interface DiscordDiscoveredInvite {
+  code: string;
+  url: string;
+  channelId: string | null;
+  channelName: string | null;
+  inviterUserId: string | null;
+  inviterUsername: string | null;
+  uses: number;
+  maxAge: number;
+  temporary: boolean;
+}
+
+export interface DiscordDiscoveredGuild {
+  id: string;
+  name: string;
+  iconUrl: string | null;
+  memberCount: number;
+  ownerId: string | null;
+  rulesChannelId: string | null;
+  systemChannelId: string | null;
+  suggestedServerType: DiscordServerType | null;
+  roles: DiscordDiscoveredRole[];
+  channels: DiscordDiscoveredChannel[];
+  suggestedInviteChannelId: string | null;
+  suggestedInviteChannelName: string | null;
+  invites: DiscordDiscoveredInvite[];
+  suggestedRoleMappings: Partial<Record<PawakoRoleType, { roleId: string; roleName: string }>>;
+  membersAccessible: boolean;
+  membersFetchedCount: number;
+}
+
+export interface DiscordBotIdentity {
+  id: string;
+  username: string;
+  displayName: string;
+  avatar: string | null;
+  inviteBotUrl: string;
+}
+
+export interface DiscordBotDiscoveryResult {
+  ok: boolean;
+  hasBotToken: boolean;
+  bot: DiscordBotIdentity | null;
+  guilds: DiscordDiscoveredGuild[];
+  matchedServers: Partial<Record<DiscordServerType, string>>;
+  errorCode?: string | null;
+  errorMessage?: string | null;
 }
 
 export interface DiscordMembership {

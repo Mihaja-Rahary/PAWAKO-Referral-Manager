@@ -605,6 +605,7 @@ export default function App() {
                 refreshTrigger={refreshTrigger}
                 onRefreshAll={triggerRefresh}
                 initialServers={stats?.servers}
+                currentUserRole={currentUser?.role}
               />
             )}
 

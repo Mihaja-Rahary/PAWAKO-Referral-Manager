@@ -57,6 +57,30 @@ class MockExternalServices {
     string,
     { id: string; username: string; global_name?: string | null; avatar?: string | null }
   >();
+  public mockBotGuilds: Array<{
+    id: string;
+    name: string;
+    icon?: string | null;
+    approximate_member_count?: number;
+    rules_channel_id?: string | null;
+    system_channel_id?: string | null;
+    roles?: Array<{ id: string; name: string; color?: number; position?: number; managed?: boolean }>;
+    channels?: Array<{ id: string; name: string; type: number; position?: number }>;
+    invites?: Array<{
+      code: string;
+      channel?: { id: string; name?: string };
+      inviter?: { id: string; username?: string };
+      uses?: number;
+      max_age?: number;
+      temporary?: boolean;
+    }>;
+    members?: Array<{
+      user: { id: string; username: string; global_name?: string | null; avatar?: string | null; bot?: boolean };
+      nick?: string | null;
+      roles: string[];
+    }>;
+    membersForbidden?: boolean;
+  }> = [];
 
   private getCollection(col: string): Map<string, StoredDoc> {
     let map = this.collections.get(col);
@@ -368,6 +392,28 @@ class MockExternalServices {
 
         if (url.pathname === '/api/v10/users/@me' && method === 'GET') {
           const authHeader = (init?.headers as Record<string, string>)?.Authorization || '';
+          if (authHeader.startsWith('Bot ')) {
+            const botToken = authHeader.slice(4).trim();
+            if (!botToken || botToken === 'invalid-bot-token') {
+              return new Response(JSON.stringify({ message: '401: Unauthorized' }), {
+                status: 401,
+                headers: { 'Content-Type': 'application/json' },
+              });
+            }
+            return new Response(
+              JSON.stringify({
+                id: '999000000000000999',
+                username: 'pawako_bot',
+                global_name: 'PAWAKO Bot',
+                avatar: null,
+              }),
+              {
+                status: 200,
+                headers: { 'Content-Type': 'application/json' },
+              }
+            );
+          }
+
           const code = authHeader.replace(/^Bearer\s+discord-token:/, '');
           const user = this.discordAuthCodes.get(code);
           if (!user) {
@@ -382,24 +428,121 @@ class MockExternalServices {
           });
         }
 
-        if (url.pathname === `/api/v10/guilds/${GUILD_IDS.RECRUTEMENT}` && method === 'GET') {
-          return new Response(JSON.stringify({ id: GUILD_IDS.RECRUTEMENT, name: 'PAWAKO Recrutement' }), {
-            status: 200,
+        if (url.pathname === '/api/v10/users/@me/guilds' && method === 'GET') {
+          return new Response(
+            JSON.stringify(
+              this.mockBotGuilds.map(g => ({
+                id: g.id,
+                name: g.name,
+                icon: g.icon ?? null,
+                approximate_member_count: g.approximate_member_count ?? g.members?.length ?? 12,
+              }))
+            ),
+            { status: 200, headers: { 'Content-Type': 'application/json' } }
+          );
+        }
+
+        const guildMatch = url.pathname.match(/^\/api\/v10\/guilds\/([^/]+)$/);
+        if (guildMatch && method === 'GET') {
+          const guildId = decodeURIComponent(guildMatch[1]);
+          const botGuild = this.mockBotGuilds.find(g => g.id === guildId);
+          if (botGuild) {
+            return new Response(
+              JSON.stringify({
+                id: botGuild.id,
+                name: botGuild.name,
+                icon: botGuild.icon ?? null,
+                approximate_member_count: botGuild.approximate_member_count ?? botGuild.members?.length ?? 12,
+                rules_channel_id: botGuild.rules_channel_id ?? null,
+                system_channel_id: botGuild.system_channel_id ?? null,
+              }),
+              { status: 200, headers: { 'Content-Type': 'application/json' } }
+            );
+          }
+          if (guildId === GUILD_IDS.RECRUTEMENT) {
+            return new Response(JSON.stringify({ id: GUILD_IDS.RECRUTEMENT, name: 'PAWAKO Recrutement' }), {
+              status: 200,
+              headers: { 'Content-Type': 'application/json' },
+            });
+          }
+          return new Response(JSON.stringify({ code: 10004, message: 'Unknown Guild' }), {
+            status: 404,
             headers: { 'Content-Type': 'application/json' },
           });
         }
 
-        if (url.pathname === `/api/v10/guilds/${GUILD_IDS.RECRUTEMENT}/channels` && method === 'GET') {
-          if (this.failDiscordBotPermissions) {
-            return new Response(JSON.stringify({ code: 50001, message: 'Missing Access' }), {
-              status: 403,
+        const guildSubMatch = url.pathname.match(/^\/api\/v10\/guilds\/([^/]+)\/(roles|channels|invites|members)$/);
+        if (guildSubMatch && method === 'GET') {
+          const guildId = decodeURIComponent(guildSubMatch[1]);
+          const sub = guildSubMatch[2];
+          const botGuild = this.mockBotGuilds.find(g => g.id === guildId);
+
+          if (sub === 'channels') {
+            if (this.failDiscordBotPermissions) {
+              return new Response(JSON.stringify({ code: 50001, message: 'Missing Access' }), {
+                status: 403,
+                headers: { 'Content-Type': 'application/json' },
+              });
+            }
+            if (botGuild?.channels) {
+              return new Response(JSON.stringify(botGuild.channels), {
+                status: 200,
+                headers: { 'Content-Type': 'application/json' },
+              });
+            }
+            if (guildId === GUILD_IDS.RECRUTEMENT) {
+              return new Response(JSON.stringify(this.discordGuildChannels), {
+                status: 200,
+                headers: { 'Content-Type': 'application/json' },
+              });
+            }
+            return new Response(JSON.stringify([]), {
+              status: 200,
               headers: { 'Content-Type': 'application/json' },
             });
           }
-          return new Response(JSON.stringify(this.discordGuildChannels), {
-            status: 200,
-            headers: { 'Content-Type': 'application/json' },
-          });
+
+          if (sub === 'roles') {
+            return new Response(JSON.stringify(botGuild?.roles || []), {
+              status: 200,
+              headers: { 'Content-Type': 'application/json' },
+            });
+          }
+
+          if (sub === 'invites') {
+            if (botGuild?.invites) {
+              return new Response(JSON.stringify(botGuild.invites), {
+                status: 200,
+                headers: { 'Content-Type': 'application/json' },
+              });
+            }
+            const existingInvites = Array.from(this.discordInvites.values())
+              .filter(inv => inv.guildId === guildId && !inv.deleted)
+              .map(inv => ({
+                code: inv.code,
+                channel: { id: inv.channelId },
+                uses: inv.uses,
+                max_age: 0,
+                temporary: false,
+              }));
+            return new Response(JSON.stringify(existingInvites), {
+              status: 200,
+              headers: { 'Content-Type': 'application/json' },
+            });
+          }
+
+          if (sub === 'members') {
+            if (botGuild?.membersForbidden) {
+              return new Response(JSON.stringify({ code: 50001, message: 'Missing Access' }), {
+                status: 403,
+                headers: { 'Content-Type': 'application/json' },
+              });
+            }
+            return new Response(JSON.stringify(botGuild?.members || []), {
+              status: 200,
+              headers: { 'Content-Type': 'application/json' },
+            });
+          }
         }
 
         const createInviteMatch = url.pathname.match(/^\/api\/v10\/channels\/([^/]+)\/invites$/);
@@ -413,16 +556,18 @@ class MockExternalServices {
           this.inviteCounter += 1;
           const code = `realDisc${String(this.inviteCounter).padStart(4, '0')}`;
           const channelId = createInviteMatch[1];
+          const ownerGuild = this.mockBotGuilds.find(g => g.channels?.some(ch => ch.id === channelId));
+          const resolvedGuildId = ownerGuild?.id || GUILD_IDS.RECRUTEMENT;
           this.discordInvites.set(code, {
             code,
-            guildId: GUILD_IDS.RECRUTEMENT,
+            guildId: resolvedGuildId,
             channelId,
             uses: 0,
           });
           return new Response(
             JSON.stringify({
               code,
-              guild: { id: GUILD_IDS.RECRUTEMENT },
+              guild: { id: resolvedGuildId },
               channel: { id: channelId },
               uses: 0,
             }),
@@ -1783,5 +1928,180 @@ describe('PAWAKO Referral Manager — Tests Complets Isolés (Mockés)', () => {
     assert.equal(detachedCand.referrerName, null);
     assert.equal(detachedCand.attributionStatus, 'UNCERTAIN');
   });
+
+  it('7.5 Bot Discord : auto-détection et liaison complète (serveurs, salons, rôles, membres) sans IDs en variables env', async () => {
+    const emptyGuildEnv = createTestEnv({
+      DISCORD_RECRUITMENT_GUILD_ID: '',
+      DISCORD_RECRUITMENT_INVITE_CHANNEL_ID: '',
+      DISCORD_FORMATION_GUILD_ID: '',
+      DISCORD_CHATTING_PRODUCTION_GUILD_ID: '',
+      DISCORD_INSTAGRAM_PRODUCTION_GUILD_ID: '',
+    });
+
+    mock.mockBotGuilds = [
+      {
+        id: GUILD_IDS.RECRUTEMENT,
+        name: 'PAWAKO Recrutement Officiel',
+        approximate_member_count: 42,
+        channels: [
+          { id: '900000000000000010', name: 'annonces', type: 5, position: 0 },
+          { id: '900000000000000011', name: 'accueil-recrutement', type: 0, position: 1 },
+        ],
+        roles: [
+          { id: GUILD_IDS.RECRUTEMENT, name: '@everyone', position: 0, managed: false },
+          { id: '701000000000000001', name: 'Candidat', position: 5, managed: false },
+          { id: '701000000000000002', name: 'Candidat Accepté', position: 6, managed: false },
+          { id: '701000000000000003', name: 'Candidat Refusé', position: 7, managed: false },
+        ],
+        members: [
+          {
+            user: { id: '880000000000000001', username: 'alice_cand', global_name: 'Alice Candidate', avatar: null },
+            roles: ['701000000000000001'],
+          },
+        ],
+      },
+      {
+        id: GUILD_IDS.FORMATION,
+        name: 'PAWAKO Formation Academy',
+        approximate_member_count: 18,
+        channels: [{ id: '900000000000000020', name: 'planning-formation', type: 0, position: 0 }],
+        roles: [
+          { id: '702000000000000001', name: 'En Formation', position: 4, managed: false },
+          { id: '702000000000000002', name: 'En Simulation', position: 5, managed: false },
+          { id: '702000000000000003', name: 'VA Validé', position: 6, managed: false },
+        ],
+        members: [],
+      },
+      {
+        id: GUILD_IDS.PRODUCTION_CHATTING,
+        name: 'PAWAKO Production Chatting',
+        approximate_member_count: 25,
+        channels: [{ id: '900000000000000030', name: 'general-chatting', type: 0, position: 0 }],
+        roles: [{ id: '703000000000000001', name: 'VA Production', position: 8, managed: false }],
+        members: [],
+      },
+      {
+        id: GUILD_IDS.PRODUCTION_INSTAGRAM,
+        name: 'PAWAKO Production Instagram',
+        approximate_member_count: 14,
+        channels: [{ id: '900000000000000040', name: 'general-insta', type: 0, position: 0 }],
+        roles: [{ id: '704000000000000001', name: 'VA Instagram', position: 8, managed: false }],
+        members: [],
+      },
+    ];
+
+    const adminLogin = await loginViaWorkerOAuth(mock, emptyGuildEnv, 'admin', {
+      id: emptyGuildEnv.INITIAL_ADMIN_DISCORD_ID!,
+      username: 'super_admin',
+      global_name: 'Super Admin',
+      avatar: null,
+    });
+
+    // 1. Découverte sans modification en base
+    const discoverRes = await app.fetch(
+      new Request(`${WORKER_ORIGIN}/api/discord/bot/discover`, {
+        headers: {
+          Cookie: `pawako_session=${adminLogin.sessionCookie}`,
+          Origin: FRONTEND_ORIGIN,
+        },
+      }),
+      emptyGuildEnv
+    );
+    assert.equal(discoverRes.status, 200);
+    const discoverJson = (await discoverRes.json()) as any;
+    assert.equal(discoverJson.ok, true);
+    assert.equal(discoverJson.bot.username, 'pawako_bot');
+    assert.match(discoverJson.bot.inviteBotUrl, /permissions=8/);
+    assert.equal(discoverJson.guilds.length, 4);
+    assert.equal(discoverJson.matchedServers.RECRUTEMENT, GUILD_IDS.RECRUTEMENT);
+    assert.equal(discoverJson.matchedServers.FORMATION, GUILD_IDS.FORMATION);
+    assert.equal(discoverJson.matchedServers.PRODUCTION_CHATTING, GUILD_IDS.PRODUCTION_CHATTING);
+    assert.equal(discoverJson.matchedServers.PRODUCTION_INSTAGRAM, GUILD_IDS.PRODUCTION_INSTAGRAM);
+
+    // 2. Auto-configuration complète vers Firestore
+    const autoRes = await app.fetch(
+      new Request(`${WORKER_ORIGIN}/api/discord/bot/auto-configure`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: `pawako_session=${adminLogin.sessionCookie}`,
+          Origin: FRONTEND_ORIGIN,
+        },
+        body: JSON.stringify({ syncMembers: true }),
+      }),
+      emptyGuildEnv
+    );
+    assert.equal(autoRes.status, 200);
+    const autoJson = (await autoRes.json()) as any;
+    assert.equal(autoJson.ok, true);
+    assert.equal(autoJson.serversUpdated, 4);
+    assert.ok(autoJson.rolesMapped >= 8);
+    assert.ok(autoJson.membersSynced >= 1);
+
+    // 3. Vérifier la persistance des serveurs et du salon d'invitation Recrutement
+    const serversRes = await app.fetch(
+      new Request(`${WORKER_ORIGIN}/api/discord/servers`, {
+        headers: {
+          Cookie: `pawako_session=${adminLogin.sessionCookie}`,
+          Origin: FRONTEND_ORIGIN,
+        },
+      }),
+      emptyGuildEnv
+    );
+    assert.equal(serversRes.status, 200);
+    const serversJson = (await serversRes.json()) as { servers: any[] };
+    const servers = serversJson.servers;
+    const recrutementServer = servers.find(s => s.id === 'RECRUTEMENT');
+    assert.ok(recrutementServer);
+    assert.equal(recrutementServer.guildId, GUILD_IDS.RECRUTEMENT);
+    assert.equal(recrutementServer.inviteChannelId, '900000000000000011');
+    assert.equal(recrutementServer.inviteChannelName, 'accueil-recrutement');
+
+    // 4. Vérifier les mappings de rôles persistés
+    const mappingsRes = await app.fetch(
+      new Request(`${WORKER_ORIGIN}/api/discord/role-mappings`, {
+        headers: {
+          Cookie: `pawako_session=${adminLogin.sessionCookie}`,
+          Origin: FRONTEND_ORIGIN,
+        },
+      }),
+      emptyGuildEnv
+    );
+    assert.equal(mappingsRes.status, 200);
+    const mappingsJson = (await mappingsRes.json()) as { mappings: any[] };
+    const mappings = mappingsJson.mappings;
+    assert.equal(mappings.find(m => m.serverId === 'RECRUTEMENT' && m.roleType === 'CANDIDAT')?.discordRoleId, '701000000000000001');
+    assert.equal(mappings.find(m => m.serverId === 'FORMATION' && m.roleType === 'EN_FORMATION')?.discordRoleId, '702000000000000001');
+    assert.equal(
+      mappings.find(m => m.serverId === 'PRODUCTION_INSTAGRAM' && m.roleType === 'VA_PRODUCTION')?.discordRoleId,
+      '704000000000000001'
+    );
+
+    // 5. Même avec env guild IDs vides, la création d'un parrain génère une vraie invitation Discord sur le salon découvert
+    mock.discordUsers.set('500000000000000750', {
+      id: '500000000000000750',
+      username: 'parrain_auto',
+      global_name: 'Parrain Auto Bound',
+      avatar: null,
+    });
+    const createRefRes = await app.fetch(
+      new Request(`${WORKER_ORIGIN}/api/referrers`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: `pawako_session=${adminLogin.sessionCookie}`,
+          Origin: FRONTEND_ORIGIN,
+        },
+        body: JSON.stringify({ discordUserId: '500000000000000750' }),
+      }),
+      emptyGuildEnv
+    );
+    assert.equal(createRefRes.status, 201);
+    const createRefJson = (await createRefRes.json()) as any;
+    assert.equal(createRefJson.referrer.inviteStatus, 'ACTIVE');
+    assert.equal(createRefJson.referrer.inviteChannelId, '900000000000000011');
+    assert.match(createRefJson.referrer.inviteUrl, /^https:\/\/discord\.gg\/realDisc/);
+  });
 });
+
 

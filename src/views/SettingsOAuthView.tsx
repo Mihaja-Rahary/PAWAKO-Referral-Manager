@@ -1,6 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { api } from '../api';
-import { DiscordRoleMapping, DiscordServerType, PawakoRoleType } from '../types';
+import {
+  DiscordBotDiscoveryResult,
+  DiscordRoleMapping,
+  DiscordServerType,
+  PawakoRoleType,
+} from '../types';
 import { getPawakoRoleLabel } from '../utils/statusUtils';
 import {
   KeyRound,
@@ -18,7 +23,9 @@ import {
   Cloud,
   HardDrive,
   UploadCloud,
-  FileCheck
+  FileCheck,
+  Wand2,
+  RefreshCw,
 } from 'lucide-react';
 
 export const SettingsOAuthView: React.FC = () => {
@@ -30,6 +37,9 @@ export const SettingsOAuthView: React.FC = () => {
   } | null>(null);
 
   const [roleMappings, setRoleMappings] = useState<DiscordRoleMapping[]>([]);
+  const [discovery, setDiscovery] = useState<DiscordBotDiscoveryResult | null>(null);
+  const [isAutoIdentifying, setIsAutoIdentifying] = useState(false);
+  const [autoIdentifyMessage, setAutoIdentifyMessage] = useState<string | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'ROLES' | 'SERVERS' | 'WEBHOOK' | 'FIRESTORE'>('ROLES');
   const [isSavingRoles, setIsSavingRoles] = useState(false);
@@ -55,14 +65,16 @@ export const SettingsOAuthView: React.FC = () => {
   useEffect(() => {
     const load = async () => {
       try {
-        const [authRes, rolesRes, fsRes] = await Promise.all([
+        const [authRes, rolesRes, fsRes, discRes] = await Promise.all([
           api.getOAuthUrl(),
           api.getRoleMappings(),
           api.getFirestoreStatus().catch(() => null),
+          api.discoverDiscordBot().catch(() => null),
         ]);
         setOauthInfo(authRes);
         setRoleMappings(rolesRes.mappings);
         if (fsRes) setFirestoreStatus(fsRes);
+        if (discRes) setDiscovery(discRes);
       } catch (err) {
         console.error('Failed to load settings data:', err);
       }
@@ -76,17 +88,48 @@ export const SettingsOAuthView: React.FC = () => {
     setTimeout(() => setCopiedKey(null), 2000);
   };
 
-  const handleRoleChange = (serverId: DiscordServerType, roleType: PawakoRoleType, value: string) => {
+  const handleRoleChange = (
+    serverId: DiscordServerType,
+    roleType: PawakoRoleType,
+    value: string,
+    roleName?: string
+  ) => {
     setRoleMappings(prev => {
       const idx = prev.findIndex(m => m.serverId === serverId && m.roleType === roleType);
       if (idx >= 0) {
         const updated = [...prev];
-        updated[idx] = { ...updated[idx], discordRoleId: value };
+        updated[idx] = {
+          ...updated[idx],
+          discordRoleId: value,
+          ...(roleName !== undefined ? { roleName } : {}),
+        };
         return updated;
       } else {
-        return [...prev, { serverId, roleType, discordRoleId: value }];
+        return [...prev, { serverId, roleType, discordRoleId: value, roleName }];
       }
     });
+  };
+
+  const handleAutoIdentifyRoles = async () => {
+    try {
+      setIsAutoIdentifying(true);
+      setSaveError(null);
+      setAutoIdentifyMessage(null);
+      const res = await api.autoConfigureDiscordBot({
+        overwriteExisting: false,
+        syncInvites: true,
+        syncMembers: false,
+      });
+      setDiscovery(res.discovery);
+      setRoleMappings(res.mappings);
+      setAutoIdentifyMessage(
+        `Auto-identification terminée : ${res.serversUpdated} serveur(s) relié(s), ${res.rolesMapped} rôle(s) identifié(s).`
+      );
+    } catch (err: any) {
+      setSaveError(err?.message || "Impossible d'auto-identifier les rôles via le bot Discord.");
+    } finally {
+      setIsAutoIdentifying(false);
+    }
   };
 
   const handleSaveRoleMappings = async () => {
@@ -231,15 +274,37 @@ export const SettingsOAuthView: React.FC = () => {
               <Settings className="w-4 h-4 text-violet-600 dark:text-violet-400" />
               Correspondance des Role ID Discord
             </h3>
-            <button
-              onClick={handleSaveRoleMappings}
-              disabled={isSavingRoles}
-              className="px-4 py-2 text-xs font-semibold text-white bg-violet-600 hover:bg-violet-500 rounded-lg transition-colors shadow-xs flex items-center gap-1.5 shrink-0 whitespace-nowrap disabled:opacity-50"
-            >
-              <Save className="w-3.5 h-3.5" />
-              <span>{isSavingRoles ? 'Enregistrement...' : 'Enregistrer'}</span>
-            </button>
+            <div className="flex items-center gap-2 flex-wrap">
+              <button
+                onClick={handleAutoIdentifyRoles}
+                disabled={isAutoIdentifying || !discovery?.ok}
+                className="px-3.5 py-2 text-xs font-semibold text-violet-700 dark:text-violet-300 bg-violet-50 dark:bg-violet-500/15 hover:bg-violet-100 dark:hover:bg-violet-500/25 border border-violet-200 dark:border-violet-500/30 rounded-lg transition-colors flex items-center gap-1.5 shrink-0 whitespace-nowrap disabled:opacity-50"
+              >
+                {isAutoIdentifying ? (
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <Wand2 className="w-3.5 h-3.5" />
+                )}
+                <span>{isAutoIdentifying ? 'Identification...' : 'Auto-identifier via le bot'}</span>
+              </button>
+
+              <button
+                onClick={handleSaveRoleMappings}
+                disabled={isSavingRoles}
+                className="px-4 py-2 text-xs font-semibold text-white bg-violet-600 hover:bg-violet-500 rounded-lg transition-colors shadow-xs flex items-center gap-1.5 shrink-0 whitespace-nowrap disabled:opacity-50"
+              >
+                <Save className="w-3.5 h-3.5" />
+                <span>{isSavingRoles ? 'Enregistrement...' : 'Enregistrer'}</span>
+              </button>
+            </div>
           </div>
+
+          {autoIdentifyMessage && (
+            <div className="p-3 bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-500/30 text-emerald-800 dark:text-emerald-300 rounded-lg flex items-center gap-2 font-medium">
+              <Check className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+              <span>{autoIdentifyMessage}</span>
+            </div>
+          )}
 
           {saveSuccess && (
             <div className="p-3 bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-500/30 text-emerald-800 dark:text-emerald-300 rounded-lg flex items-center gap-2 font-medium">
@@ -257,48 +322,88 @@ export const SettingsOAuthView: React.FC = () => {
 
           {/* Independent Configuration for the 4 Servers */}
           <div className="space-y-5">
-            {serverSections.map(sec => (
-              <div key={sec.id} className="p-4 border border-slate-200 dark:border-[#241a38] rounded-xl bg-slate-50/40 dark:bg-[#171026] space-y-3">
-                <div className="border-b border-slate-200 dark:border-[#241a38] pb-2">
-                  <h4 className="font-bold text-slate-900 dark:text-[#f4f1fa] text-xs">{sec.title}</h4>
-                </div>
+            {serverSections.map(sec => {
+              const matchedGuildId = discovery?.matchedServers?.[sec.id];
+              const matchedGuild = matchedGuildId
+                ? discovery?.guilds.find(g => g.id === matchedGuildId)
+                : undefined;
+              const availableRoles = (matchedGuild?.roles || []).filter(
+                r => !r.managed && r.name !== '@everyone'
+              );
 
-                <div className="space-y-2.5 pt-1">
-                  {sec.roles.map(roleType => {
-                    const currentMapping = roleMappings.find(
-                      m => m.serverId === sec.id && m.roleType === roleType
-                    );
-                    const currentId = currentMapping?.discordRoleId || '';
+              return (
+                <div
+                  key={sec.id}
+                  className="p-4 border border-slate-200 dark:border-[#241a38] rounded-xl bg-slate-50/40 dark:bg-[#171026] space-y-3"
+                >
+                  <div className="border-b border-slate-200 dark:border-[#241a38] pb-2 flex items-center justify-between gap-2 flex-wrap">
+                    <h4 className="font-bold text-slate-900 dark:text-[#f4f1fa] text-xs">{sec.title}</h4>
+                    {matchedGuild ? (
+                      <span className="text-[11px] font-medium text-emerald-700 dark:text-emerald-300">
+                        {matchedGuild.name} · {availableRoles.length} rôle(s) détecté(s)
+                      </span>
+                    ) : (
+                      <span className="text-[11px] text-slate-400 dark:text-[#7c7296]">
+                        Serveur non relié au bot
+                      </span>
+                    )}
+                  </div>
 
-                    return (
-                      <div
-                        key={roleType}
-                        className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-2.5 bg-white dark:bg-[#100b1a] border border-slate-200 dark:border-[#241a38] rounded-lg"
-                      >
-                        <div className="min-w-[200px]">
-                          <div className="font-bold text-slate-900 dark:text-[#f4f1fa] text-xs">
-                            {getPawakoRoleLabel(roleType)}
+                  <div className="space-y-2.5 pt-1">
+                    {sec.roles.map(roleType => {
+                      const currentMapping = roleMappings.find(
+                        m => m.serverId === sec.id && m.roleType === roleType
+                      );
+                      const currentId = currentMapping?.discordRoleId || '';
+
+                      return (
+                        <div
+                          key={roleType}
+                          className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-2.5 bg-white dark:bg-[#100b1a] border border-slate-200 dark:border-[#241a38] rounded-lg"
+                        >
+                          <div className="min-w-[200px]">
+                            <div className="font-bold text-slate-900 dark:text-[#f4f1fa] text-xs">
+                              {getPawakoRoleLabel(roleType)}
+                            </div>
+                            <div className="text-[10px] text-slate-400 dark:text-[#7c7296] font-mono">
+                              {roleType}
+                            </div>
                           </div>
-                          <div className="text-[10px] text-slate-400 dark:text-[#7c7296] font-mono">
-                            {roleType}
+
+                          <div className="flex-1 max-w-lg flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                            {availableRoles.length > 0 && (
+                              <select
+                                aria-label={`Choisir le rôle Discord pour ${roleType}`}
+                                value={availableRoles.some(r => r.id === currentId) ? currentId : ''}
+                                onChange={e => {
+                                  const picked = availableRoles.find(r => r.id === e.target.value);
+                                  handleRoleChange(sec.id, roleType, e.target.value, picked?.name);
+                                }}
+                                className="sm:w-52 text-xs p-2 border border-slate-200 dark:border-[#241a38] rounded bg-slate-50 dark:bg-[#08050f] text-slate-900 dark:text-[#f4f1fa] focus:outline-none focus:ring-1 focus:ring-violet-500"
+                              >
+                                <option value="">-- Rôle Discord --</option>
+                                {availableRoles.map(r => (
+                                  <option key={r.id} value={r.id}>
+                                    @{r.name}
+                                  </option>
+                                ))}
+                              </select>
+                            )}
+                            <input
+                              type="text"
+                              placeholder="Role ID Discord"
+                              value={currentId}
+                              onChange={e => handleRoleChange(sec.id, roleType, e.target.value)}
+                              className="flex-1 text-xs font-mono p-2 border border-slate-200 dark:border-[#241a38] rounded bg-slate-50 dark:bg-[#08050f] text-slate-900 dark:text-[#f4f1fa] focus:outline-none focus:ring-1 focus:ring-violet-500 placeholder:text-slate-400 dark:placeholder:text-[#7c7296]"
+                            />
                           </div>
                         </div>
-
-                        <div className="flex-1 max-w-md">
-                          <input
-                            type="text"
-                            placeholder="Role ID Discord"
-                            value={currentId}
-                            onChange={e => handleRoleChange(sec.id, roleType, e.target.value)}
-                            className="w-full text-xs font-mono p-2 border border-slate-200 dark:border-[#241a38] rounded bg-slate-50 dark:bg-[#08050f] text-slate-900 dark:text-[#f4f1fa] focus:outline-none focus:ring-1 focus:ring-violet-500 placeholder:text-slate-400 dark:placeholder:text-[#7c7296]"
-                          />
-                        </div>
-                      </div>
-                    );
-                  })}
+                      );
+                    })}
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
 
           <div className="pt-2 flex justify-end">
