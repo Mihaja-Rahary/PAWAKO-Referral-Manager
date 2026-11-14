@@ -8,7 +8,8 @@
 
 import { Hono } from 'hono';
 import { FirestoreRestClient, FirestoreRestError, diagnosePrivateKeyPem } from '../server/firestoreRest';
-import { FirestoreRepository } from '../server/firestoreRepository';
+import { FirestoreRepository, getEffectiveReferrerStatus } from '../server/firestoreRepository';
+import { DiscordBotConfig } from '../server/discordBot';
 import {
   AdminStatus,
   Candidate,
@@ -16,6 +17,7 @@ import {
   DiscordServerType,
   OperationalStatus,
   PawakoRoleType,
+  ReferrerStatus,
   User,
   UserRole,
   UserStatus,
@@ -38,6 +40,8 @@ export interface Env {
   DISCORD_CLIENT_ID?: string;
   DISCORD_CLIENT_SECRET?: string;
   DISCORD_REDIRECT_URI?: string;
+  DISCORD_BOT_TOKEN?: string;
+  DISCORD_RECRUITMENT_INVITE_CHANNEL_ID?: string;
   FRONTEND_URL?: string;
   INITIAL_ADMIN_DISCORD_ID?: string;
   JARVIS_WEBHOOK_SECRET?: string;
@@ -48,6 +52,23 @@ export interface Env {
   DISCORD_INSTAGRAM_PRODUCTION_GUILD_ID?: string;
   ENVIRONMENT?: string;
   NODE_ENV?: string;
+}
+
+function getDiscordBotConfig(env: Env): DiscordBotConfig {
+  return {
+    botToken: env.DISCORD_BOT_TOKEN?.trim(),
+    recruitmentGuildId: env.DISCORD_RECRUITMENT_GUILD_ID?.trim(),
+    inviteChannelId: env.DISCORD_RECRUITMENT_INVITE_CHANNEL_ID?.trim(),
+  };
+}
+
+function getEnvGuildIds(env: Env): Record<DiscordServerType, string> {
+  return {
+    RECRUTEMENT: (env.DISCORD_RECRUITMENT_GUILD_ID || '').trim(),
+    FORMATION: (env.DISCORD_FORMATION_GUILD_ID || '').trim(),
+    PRODUCTION_CHATTING: (env.DISCORD_CHATTING_PRODUCTION_GUILD_ID || '').trim(),
+    PRODUCTION_INSTAGRAM: (env.DISCORD_INSTAGRAM_PRODUCTION_GUILD_ID || '').trim(),
+  };
 }
 
 const app = new Hono<{ Bindings: Env }>();
@@ -310,8 +331,10 @@ export interface ParrainCandidateView {
   status: CandidateStatus;
   currentServer: DiscordServerType | 'AUCUN';
   arrivalDate: string;
-  refusalReason: string | null;
+  refusalReason: null;
   productionDate: string | null;
+  hasAnomaly: boolean;
+  anomalyReason: string | null;
   createdAt: string;
 }
 
@@ -328,8 +351,10 @@ export function toParrainCandidateView(c: Candidate): ParrainCandidateView {
     status: c.status,
     currentServer: c.currentServer,
     arrivalDate: c.arrivalDate,
-    refusalReason: c.adminStatus === 'REFUSE' ? (c.refusalReason || null) : null,
+    refusalReason: null, // Confidentialité stricte : les motifs de refus internes ne sont jamais exposés aux parrains
     productionDate: c.productionDate || null,
+    hasAnomaly: Boolean(c.hasAnomaly),
+    anomalyReason: c.hasAnomaly ? 'Vérification administrative en cours' : null,
     createdAt: c.createdAt,
   };
 }
@@ -405,6 +430,12 @@ app.get('/api/health', async c => {
         hasDiscordClientId: Boolean((c.env.DISCORD_CLIENT_ID || '').trim()),
         hasDiscordClientSecret: Boolean((c.env.DISCORD_CLIENT_SECRET || '').trim()),
         oauthRedirectUriValid,
+      },
+      discordBot: {
+        hasBotToken: Boolean((c.env.DISCORD_BOT_TOKEN || '').trim()),
+        hasRecruitmentGuildId: Boolean((c.env.DISCORD_RECRUITMENT_GUILD_ID || '').trim()),
+        hasRecruitmentInviteChannelId: Boolean((c.env.DISCORD_RECRUITMENT_INVITE_CHANNEL_ID || '').trim()),
+        hasJarvisWebhookSecret: Boolean((c.env.JARVIS_WEBHOOK_SECRET || '').trim()),
       },
       timestamp: new Date().toISOString(),
     },
@@ -749,6 +780,11 @@ const handleAuthCallback = async (c: any) => {
     };
 
     const configuredAdminId = c.env.INITIAL_ADMIN_DISCORD_ID?.trim() || '';
+    const avatarUrl = discordUser.avatar
+      ? `https://cdn.discordapp.com/avatars/${discordUser.id}/${discordUser.avatar}.png`
+      : null;
+
+    let user: User;
 
     // CONTRÔLE STRICT DES ACCÈS PAR PORTAIL
     if (portal === 'admin') {
@@ -766,7 +802,7 @@ const handleAuthCallback = async (c: any) => {
                 <div style="background: #0f172a; padding: 14px; border-radius: 8px; border: 1px solid #334155; margin: 16px 0; text-align: left; font-size: 12px; line-height: 1.6; color: #cbd5e1;">
                   <div>Compte Discord : <strong>${escapeHtml(discordUser.username)}</strong></div>
                   <div>Discord ID : <code style="color: #38bdf8;">${escapeHtml(discordUser.id)}</code></div>
-                  <div style="margin-top: 8px; color: #f87171;">Ce compte n est pas accrédité comme Administrateur ou Responsable.</div>
+                  <div style="margin-top: 8px; color: #f87171;">${escapeHtml(authCheck.reason || "Ce compte n est pas accrédité comme Administrateur ou Responsable.")}</div>
                 </div>
                 <button id="btn-back" style="background: #334155; color: #f8fafc; border: none; padding: 10px 20px; border-radius: 8px; cursor: pointer; font-size: 13px;">Retour à la page de connexion</button>
               </div>
@@ -775,7 +811,7 @@ const handleAuthCallback = async (c: any) => {
                 const loginUrl = ${JSON.stringify(portalLoginUrl)};
                 document.getElementById('btn-back').addEventListener('click', function() {
                   if (window.opener) {
-                    window.opener.postMessage({ type: 'OAUTH_AUTH_FAILED', error: 'Compte non accrédité Administrateur' }, targetOrigin);
+                    window.opener.postMessage({ type: 'OAUTH_AUTH_FAILED', error: ${JSON.stringify(authCheck.reason || 'Compte non accrédité Administrateur')} }, targetOrigin);
                     window.close();
                   } else {
                     window.location.href = loginUrl;
@@ -786,32 +822,57 @@ const handleAuthCallback = async (c: any) => {
           </html>
         `, 403);
       }
+
+      processingStage = 'FIRESTORE_USER_UPSERT';
+      user = await repo.upsertUser(
+        {
+          id: discordUser.id,
+          username: discordUser.username,
+          displayName: discordUser.global_name || discordUser.username,
+          avatar: avatarUrl,
+        },
+        configuredAdminId
+      );
     } else {
-      // Espace Parrain
-      processingStage = 'FIRESTORE_PARRAIN_ACCESS_CHECK';
-      const authCheck = await repo.canAccessParrain(discordUser.id);
-      if (!authCheck.authorized) {
+      // Espace Parrain : inscription ouverte, idempotente, atomique, avec véritable invitation Discord
+      // tout en bloquant strictement les profils suspendus ou archivés.
+      processingStage = 'FIRESTORE_PARRAIN_REGISTER_OR_LOGIN';
+      const parrainAuth = await repo.authenticateOrRegisterParrain({
+        discordUser: {
+          id: discordUser.id,
+          username: discordUser.username,
+          displayName: discordUser.global_name || discordUser.username,
+          avatar: avatarUrl,
+        },
+        discordBotConfig: getDiscordBotConfig(c.env),
+      });
+
+      if (!parrainAuth.authorized || !parrainAuth.user) {
+        const denyReason =
+          parrainAuth.reason || "L accès à votre espace parrain est actuellement restreint par la Direction.";
         return c.html(`
           <!DOCTYPE html>
           <html>
-            <head><title>Accès Refusé — Espace Parrain PAWAKO</title></head>
+            <head><title>Accès Restreint — Espace Parrain PAWAKO</title></head>
             <body style="font-family: system-ui, sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; background: #f8fafc;">
               <div style="background: white; padding: 36px; border-radius: 16px; border: 1px solid #e2e8f0; text-align: center; max-width: 460px; box-shadow: 0 10px 15px -3px rgba(0,0,0,0.1);">
                 <div style="width: 52px; height: 52px; background: #fef2f2; color: #dc2626; border-radius: 12px; display: flex; align-items: center; justify-content: center; margin: 0 auto 16px auto; font-size: 24px; font-weight: bold;">✕</div>
-                <h3 style="color: #0f172a; margin: 0 0 8px 0; font-size: 20px;">Compte Parrain Non Enregistré</h3>
+                <h3 style="color: #0f172a; margin: 0 0 8px 0; font-size: 20px;">Accès Parrain Refusé</h3>
                 <div style="background: #f8fafc; padding: 14px; border-radius: 8px; border: 1px solid #e2e8f0; margin: 16px 0; text-align: left; font-size: 12px; line-height: 1.6; color: #334155;">
                   <div>Compte Discord : <strong>${escapeHtml(discordUser.username)}</strong></div>
                   <div>Discord ID : <code style="color: #0284c7;">${escapeHtml(discordUser.id)}</code></div>
-                  <div style="margin-top: 8px; color: #dc2626;">Ce compte n est pas enregistré comme Parrain autorisé PAWAKO.</div>
+                  <div style="margin-top: 8px; color: #dc2626;">${escapeHtml(denyReason)}</div>
                 </div>
                 <button id="btn-back" style="background: #0f172a; color: white; border: none; padding: 10px 20px; border-radius: 8px; cursor: pointer; font-size: 13px;">Retour à la page de connexion</button>
               </div>
               <script>
                 const targetOrigin = ${JSON.stringify(targetOrigin)};
                 const loginUrl = ${JSON.stringify(portalLoginUrl)};
+                const errMsg = ${JSON.stringify(denyReason)};
+                const errCode = ${JSON.stringify(parrainAuth.errorCode || 'PARRAIN_ACCESS_DENIED')};
                 document.getElementById('btn-back').addEventListener('click', function() {
                   if (window.opener) {
-                    window.opener.postMessage({ type: 'OAUTH_AUTH_FAILED', error: 'Compte non enregistré comme Parrain' }, targetOrigin);
+                    window.opener.postMessage({ type: 'OAUTH_AUTH_FAILED', code: errCode, error: errMsg }, targetOrigin);
                     window.close();
                   } else {
                     window.location.href = loginUrl;
@@ -822,23 +883,9 @@ const handleAuthCallback = async (c: any) => {
           </html>
         `, 403);
       }
+
+      user = parrainAuth.user;
     }
-
-    // Utilisateur validé : persistance dans Firestore
-    const avatarUrl = discordUser.avatar
-      ? `https://cdn.discordapp.com/avatars/${discordUser.id}/${discordUser.avatar}.png`
-      : null;
-
-    processingStage = 'FIRESTORE_USER_UPSERT';
-    const user = await repo.upsertUser(
-      {
-        id: discordUser.id,
-        username: discordUser.username,
-        displayName: discordUser.global_name || discordUser.username,
-        avatar: avatarUrl,
-      },
-      configuredAdminId
-    );
 
     processingStage = 'SESSION_SIGNING';
     // Génération du jeton de session cryptographique (exige SESSION_SECRET validé)
@@ -1009,10 +1056,25 @@ app.get('/api/auth/me', async c => {
     });
   }
 
+  if (user.role === 'PARRAIN' && (!referrer || getEffectiveReferrerStatus(referrer) !== 'ACTIVE')) {
+    return c.json({
+      authenticated: false,
+      user: null,
+      referrer: null,
+      isOAuthConfigured,
+      isBotConfigured,
+      hasAnyUsers: true,
+      isInitialAdminClaimed: isClaimed,
+    });
+  }
+
+  const safeReferrer =
+    referrer && user.role === 'PARRAIN' ? { ...referrer, notes: undefined } : referrer || null;
+
   return c.json({
     authenticated: true,
     user,
-    referrer: referrer || null,
+    referrer: safeReferrer,
     isOAuthConfigured,
     isBotConfigured,
     hasAnyUsers: true,
@@ -1112,14 +1174,44 @@ app.get('/api/parrain/dashboard', async c => {
 
   try {
     const dashboard = await repo.getParrainDashboard(user.id);
-    // Filtrage strict par liste blanche des candidats retournés dans le dashboard parrain
+    // Retrait des notes internes admin de la fiche parrain pour le portail parrain
+    const safeReferrer = { ...dashboard.referrer, notes: undefined };
     const safeCandidates = (dashboard.candidates || []).map(toParrainCandidateView);
     return c.json({
       ...dashboard,
+      referrer: safeReferrer,
       candidates: safeCandidates,
     });
   } catch (err: any) {
-    return c.json({ error: err.message }, 404);
+    return c.json({ error: err.message }, err?.status === 403 ? 403 : 404);
+  }
+});
+
+app.post('/api/parrain/invite/ensure', async c => {
+  const repo = getRepository(c.env);
+  const user = await getAuthenticatedUser(c, repo);
+
+  if (!user) {
+    return c.json({ error: 'Session non authentifiée. Veuillez vous connecter.' }, 401);
+  }
+
+  if (user.role !== 'PARRAIN' && user.role !== 'ADMINISTRATEUR') {
+    return c.json({ error: 'Accès réservé exclusivement aux Parrains autorisés.' }, 403);
+  }
+
+  try {
+    const result = await repo.ensureParrainInvite(user.id, getDiscordBotConfig(c.env));
+    if (!result) {
+      return c.json({ error: 'Profil parrain introuvable.' }, 404);
+    }
+    return c.json({
+      success: result.ok,
+      referrer: { ...result.referrer, notes: undefined },
+      errorCode: result.errorCode || null,
+      errorMessage: result.errorMessage || null,
+    });
+  } catch (err: any) {
+    return c.json({ error: err.message || 'Impossible de générer ou vérifier le lien Discord.' }, 403);
   }
 });
 
@@ -1140,13 +1232,24 @@ app.get('/api/candidates', async c => {
   }
 
   const isParrainOnly = user.role === 'PARRAIN';
+  if (isParrainOnly) {
+    const myRef = await repo.getReferrerByDiscordUserId(user.id);
+    if (!myRef || getEffectiveReferrerStatus(myRef) !== 'ACTIVE') {
+      return c.json({ error: 'Votre profil parrain est inactif, suspendu ou archivé.' }, 403);
+    }
+  }
 
   const search = c.req.query('search');
   const vaType = c.req.query('vaType') as VAType | 'ALL' | undefined;
   const adminStatus = c.req.query('adminStatus') as AdminStatus | 'ALL' | undefined;
   const operationalStatus = c.req.query('operationalStatus') as OperationalStatus | 'ALL' | undefined;
+  const status = c.req.query('status') as CandidateStatus | 'ALL' | undefined;
+  const attributionStatus = c.req.query('attributionStatus');
+  const referrerId = isParrainOnly ? undefined : c.req.query('referrerId');
   const server = c.req.query('server');
-  const hasAnomaly = c.req.query('hasAnomaly') ? c.req.query('hasAnomaly') === 'true' : undefined;
+  const hasAnomalyParam = c.req.query('hasAnomaly');
+  const hasAnomaly =
+    hasAnomalyParam === 'true' ? true : hasAnomalyParam === 'false' ? false : undefined;
   const page = parseInt(c.req.query('page') || '1', 10);
   const limit = parseInt(c.req.query('limit') || '50', 10);
 
@@ -1155,6 +1258,9 @@ app.get('/api/candidates', async c => {
     vaType,
     adminStatus,
     operationalStatus,
+    status,
+    attributionStatus,
+    referrerId,
     server,
     hasAnomaly,
     referrerDiscordUserId: isParrainOnly ? user.id : undefined,
@@ -1162,11 +1268,13 @@ app.get('/api/candidates', async c => {
     limit,
   });
 
-  // Pour les parrains, construction obligatoire par liste blanche des seuls champs autorisés
   if (isParrainOnly) {
     return c.json({
       candidates: result.candidates.map(toParrainCandidateView),
       total: result.total,
+      page: result.page,
+      totalPages: result.totalPages,
+      pageSize: result.pageSize,
     });
   }
 
@@ -1186,39 +1294,61 @@ app.get('/api/candidates/:id', async c => {
   }
 
   const candidate = await repo.getCandidateById(c.req.param('id'));
-
   if (!candidate) {
     return c.json({ error: 'Candidat introuvable' }, 404);
   }
 
-  // Règle d'isolation : un parrain ne peut consulter que ses propres filleuls
-  if (user.role === 'PARRAIN' && candidate.referrerDiscordUserId !== user.id) {
-    return c.json({ error: 'Accès refusé. Ce candidat n est pas l un de vos filleuls.' }, 403);
+  if (user.role === 'PARRAIN') {
+    const myRef = await repo.getReferrerByDiscordUserId(user.id);
+    if (!myRef || getEffectiveReferrerStatus(myRef) !== 'ACTIVE') {
+      return c.json({ error: 'Profil parrain suspendu ou archivé.' }, 403);
+    }
+    const isOwnedByParrain =
+      candidate.referrerDiscordUserId === user.id || candidate.referrerId === myRef.id;
+    if (!isOwnedByParrain) {
+      return c.json({ error: 'Accès refusé. Ce candidat n est pas l un de vos filleuls.' }, 403);
+    }
   }
 
-  const history = await repo.getStatusHistoryForCandidate(candidate.id);
+  const [statusHistory, attributionHistory] = await Promise.all([
+    repo.getStatusHistoryForCandidate(candidate.id),
+    user.role === 'PARRAIN' ? Promise.resolve([]) : repo.getReferralAttributionsHistory(candidate.id),
+  ]);
 
-  // Pour les parrains, filtrage strict par liste blanche (exclusion totale des notes et métadonnées internes)
   if (user.role === 'PARRAIN') {
-    const sanitizedHistory = history
-      .filter(h => !h.isConfidential)
+    const sanitizedHistory = statusHistory
+      .filter(h => !h.isConfidential && h.toAdminStatus !== 'REFUSE' && h.toStatus !== 'REFUSE')
       .map(h => ({
         id: h.id,
+        candidateId: h.candidateId,
+        fromStatus: h.fromStatus,
         toStatus: h.toStatus,
         toAdminStatus: h.toAdminStatus,
         toOperationalStatus: h.toOperationalStatus,
+        fromServer: h.fromServer,
         toServer: h.toServer,
+        authorUserId: 'SYSTEM',
+        authorName: 'Système PAWAKO',
+        authorSource: h.authorSource,
+        reason: h.authorSource === 'DISCORD_SYNC' || h.authorSource === 'JARVIS_GATEWAY' ? h.reason : null,
+        isConfidential: false,
         timestamp: h.timestamp,
-        reason: h.reason,
       }));
 
     return c.json({
       candidate: toParrainCandidateView(candidate),
+      statusHistory: sanitizedHistory,
+      attributionHistory: [],
       history: sanitizedHistory,
     });
   }
 
-  return c.json({ candidate, history });
+  return c.json({
+    candidate,
+    statusHistory,
+    attributionHistory,
+    history: statusHistory,
+  });
 });
 
 app.post('/api/candidates', async c => {
@@ -1266,17 +1396,30 @@ app.patch('/api/candidates/:id/status', async c => {
   }
 
   const body = await c.req.json();
-  const { newAdminStatus, newOperationalStatus, notes, refusalReason, isConfidential } = body;
+  const { newAdminStatus, newOperationalStatus, newStatus, notes, refusalReason, isConfidential } = body;
 
-  if (!notes || typeof notes !== 'string' || notes.trim().length === 0) {
-    return c.json({ error: 'Un motif d audit tracé (notes) est strictement obligatoire.' }, 400);
+  if (!newAdminStatus && !newOperationalStatus && !newStatus) {
+    return c.json(
+      { error: 'Un nouveau statut (newStatus, newAdminStatus ou newOperationalStatus) est requis.' },
+      400
+    );
+  }
+
+  const effectiveNotes =
+    (typeof notes === 'string' && notes.trim()) ||
+    (typeof refusalReason === 'string' && refusalReason.trim()) ||
+    '';
+
+  if (!effectiveNotes) {
+    return c.json({ error: 'Un motif d audit tracé (notes ou motif de refus) est strictement obligatoire.' }, 400);
   }
 
   try {
     const updated = await repo.updateCandidateStatus(c.req.param('id'), {
       newAdminStatus,
       newOperationalStatus,
-      notes,
+      newStatus,
+      notes: effectiveNotes,
       refusalReason,
       isConfidential: Boolean(isConfidential),
       actorUserId: user.id,
@@ -1284,6 +1427,48 @@ app.patch('/api/candidates/:id/status', async c => {
       actorSource: user.role === 'ADMINISTRATEUR' ? 'MANUAL_ADMIN' : 'MANUAL_RESPONSABLE',
     });
 
+    if (!updated) {
+      return c.json({ error: 'Candidat introuvable' }, 404);
+    }
+
+    return c.json({ success: true, candidate: updated });
+  } catch (err: any) {
+    return c.json({ error: err.message }, 400);
+  }
+});
+
+app.patch('/api/candidates/:id/va-type', async c => {
+  const repo = getRepository(c.env);
+  const user = await getAuthenticatedUser(c, repo);
+
+  if (!user) {
+    return c.json({ error: 'Session non authentifiée. Veuillez vous connecter.' }, 401);
+  }
+
+  if (user.role !== 'ADMINISTRATEUR' && user.role !== 'RESPONSABLE') {
+    return c.json({ error: 'Accès réservé exclusivement à la Direction et aux Responsables.' }, 403);
+  }
+
+  const body = await c.req.json();
+  const { newVaType, reason } = body;
+
+  if (newVaType !== 'CHATTEUR' && newVaType !== 'INSTAGRAM') {
+    return c.json({ error: 'Activité invalide (CHATTEUR ou INSTAGRAM attendu).' }, 400);
+  }
+  if (!reason || typeof reason !== 'string' || !reason.trim()) {
+    return c.json({ error: 'Un motif explicite est obligatoire pour modifier l activité.' }, 400);
+  }
+
+  try {
+    const updated = await repo.updateCandidateVAType(c.req.param('id'), {
+      newVaType,
+      reason: reason.trim(),
+      actorUserId: user.id,
+      actorName: user.displayName,
+    });
+    if (!updated) {
+      return c.json({ error: 'Candidat introuvable' }, 404);
+    }
     return c.json({ success: true, candidate: updated });
   } catch (err: any) {
     return c.json({ error: err.message }, 400);
@@ -1302,11 +1487,22 @@ app.post('/api/candidates/:id/clear-anomaly', async c => {
     return c.json({ error: 'Accès réservé à la Direction et aux Responsables.' }, 403);
   }
 
-  const updated = await repo.clearCandidateAnomaly(c.req.param('id'), user.id, user.displayName);
+  const body = await c.req.json().catch(() => ({}));
+  const resolutionNotes = typeof body?.resolutionNotes === 'string' ? body.resolutionNotes.trim() : '';
+
+  const updated = await repo.clearCandidateAnomaly(
+    c.req.param('id'),
+    user.id,
+    user.displayName,
+    resolutionNotes
+  );
+  if (!updated) {
+    return c.json({ error: 'Candidat introuvable' }, 404);
+  }
   return c.json({ success: true, candidate: updated });
 });
 
-app.post('/api/candidates/:id/reassign', async c => {
+const handleReassignReferrer = async (c: any) => {
   const repo = getRepository(c.env);
   const user = await getAuthenticatedUser(c, repo);
 
@@ -1321,22 +1517,31 @@ app.post('/api/candidates/:id/reassign', async c => {
   const body = await c.req.json();
   const { newReferrerId, reason } = body;
 
-  if (!newReferrerId || !reason) {
+  if (!newReferrerId || !reason || !String(reason).trim()) {
     return c.json({ error: 'newReferrerId et reason obligatoires' }, 400);
   }
 
-  const updated = await repo.reassignReferrer(c.req.param('id'), {
-    newReferrerId,
-    reason,
-    actorUserId: user.id,
-    actorName: user.displayName,
-  });
+  try {
+    const updated = await repo.reassignReferrer(c.req.param('id'), {
+      newReferrerId,
+      reason: String(reason).trim(),
+      actorUserId: user.id,
+      actorName: user.displayName,
+    });
+    if (!updated) {
+      return c.json({ error: 'Candidat introuvable' }, 404);
+    }
+    return c.json({ success: true, candidate: updated });
+  } catch (err: any) {
+    return c.json({ error: err.message }, 400);
+  }
+};
 
-  return c.json({ success: true, candidate: updated });
-});
+app.patch('/api/candidates/:id/referrer', handleReassignReferrer);
+app.post('/api/candidates/:id/reassign', handleReassignReferrer);
 
 // -----------------------------------------------------------------------------
-// 8. GESTION DES PARRAINS
+// 8. GESTION COMPLÈTE DES PARRAINS
 // -----------------------------------------------------------------------------
 
 app.get('/api/referrers', async c => {
@@ -1351,14 +1556,41 @@ app.get('/api/referrers', async c => {
     return c.json({ error: 'Rôle utilisateur non autorisé.' }, 403);
   }
 
-  // Isolation stricte : un parrain ne peut voir que sa propre fiche de parrainage
   if (user.role === 'PARRAIN') {
     const myReferrer = await repo.getReferrerByDiscordUserId(user.id);
-    return c.json({ referrers: myReferrer ? [myReferrer] : [] });
+    if (!myReferrer || getEffectiveReferrerStatus(myReferrer) !== 'ACTIVE') {
+      return c.json({ error: 'Votre profil parrain est suspendu ou archivé.' }, 403);
+    }
+    return c.json({ referrers: [{ ...myReferrer, notes: undefined }] });
   }
 
-  const referrers = await repo.getReferrers();
+  const statusParam = c.req.query('status') as ReferrerStatus | 'ALL' | undefined;
+  const search = c.req.query('search');
+  const referrers = await repo.getReferrersWithStats({
+    status: statusParam || 'ALL',
+    search,
+  });
   return c.json({ referrers });
+});
+
+app.get('/api/referrers/:id', async c => {
+  const repo = getRepository(c.env);
+  const user = await getAuthenticatedUser(c, repo);
+
+  if (!user) {
+    return c.json({ error: 'Session non authentifiée.' }, 401);
+  }
+
+  if (user.role !== 'ADMINISTRATEUR' && user.role !== 'RESPONSABLE') {
+    return c.json({ error: 'Accès réservé exclusivement à la Direction et aux Responsables.' }, 403);
+  }
+
+  const details = await repo.getReferrerDetails(c.req.param('id'));
+  if (!details) {
+    return c.json({ error: 'Profil parrain introuvable.' }, 404);
+  }
+
+  return c.json(details);
 });
 
 app.post('/api/referrers', async c => {
@@ -1380,15 +1612,51 @@ app.post('/api/referrers', async c => {
     return c.json({ error: 'discordUserId requis' }, 400);
   }
 
-  const referrer = await repo.createReferrer({
-    discordUserId,
-    inviteCode,
-    notes,
-    actorUserId: user.id,
-    actorName: user.displayName,
-  });
+  try {
+    const referrer = await repo.createReferrer({
+      discordUserId,
+      inviteCode,
+      notes,
+      actorUserId: user.id,
+      actorName: user.displayName,
+      discordBotConfig: getDiscordBotConfig(c.env),
+    });
 
-  return c.json({ success: true, referrer }, 201);
+    return c.json({ success: true, referrer }, 201);
+  } catch (err: any) {
+    return c.json({ error: err.message || 'Impossible de créer le parrain.' }, 400);
+  }
+});
+
+app.patch('/api/referrers/:id', async c => {
+  const repo = getRepository(c.env);
+  const user = await getAuthenticatedUser(c, repo);
+
+  if (!user) {
+    return c.json({ error: 'Session non authentifiée.' }, 401);
+  }
+
+  if (user.role !== 'ADMINISTRATEUR') {
+    return c.json({ error: 'Seuls les Administrateurs peuvent modifier un profil parrain.' }, 403);
+  }
+
+  const body = await c.req.json().catch(() => ({}));
+  const updated = await repo.updateReferrer(
+    c.req.param('id'),
+    {
+      notes: typeof body.notes === 'string' ? body.notes : undefined,
+      discordDisplayName:
+        typeof body.discordDisplayName === 'string' ? body.discordDisplayName : undefined,
+      discordUsername: typeof body.discordUsername === 'string' ? body.discordUsername : undefined,
+    },
+    { id: user.id, displayName: user.displayName }
+  );
+
+  if (!updated) {
+    return c.json({ error: 'Profil parrain introuvable.' }, 404);
+  }
+
+  return c.json({ success: true, referrer: updated });
 });
 
 app.patch('/api/referrers/:id/toggle', async c => {
@@ -1403,8 +1671,120 @@ app.patch('/api/referrers/:id/toggle', async c => {
     return c.json({ error: 'Accès réservé aux Administrateurs' }, 403);
   }
 
-  const referrer = await repo.toggleReferrer(c.req.param('id'), user.id, user.displayName);
-  return c.json({ success: true, referrer });
+  try {
+    const referrer = await repo.toggleReferrer(c.req.param('id'), user.id, user.displayName);
+    if (!referrer) {
+      return c.json({ error: 'Profil parrain introuvable.' }, 404);
+    }
+    return c.json({ success: true, referrer });
+  } catch (err: any) {
+    return c.json({ error: err.message }, 400);
+  }
+});
+
+const handleReferrerStatusRoute = (targetStatus: ReferrerStatus) => async (c: any) => {
+  const repo = getRepository(c.env);
+  const user = await getAuthenticatedUser(c, repo);
+
+  if (!user) {
+    return c.json({ error: 'Session non authentifiée.' }, 401);
+  }
+
+  if (user.role !== 'ADMINISTRATEUR') {
+    return c.json({ error: 'Seuls les Administrateurs peuvent gérer le cycle de vie d un parrain.' }, 403);
+  }
+
+  const body = await c.req.json().catch(() => ({}));
+  const reason = typeof body?.reason === 'string' ? body.reason : undefined;
+
+  const updated = await repo.setReferrerStatus(c.req.param('id'), targetStatus, reason, {
+    id: user.id,
+    displayName: user.displayName,
+  });
+
+  if (!updated) {
+    return c.json({ error: 'Profil parrain introuvable.' }, 404);
+  }
+
+  return c.json({ success: true, referrer: updated });
+};
+
+app.post('/api/referrers/:id/activate', handleReferrerStatusRoute('ACTIVE'));
+app.post('/api/referrers/:id/suspend', handleReferrerStatusRoute('SUSPENDED'));
+app.post('/api/referrers/:id/reactivate', handleReferrerStatusRoute('ACTIVE'));
+app.post('/api/referrers/:id/archive', handleReferrerStatusRoute('ARCHIVED'));
+app.post('/api/referrers/:id/restore', handleReferrerStatusRoute('ACTIVE'));
+
+app.post('/api/referrers/:id/invite/regenerate', async c => {
+  const repo = getRepository(c.env);
+  const user = await getAuthenticatedUser(c, repo);
+
+  if (!user) {
+    return c.json({ error: 'Session non authentifiée.' }, 401);
+  }
+
+  if (user.role !== 'ADMINISTRATEUR') {
+    return c.json({ error: 'Seuls les Administrateurs peuvent régénérer un lien Discord.' }, 403);
+  }
+
+  const body = await c.req.json().catch(() => ({}));
+  const manualInviteCode =
+    typeof body?.manualInviteCode === 'string' ? body.manualInviteCode.trim() : undefined;
+
+  try {
+    const result = await repo.regenerateReferrerInvite(c.req.param('id'), {
+      discordBotConfig: getDiscordBotConfig(c.env),
+      manualInviteCode,
+      actorUserId: user.id,
+      actorName: user.displayName,
+    });
+
+    if (!result) {
+      return c.json({ error: 'Profil parrain introuvable.' }, 404);
+    }
+
+    return c.json({
+      success: result.ok,
+      referrer: result.referrer,
+      errorCode: result.errorCode || null,
+      errorMessage: result.errorMessage || null,
+    });
+  } catch (err: any) {
+    return c.json({ error: err.message }, 400);
+  }
+});
+
+app.delete('/api/referrers/:id', async c => {
+  const repo = getRepository(c.env);
+  const user = await getAuthenticatedUser(c, repo);
+
+  if (!user) {
+    return c.json({ error: 'Session non authentifiée.' }, 401);
+  }
+
+  if (user.role !== 'ADMINISTRATEUR') {
+    return c.json({ error: 'Seuls les Administrateurs peuvent supprimer un profil parrain.' }, 403);
+  }
+
+  const body = await c.req.json().catch(() => ({}));
+  const confirm = c.req.query('confirm') === 'true' || body?.confirm === true;
+
+  try {
+    const result = await repo.deleteReferrerPhysically(c.req.param('id'), confirm, {
+      id: user.id,
+      displayName: user.displayName,
+    });
+    return c.json({ success: result.deleted, summary: result.summary });
+  } catch (err: any) {
+    const status = err?.status === 409 ? 409 : 400;
+    return c.json(
+      {
+        error: err.message,
+        dependencies: err?.dependencies || null,
+      },
+      status
+    );
+  }
 });
 
 // -----------------------------------------------------------------------------
@@ -1423,13 +1803,7 @@ app.get('/api/discord/servers', async c => {
     return c.json({ error: 'Accès réservé à la Direction et aux Responsables.' }, 403);
   }
 
-  const guildIds = {
-    RECRUTEMENT: c.env.DISCORD_RECRUITMENT_GUILD_ID || '',
-    FORMATION: c.env.DISCORD_FORMATION_GUILD_ID || '',
-    PRODUCTION_CHATTING: c.env.DISCORD_CHATTING_PRODUCTION_GUILD_ID || '',
-    PRODUCTION_INSTAGRAM: c.env.DISCORD_INSTAGRAM_PRODUCTION_GUILD_ID || '',
-  };
-  const servers = await repo.getDiscordServers(guildIds);
+  const servers = await repo.getDiscordServers(getEnvGuildIds(c.env));
   return c.json({ servers });
 });
 
@@ -1472,6 +1846,40 @@ app.put('/api/discord/role-mappings', async c => {
   return c.json({ success: true, mappings: updated });
 });
 
+app.post('/api/discord/sync-members', async c => {
+  const repo = getRepository(c.env);
+  const user = await getAuthenticatedUser(c, repo);
+
+  if (!user) {
+    return c.json({ error: 'Session non authentifiée.' }, 401);
+  }
+
+  if (user.role !== 'ADMINISTRATEUR' && user.role !== 'RESPONSABLE') {
+    return c.json({ error: 'Accès réservé à la Direction et aux Responsables.' }, 403);
+  }
+
+  const body = await c.req.json().catch(() => null);
+  const serverId = body?.serverId as DiscordServerType | undefined;
+  const members = body?.members;
+
+  if (!serverId || !['RECRUTEMENT', 'FORMATION', 'PRODUCTION_CHATTING', 'PRODUCTION_INSTAGRAM'].includes(serverId)) {
+    return c.json({ error: 'serverId Discord PAWAKO valide requis.' }, 400);
+  }
+  if (!Array.isArray(members)) {
+    return c.json({ error: 'Tableau members requis.' }, 400);
+  }
+
+  const result = await repo.syncServerMembers({
+    serverId,
+    members,
+    actorUserId: user.id,
+    actorName: user.displayName,
+    envGuildIds: getEnvGuildIds(c.env),
+  });
+
+  return c.json({ success: true, ...result });
+});
+
 app.post('/api/discord/webhook', async c => {
   // 1. Authentification sécurisée du Bot JARVIS via secret partagé (temps constant)
   const expectedSecret = (c.env.JARVIS_WEBHOOK_SECRET || '').trim();
@@ -1486,11 +1894,11 @@ app.post('/api/discord/webhook', async c => {
     return c.json({ error: 'Corps de requête JSON manquant ou invalide.' }, 400);
   }
 
-  const { eventType, guildId, user } = payload;
+  const { eventType, guildId, user, roles, inviteCode, channelId, inviterId, vaType, timestamp } = payload;
 
   // 2. Protection contre les attaques par rejeu : exige systématiquement timestamp et eventId
   const timestampHeader =
-    c.req.header('X-JARVIS-Timestamp') || (payload.timestamp ? String(payload.timestamp) : null);
+    c.req.header('X-JARVIS-Timestamp') || (timestamp ? String(timestamp) : null);
   const nonceHeader =
     c.req.header('X-JARVIS-Nonce') || (payload.eventId ? String(payload.eventId) : null);
 
@@ -1502,13 +1910,32 @@ app.post('/api/discord/webhook', async c => {
   const eventId = replayValidation.eventId;
 
   // 3. Validation stricte du schéma métier
-  if (!eventType || typeof eventType !== 'string' || !guildId || !user?.id) {
-    return c.json({ error: 'Payload d événement Discord incomplet (eventType, guildId, user.id requis).' }, 400);
+  const supportedEvents = [
+    'GUILD_MEMBER_ADD',
+    'GUILD_MEMBER_REMOVE',
+    'GUILD_MEMBER_UPDATE',
+    'INVITE_CREATE',
+    'INVITE_DELETE',
+    'MEMBER_SYNC',
+  ];
+
+  if (!eventType || typeof eventType !== 'string' || !supportedEvents.includes(eventType)) {
+    return c.json({ error: 'eventType Discord non supporté ou manquant.' }, 400);
   }
 
-  // Validation du format des identifiants Discord (snowflake numérique 17-20 chiffres)
-  if (!/^\d{17,20}$/.test(String(guildId)) || !/^\d{17,20}$/.test(String(user.id))) {
-    return c.json({ error: 'Identifiant Discord (guildId ou user.id) invalide.' }, 400);
+  if (!guildId || !/^\d{17,20}$/.test(String(guildId))) {
+    return c.json({ error: 'Identifiant Discord (guildId) invalide ou manquant.' }, 400);
+  }
+
+  const isInviteEvent = eventType === 'INVITE_CREATE' || eventType === 'INVITE_DELETE';
+  if (isInviteEvent) {
+    if (!inviteCode || typeof inviteCode !== 'string' || inviteCode.trim().length < 2) {
+      return c.json({ error: 'inviteCode requis pour les événements INVITE_CREATE / INVITE_DELETE.' }, 400);
+    }
+  } else {
+    if (!user?.id || !/^\d{17,20}$/.test(String(user.id))) {
+      return c.json({ error: 'Payload d événement Discord incomplet : user.id Snowflake valide requis.' }, 400);
+    }
   }
 
   const repo = getRepository(c.env);
@@ -1521,44 +1948,69 @@ app.post('/api/discord/webhook', async c => {
   }
 
   try {
-    // Journalisation de l'événement dans Firestore
-    await repo.logAudit({
-      action: `DISCORD_EVENT_${eventType}`,
-      actorUserId: 'BOT_JARVIS',
-      actorName: 'Passerelle Bot JARVIS',
-      targetType: 'DISCORD',
-      targetId: user.id,
-      details: { eventType, guildId, username: user.username },
+    const result = await repo.processDiscordGatewayEvent({
+      eventId,
+      eventType: eventType as any,
+      guildId: String(guildId),
+      user,
+      roles: Array.isArray(roles) ? roles : undefined,
+      inviteCode: typeof inviteCode === 'string' ? inviteCode : null,
+      channelId: typeof channelId === 'string' ? channelId : null,
+      inviterId: typeof inviterId === 'string' ? inviterId : null,
+      vaType,
+      timestamp: timestamp ? String(timestamp) : undefined,
+      envGuildIds: getEnvGuildIds(c.env),
     });
 
-    // Finalisation atomique sécurisée par ownerId et updateTime
     const finalized = await repo.completeWebhookEvent(eventId, ownerId, {
       eventType,
       guildId,
-      userId: user.id,
-      username: user.username,
+      userId: user?.id || null,
+      inviteCode: inviteCode || null,
     });
 
     if (!finalized) {
-      // Le verrou n'a pas pu être confirmé (ex: expiré et repris ou conflit concurrent)
-      // Ne jamais retourner success: true si la finalisation du verrou n'a pas été confirmée
       await repo.releaseWebhookEvent(eventId, ownerId);
       return c.json({ error: 'Échec de la confirmation de finalisation du verrou webhook.' }, 500);
     }
 
-    return c.json({ success: true, message: `Événement ${eventType} traité pour ${user.username} (${user.id})` });
+    return c.json(result);
   } catch (err: any) {
-    // En cas d'échec métier ou exception, libérer le verrou uniquement avec l'ownerId correspondant
     try {
       await repo.releaseWebhookEvent(eventId, ownerId);
     } catch {}
-    return c.json({ error: 'Erreur lors du traitement interne de l événement.' }, 500);
+    return c.json({ error: err?.message || 'Erreur lors du traitement interne de l événement.' }, 500);
   }
 });
 
 // -----------------------------------------------------------------------------
-// 10. UTILISATEURS & AUDIT LOGS
+// 10. UTILISATEURS, DIAGNOSTIC FIRESTORE ADMIN & AUDIT LOGS
 // -----------------------------------------------------------------------------
+
+app.get('/api/admin/firestore/status', async c => {
+  const repo = getRepository(c.env);
+  const user = await getAuthenticatedUser(c, repo);
+
+  if (!user) {
+    return c.json({ error: 'Session non authentifiée.' }, 401);
+  }
+
+  if (user.role !== 'ADMINISTRATEUR') {
+    return c.json({ error: 'Accès réservé exclusivement aux Administrateurs' }, 403);
+  }
+
+  const diag = await runFirestoreRootCollectionDiagnostic(c.env);
+  return c.json({
+    isConfigured: Boolean((c.env.FIREBASE_CLIENT_EMAIL || '').trim() && (c.env.FIREBASE_PRIVATE_KEY || '').trim()),
+    isConnected: diag.ok,
+    projectId: diag.projectId,
+    databaseId: diag.databaseId,
+    clientEmail: (c.env.FIREBASE_CLIENT_EMAIL || '').trim() || null,
+    storageMode: 'firestore',
+    error: diag.ok ? null : diag.message,
+    diagnostic: diag,
+  });
+});
 
 app.get('/api/users', async c => {
   const repo = getRepository(c.env);

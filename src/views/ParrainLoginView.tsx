@@ -42,7 +42,7 @@ export const ParrainLoginView: React.FC<Props> = ({
       );
 
       if (!authWindow) {
-        setErrorMessage('Veuillez autoriser les fenêtres pop-up pour vous connecter avec Discord.');
+        window.location.href = info.url;
       }
     } catch (err: any) {
       setErrorMessage(err.message || 'Erreur lors du lancement de la connexion Discord');
@@ -54,11 +54,11 @@ export const ParrainLoginView: React.FC<Props> = ({
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-[#06040a] text-slate-900 dark:text-[#f4f1fa] flex flex-col justify-between transition-colors">
       {/* Top Header */}
-      <header className="border-b border-slate-200 dark:border-[#201636] bg-white/95 dark:bg-[#08050f]/95 px-6 h-16 flex items-center">
+      <header className="border-b border-slate-200 dark:border-[#201636] bg-white/95 dark:bg-[#08050f]/95 px-4 sm:px-6 h-16 flex items-center">
         <div className="max-w-4xl w-full mx-auto flex items-center justify-between gap-4">
           <button
             onClick={onBackToPortal}
-            className="flex items-center gap-2 text-xs font-medium text-slate-600 dark:text-[#9d93b8] hover:text-slate-900 dark:hover:text-white transition-colors cursor-pointer"
+            className="min-h-[44px] flex items-center gap-2 text-xs font-medium text-slate-600 dark:text-[#9d93b8] hover:text-slate-900 dark:hover:text-white transition-colors cursor-pointer"
           >
             <ArrowLeft className="w-4 h-4" />
             <span>Retour</span>
@@ -69,7 +69,7 @@ export const ParrainLoginView: React.FC<Props> = ({
       </header>
 
       {/* Center Auth Card with Official Banner */}
-      <main className="flex-1 flex items-center justify-center p-6">
+      <main className="flex-1 flex items-center justify-center p-4 sm:p-6">
         <div className="max-w-lg w-full bg-white dark:bg-[#100b1a] border border-slate-200 dark:border-[#281b44] rounded-2xl overflow-hidden shadow-xl dark:shadow-[0_12px_40px_rgba(124,58,237,0.14)]">
           {/* Official PAWAKO Banner */}
           <div className="bg-black border-b border-slate-200 dark:border-[#241a38]">
@@ -88,13 +88,13 @@ export const ParrainLoginView: React.FC<Props> = ({
             )}
           </div>
 
-          <div className="p-8 space-y-6">
+          <div className="p-6 sm:p-8 space-y-6">
             <div className="text-center space-y-1.5">
               <h1 className="text-xl font-bold tracking-tight text-slate-900 dark:text-[#f4f1fa]">
                 Espace Parrain
               </h1>
-              <p className="text-xs text-slate-500 dark:text-[#9d93b8]">
-                Suivi de vos filleuls et lien de parrainage PAWAKO
+              <p className="text-xs text-slate-500 dark:text-[#9d93b8] leading-relaxed">
+                Connectez-vous ou créez votre compte parrain automatiquement via Discord pour obtenir votre lien d'invitation et suivre vos filleuls.
               </p>
             </div>
 

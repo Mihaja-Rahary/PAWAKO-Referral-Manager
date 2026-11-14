@@ -66,16 +66,36 @@ export interface User {
   lastLoginAt: string;
 }
 
+export type ReferrerStatus = 'ACTIVE' | 'SUSPENDED' | 'ARCHIVED';
+
+export type ReferrerInviteStatus = 'ACTIVE' | 'EXPIRED_OR_DELETED' | 'UNCONFIGURED' | 'ERROR';
+
 export interface Referrer {
   id: string;
   discordUserId: string;
   discordUsername: string;
   discordDisplayName: string;
+  avatar?: string | null;
   inviteCode: string;
   inviteUrl: string;
+  inviteStatus?: ReferrerInviteStatus;
+  inviteChannelId?: string | null;
+  inviteError?: string | null;
+  inviteCreatedAt?: string | null;
   usesCount: number;
   isActive: boolean;
+  status?: ReferrerStatus;
   createdAt: string;
+  updatedAt?: string;
+  lastActivityAt?: string | null;
+  suspendedAt?: string | null;
+  suspendedByUserId?: string | null;
+  suspendReason?: string | null;
+  archivedAt?: string | null;
+  archivedByUserId?: string | null;
+  archiveReason?: string | null;
+  restoredAt?: string | null;
+  restoredByUserId?: string | null;
   notes?: string;
   totalFilleuls?: number;
   enAttente?: number;
@@ -90,6 +110,14 @@ export interface Referrer {
   acceptanceRate?: number;
   chatteurCount?: number;
   instagramCount?: number;
+}
+
+export interface ReferrerDependencySummary {
+  referrerId: string;
+  linkedCandidatesCount: number;
+  attributionHistoryCount: number;
+  canPhysicallyDelete: boolean;
+  blockingReason: string | null;
 }
 
 export interface Candidate {

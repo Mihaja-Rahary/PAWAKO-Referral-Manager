@@ -399,6 +399,14 @@ export const SettingsOAuthView: React.FC = () => {
                     <td className="p-2.5 font-sans text-slate-500 dark:text-[#9d93b8]">Serveur Prod VA Instagram</td>
                   </tr>
                   <tr>
+                    <td className="p-2.5 font-bold text-slate-900 dark:text-[#f4f1fa]">DISCORD_BOT_TOKEN</td>
+                    <td className="p-2.5 font-sans text-slate-500 dark:text-[#9d93b8]">Secret Worker — Token Bot Discord (création/vérification des liens réels)</td>
+                  </tr>
+                  <tr>
+                    <td className="p-2.5 font-bold text-slate-900 dark:text-[#f4f1fa]">DISCORD_RECRUITMENT_INVITE_CHANNEL_ID</td>
+                    <td className="p-2.5 font-sans text-slate-500 dark:text-[#9d93b8]">Variable Worker — Salon cible des invitations Recrutement (optionnel si détection auto)</td>
+                  </tr>
+                  <tr>
                     <td className="p-2.5 font-bold text-slate-900 dark:text-[#f4f1fa]">INITIAL_ADMIN_DISCORD_ID</td>
                     <td className="p-2.5 font-sans text-slate-500 dark:text-[#9d93b8]">Secret Worker — Discord ID du 1er Administrateur</td>
                   </tr>
@@ -481,6 +489,15 @@ export const SettingsOAuthView: React.FC = () => {
             </div>
             <div className="p-2.5 border border-slate-200 dark:border-[#241a38] rounded-lg bg-slate-50 dark:bg-[#171026]">
               <span className="font-mono font-bold text-slate-900 dark:text-[#f4f1fa]">GUILD_MEMBER_REMOVE</span>
+            </div>
+            <div className="p-2.5 border border-slate-200 dark:border-[#241a38] rounded-lg bg-slate-50 dark:bg-[#171026]">
+              <span className="font-mono font-bold text-slate-900 dark:text-[#f4f1fa]">INVITE_CREATE</span>
+            </div>
+            <div className="p-2.5 border border-slate-200 dark:border-[#241a38] rounded-lg bg-slate-50 dark:bg-[#171026]">
+              <span className="font-mono font-bold text-slate-900 dark:text-[#f4f1fa]">INVITE_DELETE</span>
+            </div>
+            <div className="p-2.5 border border-slate-200 dark:border-[#241a38] rounded-lg bg-slate-50 dark:bg-[#171026]">
+              <span className="font-mono font-bold text-slate-900 dark:text-[#f4f1fa]">MEMBER_SYNC</span>
             </div>
           </div>
 

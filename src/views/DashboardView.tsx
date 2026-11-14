@@ -482,7 +482,7 @@ export const DashboardView: React.FC<Props> = ({
           </div>
 
           <div className="space-y-3">
-            <div className="grid grid-cols-5 gap-2 text-center text-xs">
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-center text-xs">
               <div className="p-2.5 bg-slate-50 dark:bg-[#171026] border border-slate-200 dark:border-[#241a38] rounded-lg flex flex-col justify-between gap-2">
                 <div>
                   <div className="text-slate-500 dark:text-[#9d93b8] text-[10px]">Attente</div>
@@ -684,7 +684,85 @@ export const DashboardView: React.FC<Props> = ({
           </button>
         </div>
 
-        <div className="overflow-x-auto">
+        {/* Mobile Leaderboard Cards */}
+        <div className="md:hidden divide-y divide-slate-100 dark:divide-[#1e1530]">
+          {topParrains.length === 0 ? (
+            <div className="py-8 px-4 text-center text-slate-400 dark:text-[#7c7296] text-xs">
+              Aucun parrain enregistré pour le moment.
+            </div>
+          ) : (
+            topParrains.map((parrain, idx) => {
+              const hasValidInvite =
+                Boolean(parrain.inviteUrl && parrain.inviteCode) &&
+                parrain.inviteStatus !== 'EXPIRED_OR_DELETED';
+
+              return (
+                <div key={parrain.id} className="p-4 space-y-2.5 text-xs">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="font-mono tabular-nums text-[11px] text-slate-400 dark:text-[#7c7296] shrink-0">
+                        #{idx + 1}
+                      </span>
+                      <div className="min-w-0">
+                        <div className="font-semibold text-slate-900 dark:text-[#f4f1fa] truncate">
+                          {parrain.discordDisplayName}
+                        </div>
+                        <div className="text-[11px] text-slate-400 dark:text-[#7c7296] font-mono truncate">
+                          {parrain.discordUserId}
+                        </div>
+                      </div>
+                    </div>
+
+                    {hasValidInvite ? (
+                      <a
+                        href={parrain.inviteUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="font-mono bg-slate-100 dark:bg-[#191129] text-violet-700 dark:text-violet-300 px-2 py-1 rounded text-[11px] border border-slate-200 dark:border-[#2e224a] underline shrink-0"
+                      >
+                        {parrain.inviteCode}
+                      </a>
+                    ) : (
+                      <span className="font-mono bg-slate-100 dark:bg-[#191129] text-slate-500 dark:text-[#9d93b8] px-2 py-1 rounded text-[11px] border border-slate-200 dark:border-[#2e224a] shrink-0">
+                        Non généré
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="grid grid-cols-4 gap-2 text-center bg-slate-50 dark:bg-[#171026] border border-slate-100 dark:border-[#241a38] rounded-lg p-2">
+                    <div>
+                      <div className="text-[10px] text-slate-400 dark:text-[#7c7296]">Filleuls</div>
+                      <div className="font-bold font-mono tabular-nums text-slate-900 dark:text-[#f4f1fa]">
+                        {parrain.totalFilleuls}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-[10px] text-slate-400 dark:text-[#7c7296]">Form./Simu</div>
+                      <div className="font-mono tabular-nums text-slate-700 dark:text-[#d8d0eb]">
+                        {(parrain.enFormation || 0) + (parrain.enSimulation || 0)}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-[10px] text-slate-400 dark:text-[#7c7296]">Prod.</div>
+                      <div className="font-bold font-mono tabular-nums text-violet-700 dark:text-violet-300">
+                        {parrain.enProduction}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-[10px] text-slate-400 dark:text-[#7c7296]">Conv.</div>
+                      <div className="font-semibold font-mono tabular-nums text-slate-900 dark:text-[#f4f1fa]">
+                        {parrain.conversionRate || 0}%
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+
+        {/* Desktop Leaderboard Table */}
+        <div className="hidden md:block overflow-x-auto">
           <table className="w-full text-left text-xs">
             <thead className="bg-slate-50/70 dark:bg-[#171026] text-slate-500 dark:text-[#9d93b8] uppercase tracking-wider text-[11px] border-b border-slate-200 dark:border-[#241a38]">
               <tr>
@@ -705,62 +783,78 @@ export const DashboardView: React.FC<Props> = ({
                   </td>
                 </tr>
               ) : (
-                topParrains.map((parrain, idx) => (
-                  <tr key={parrain.id} className="hover:bg-slate-50/50 dark:hover:bg-[#171026] transition-colors">
-                    <td className="py-3 px-4">
-                      <div className="flex items-center gap-2">
-                        <span className="font-mono tabular-nums text-[11px] text-slate-400 dark:text-[#7c7296] w-5">
-                          #{idx + 1}
-                        </span>
-                        <div>
-                          <div className="font-semibold text-slate-900 dark:text-[#f4f1fa]">
-                            {parrain.discordDisplayName}
-                          </div>
-                          <div className="text-[11px] text-slate-400 dark:text-[#7c7296] font-mono">
-                            {parrain.discordUserId}
+                topParrains.map((parrain, idx) => {
+                  const hasValidInvite =
+                    Boolean(parrain.inviteUrl && parrain.inviteCode) &&
+                    parrain.inviteStatus !== 'EXPIRED_OR_DELETED';
+
+                  return (
+                    <tr key={parrain.id} className="hover:bg-slate-50/50 dark:hover:bg-[#171026] transition-colors">
+                      <td className="py-3 px-4">
+                        <div className="flex items-center gap-2">
+                          <span className="font-mono tabular-nums text-[11px] text-slate-400 dark:text-[#7c7296] w-5">
+                            #{idx + 1}
+                          </span>
+                          <div>
+                            <div className="font-semibold text-slate-900 dark:text-[#f4f1fa]">
+                              {parrain.discordDisplayName}
+                            </div>
+                            <div className="text-[11px] text-slate-400 dark:text-[#7c7296] font-mono">
+                              {parrain.discordUserId}
+                            </div>
                           </div>
                         </div>
-                      </div>
-                    </td>
-                    <td className="py-3 px-4">
-                      <span className="font-mono bg-slate-100 dark:bg-[#191129] text-slate-800 dark:text-violet-200 px-2 py-0.5 rounded text-[11px] border border-slate-200 dark:border-[#2e224a]">
-                        {parrain.inviteCode}
-                      </span>
-                    </td>
-                    <td className="py-3 px-4 text-center font-bold font-mono tabular-nums text-slate-900 dark:text-[#f4f1fa]">
-                      {parrain.totalFilleuls}
-                    </td>
-                    <td className="py-3 px-4 text-center font-mono tabular-nums text-slate-600 dark:text-[#9d93b8] font-medium">
-                      {(parrain.enFormation || 0) + (parrain.enSimulation || 0)}
-                    </td>
-                    <td className="py-3 px-4 text-center font-bold font-mono tabular-nums text-violet-700 dark:text-violet-300">
-                      {parrain.enProduction}
-                    </td>
-                    <td className="py-3 px-4">
-                      <div className="flex items-center justify-center gap-2">
-                        <div className="w-16 h-1.5 rounded-full bg-slate-100 dark:bg-[#1d1430] overflow-hidden hidden sm:block">
-                          <div
-                            className="h-full bg-violet-600 dark:bg-violet-500 rounded-full"
-                            style={{ width: `${Math.min(100, parrain.conversionRate || 0)}%` }}
-                          />
+                      </td>
+                      <td className="py-3 px-4">
+                        {parrain.inviteCode ? (
+                          <span className="font-mono bg-slate-100 dark:bg-[#191129] text-slate-800 dark:text-violet-200 px-2 py-0.5 rounded text-[11px] border border-slate-200 dark:border-[#2e224a]">
+                            {parrain.inviteCode}
+                          </span>
+                        ) : (
+                          <span className="text-[11px] text-slate-400 dark:text-[#7c7296]">—</span>
+                        )}
+                      </td>
+                      <td className="py-3 px-4 text-center font-bold font-mono tabular-nums text-slate-900 dark:text-[#f4f1fa]">
+                        {parrain.totalFilleuls}
+                      </td>
+                      <td className="py-3 px-4 text-center font-mono tabular-nums text-slate-600 dark:text-[#9d93b8] font-medium">
+                        {(parrain.enFormation || 0) + (parrain.enSimulation || 0)}
+                      </td>
+                      <td className="py-3 px-4 text-center font-bold font-mono tabular-nums text-violet-700 dark:text-violet-300">
+                        {parrain.enProduction}
+                      </td>
+                      <td className="py-3 px-4">
+                        <div className="flex items-center justify-center gap-2">
+                          <div className="w-16 h-1.5 rounded-full bg-slate-100 dark:bg-[#1d1430] overflow-hidden hidden sm:block">
+                            <div
+                              className="h-full bg-violet-600 dark:bg-violet-500 rounded-full"
+                              style={{ width: `${Math.min(100, parrain.conversionRate || 0)}%` }}
+                            />
+                          </div>
+                          <span className="font-semibold font-mono tabular-nums text-slate-900 dark:text-[#f4f1fa] w-9 text-right">
+                            {parrain.conversionRate || 0}%
+                          </span>
                         </div>
-                        <span className="font-semibold font-mono tabular-nums text-slate-900 dark:text-[#f4f1fa] w-9 text-right">
-                          {parrain.conversionRate || 0}%
-                        </span>
-                      </div>
-                    </td>
-                    <td className="py-3 px-4 text-right">
-                      <a
-                        href={parrain.inviteUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-[11px] text-slate-500 dark:text-violet-300 hover:text-slate-900 dark:hover:text-white underline font-mono"
-                      >
-                        {parrain.inviteCode}
-                      </a>
-                    </td>
-                  </tr>
-                ))
+                      </td>
+                      <td className="py-3 px-4 text-right">
+                        {hasValidInvite ? (
+                          <a
+                            href={parrain.inviteUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-[11px] text-slate-500 dark:text-violet-300 hover:text-slate-900 dark:hover:text-white underline font-mono"
+                          >
+                            {parrain.inviteCode}
+                          </a>
+                        ) : (
+                          <span className="text-[11px] text-slate-400 dark:text-[#7c7296]">
+                            Non généré
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })
               )}
             </tbody>
           </table>

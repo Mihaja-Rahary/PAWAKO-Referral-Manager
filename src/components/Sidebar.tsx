@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { User, UserRole, DiscordServerInfo } from '../types';
 import { PawakoLogo } from './PawakoLogo';
 import {
@@ -12,6 +12,7 @@ import {
   Settings,
   LogOut,
   Radio,
+  X,
 } from 'lucide-react';
 
 export type NavigationTab =
@@ -32,6 +33,8 @@ interface Props {
   onLogout: () => void;
   onOpenDiscordLogin: () => void;
   isOAuthConfigured: boolean;
+  isMobileOpen?: boolean;
+  onCloseMobile?: () => void;
 }
 
 export const Sidebar: React.FC<Props> = ({
@@ -41,9 +44,20 @@ export const Sidebar: React.FC<Props> = ({
   servers,
   onLogout,
   onOpenDiscordLogin,
+  isMobileOpen = false,
+  onCloseMobile,
 }) => {
   const role: UserRole = currentUser?.role || 'ADMINISTRATEUR';
   const isParrainOnly = role === 'PARRAIN';
+
+  useEffect(() => {
+    if (!isMobileOpen || !onCloseMobile) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onCloseMobile();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isMobileOpen, onCloseMobile]);
 
   // Navigation items strictly segregated by role
   const navItems = [
@@ -101,19 +115,40 @@ export const Sidebar: React.FC<Props> = ({
   const visibleItems = navItems.filter(item => item.roles.includes(role));
   const connectedCount = servers?.filter(s => s.botConnected).length || 0;
 
-  return (
-    <aside className="w-64 bg-white dark:bg-[#090611] border-r border-slate-200 dark:border-[#1e1530] flex flex-col shrink-0 min-h-screen transition-colors">
+  const handleSelectTab = (tab: NavigationTab) => {
+    onTabChange(tab);
+    if (onCloseMobile) onCloseMobile();
+  };
+
+  const sidebarContent = (isDrawer: boolean) => (
+    <aside
+      className={`w-72 lg:w-64 bg-white dark:bg-[#090611] border-r border-slate-200 dark:border-[#1e1530] flex flex-col shrink-0 h-full transition-colors ${
+        isDrawer ? 'shadow-2xl' : 'min-h-screen'
+      }`}
+    >
       {/* Compact Brand Header */}
-      <div className="p-5 border-b border-slate-100 dark:border-[#1c132e] flex items-center gap-3">
-        <PawakoLogo size="md" />
-        <div className="min-w-0">
-          <div className="font-extrabold text-slate-900 dark:text-[#f4f1fa] text-base tracking-tight leading-none whitespace-nowrap">
-            PAWAKO
+      <div className="p-4 sm:p-5 border-b border-slate-100 dark:border-[#1c132e] flex items-center justify-between gap-3">
+        <div className="flex items-center gap-3 min-w-0">
+          <PawakoLogo size="md" />
+          <div className="min-w-0">
+            <div className="font-extrabold text-slate-900 dark:text-[#f4f1fa] text-base tracking-tight leading-none whitespace-nowrap">
+              PAWAKO
+            </div>
+            <p className="text-[11px] text-slate-500 dark:text-[#9d93b8] mt-1 font-medium truncate">
+              Referral Manager
+            </p>
           </div>
-          <p className="text-[11px] text-slate-500 dark:text-[#9d93b8] mt-1 font-medium truncate">
-            Referral Manager
-          </p>
         </div>
+        {isDrawer && onCloseMobile && (
+          <button
+            type="button"
+            onClick={onCloseMobile}
+            aria-label="Fermer le menu"
+            className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg text-slate-500 hover:text-slate-900 dark:text-[#9d93b8] dark:hover:text-white hover:bg-slate-100 dark:hover:bg-[#191129] transition-colors cursor-pointer"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        )}
       </div>
 
       {/* Navigation Links */}
@@ -124,8 +159,8 @@ export const Sidebar: React.FC<Props> = ({
           return (
             <button
               key={item.id}
-              onClick={() => onTabChange(item.id)}
-              className={`w-full flex items-center justify-between px-3 py-2.5 text-xs font-medium rounded-lg transition-colors text-left cursor-pointer ${
+              onClick={() => handleSelectTab(item.id)}
+              className={`w-full min-h-[44px] lg:min-h-0 flex items-center justify-between px-3 py-2.5 text-xs font-medium rounded-lg transition-colors text-left cursor-pointer ${
                 isActive
                   ? 'bg-violet-600 text-white dark:bg-violet-600/20 dark:text-violet-200 dark:border dark:border-violet-500/40'
                   : 'text-slate-600 dark:text-[#9d93b8] hover:text-slate-900 dark:hover:text-[#f4f1fa] hover:bg-slate-50 dark:hover:bg-[#140e24] border border-transparent'
@@ -224,7 +259,7 @@ export const Sidebar: React.FC<Props> = ({
               onClick={onLogout}
               title="Se déconnecter"
               aria-label="Se déconnecter"
-              className="p-2 text-slate-400 hover:text-slate-700 dark:hover:text-white hover:bg-slate-200 dark:hover:bg-[#191129] rounded-lg transition-colors cursor-pointer"
+              className="min-h-[40px] min-w-[40px] flex items-center justify-center text-slate-400 hover:text-slate-700 dark:hover:text-white hover:bg-slate-200 dark:hover:bg-[#191129] rounded-lg transition-colors cursor-pointer"
             >
               <LogOut className="w-4 h-4" />
             </button>
@@ -232,12 +267,35 @@ export const Sidebar: React.FC<Props> = ({
         ) : (
           <button
             onClick={onOpenDiscordLogin}
-            className="w-full flex items-center justify-center gap-2 py-2 px-3 text-xs font-medium text-white bg-violet-600 hover:bg-violet-500 rounded-lg transition-colors cursor-pointer"
+            className="w-full min-h-[44px] flex items-center justify-center gap-2 py-2 px-3 text-xs font-medium text-white bg-violet-600 hover:bg-violet-500 rounded-lg transition-colors cursor-pointer"
           >
             Connexion Discord
           </button>
         )}
       </div>
     </aside>
+  );
+
+  return (
+    <>
+      {/* Desktop Static Sidebar */}
+      <div className="hidden lg:flex shrink-0">{sidebarContent(false)}</div>
+
+      {/* Mobile Drawer Sidebar */}
+      {isMobileOpen && (
+        <div
+          className="fixed inset-0 z-50 lg:hidden flex"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Navigation principale"
+        >
+          <div
+            className="fixed inset-0 bg-slate-900/60 dark:bg-black/80 backdrop-blur-xs"
+            onClick={onCloseMobile}
+          />
+          <div className="relative z-10 h-full max-w-[85vw]">{sidebarContent(true)}</div>
+        </div>
+      )}
+    </>
   );
 };

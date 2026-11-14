@@ -5,6 +5,8 @@ import {
   OperationalStatus,
   OverviewStatistics,
   Referrer,
+  ReferrerStatus,
+  ReferrerDependencySummary,
   StatusHistoryEntry,
   ReferralAttributionHistoryEntry,
   User,
@@ -41,7 +43,9 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     } catch {
       // ignore
     }
-    throw new Error(errMsg);
+    const err: any = new Error(errMsg);
+    err.status = res.status;
+    throw err;
   }
 
   return res.json();
@@ -167,6 +171,7 @@ export const api = {
     status?: CandidateStatus | 'ALL';
     server?: string;
     attributionStatus?: string;
+    referrerId?: string;
     hasAnomaly?: boolean;
     page?: number;
     limit?: number;
@@ -185,6 +190,7 @@ export const api = {
     if (params?.status && params.status !== 'ALL') query.set('status', params.status);
     if (params?.server && params.server !== 'ALL') query.set('server', params.server);
     if (params?.attributionStatus && params.attributionStatus !== 'ALL') query.set('attributionStatus', params.attributionStatus);
+    if (params?.referrerId) query.set('referrerId', params.referrerId);
     if (params?.hasAnomaly !== undefined) query.set('hasAnomaly', params.hasAnomaly ? 'true' : 'false');
     if (params?.page) query.set('page', params.page.toString());
     if (params?.limit) query.set('limit', params.limit.toString());
@@ -221,7 +227,7 @@ export const api = {
       newOperationalStatus?: OperationalStatus;
       newStatus?: CandidateStatus;
       refusalReason?: string;
-      notes?: string;
+      notes: string;
     }
   ): Promise<{ success: boolean; candidate: Candidate }> {
     return request(`/api/candidates/${candidateId}/status`, {
@@ -266,8 +272,24 @@ export const api = {
   },
 
   // Referrers
-  async getReferrers(): Promise<{ referrers: Referrer[] }> {
-    return request('/api/referrers');
+  async getReferrers(params?: {
+    status?: ReferrerStatus | 'ALL';
+    search?: string;
+  }): Promise<{ referrers: Referrer[] }> {
+    const query = new URLSearchParams();
+    if (params?.status && params.status !== 'ALL') query.set('status', params.status);
+    if (params?.search) query.set('search', params.search);
+    const qs = query.toString();
+    return request(`/api/referrers${qs ? `?${qs}` : ''}`);
+  },
+
+  async getReferrerDetails(id: string): Promise<{
+    referrer: Referrer;
+    filleuls: Candidate[];
+    dependencies: ReferrerDependencySummary;
+    history: AuditLog[];
+  }> {
+    return request(`/api/referrers/${id}`);
   },
 
   async createReferrer(payload: {
@@ -279,6 +301,81 @@ export const api = {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
+    });
+  },
+
+  async updateReferrer(
+    id: string,
+    payload: { notes?: string; discordDisplayName?: string; discordUsername?: string }
+  ): Promise<{ success: boolean; referrer: Referrer }> {
+    return request(`/api/referrers/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async activateReferrer(id: string, reason?: string): Promise<{ success: boolean; referrer: Referrer }> {
+    return request(`/api/referrers/${id}/activate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason }),
+    });
+  },
+
+  async suspendReferrer(id: string, reason?: string): Promise<{ success: boolean; referrer: Referrer }> {
+    return request(`/api/referrers/${id}/suspend`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason }),
+    });
+  },
+
+  async reactivateReferrer(id: string, reason?: string): Promise<{ success: boolean; referrer: Referrer }> {
+    return request(`/api/referrers/${id}/reactivate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason }),
+    });
+  },
+
+  async archiveReferrer(id: string, reason?: string): Promise<{ success: boolean; referrer: Referrer }> {
+    return request(`/api/referrers/${id}/archive`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason }),
+    });
+  },
+
+  async restoreReferrer(id: string, reason?: string): Promise<{ success: boolean; referrer: Referrer }> {
+    return request(`/api/referrers/${id}/restore`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason }),
+    });
+  },
+
+  async regenerateReferrerInvite(
+    id: string,
+    manualInviteCode?: string
+  ): Promise<{
+    success: boolean;
+    referrer: Referrer;
+    errorCode: string | null;
+    errorMessage: string | null;
+  }> {
+    return request(`/api/referrers/${id}/invite/regenerate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ manualInviteCode }),
+    });
+  },
+
+  async deleteReferrerPhysically(
+    id: string
+  ): Promise<{ success: boolean; summary: ReferrerDependencySummary }> {
+    return request(`/api/referrers/${id}?confirm=true`, {
+      method: 'DELETE',
     });
   },
 
@@ -296,6 +393,7 @@ export const api = {
       refuses: number;
       enFormation: number;
       enSimulation: number;
+      valides: number;
       enProduction: number;
       abandonnes: number;
       conversionRate: number;
@@ -304,6 +402,17 @@ export const api = {
     candidates: Candidate[];
   }> {
     return request('/api/parrain/dashboard');
+  },
+
+  async ensureParrainInvite(): Promise<{
+    success: boolean;
+    referrer: Referrer;
+    errorCode: string | null;
+    errorMessage: string | null;
+  }> {
+    return request('/api/parrain/invite/ensure', {
+      method: 'POST',
+    });
   },
 
   // Stats

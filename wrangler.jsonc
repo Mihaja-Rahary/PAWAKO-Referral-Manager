@@ -13,6 +13,7 @@
     "FRONTEND_URL": "https://pawako-referral-manager.pages.dev",
     "DISCORD_REDIRECT_URI": "https://referral-manager.pawako-saas.workers.dev/auth/callback",
     "DISCORD_RECRUITMENT_GUILD_ID": "",
+    "DISCORD_RECRUITMENT_INVITE_CHANNEL_ID": "",
     "DISCORD_FORMATION_GUILD_ID": "",
     "DISCORD_CHATTING_PRODUCTION_GUILD_ID": "",
     "DISCORD_INSTAGRAM_PRODUCTION_GUILD_ID": ""

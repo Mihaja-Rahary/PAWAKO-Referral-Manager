@@ -121,7 +121,7 @@ export function toParrainCandidateView(candidate: Candidate) {
     status: candidate.status,
     currentServer: candidate.currentServer,
     arrivalDate: candidate.arrivalDate,
-    refusalReason: candidate.refusalReason || null,
+    refusalReason: null, // Confidentialité stricte : les motifs de refus internes ne sont jamais exposés aux parrains
     productionDate: candidate.productionDate || null,
     createdAt: candidate.createdAt,
     hasAnomaly: !!candidate.hasAnomaly,
@@ -467,7 +467,14 @@ apiRouter.patch('/candidates/:id/referrer', requireAdmin, (req: Request, res: Re
 // 3. REFERRERS & PARRAINS
 // ----------------------------------------------------
 
-apiRouter.get('/referrers', (req: Request, res: Response) => {
+apiRouter.get('/referrers', requireAuth, (req: Request, res: Response) => {
+  const currentUser: User = (req as any).user;
+  if (currentUser.role === 'PARRAIN') {
+    const myRef = db.getReferrerByDiscordUserId(currentUser.id);
+    return res.json({
+      referrers: myRef ? [{ ...myRef, notes: undefined }] : [],
+    });
+  }
   const overview = db.getOverviewStatistics();
   res.json({
     referrers: overview.topParrains,

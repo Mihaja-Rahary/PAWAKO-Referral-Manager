@@ -32,6 +32,7 @@ interface Props {
   onOpenStatusModal: (candidate: Candidate) => void;
   onOpenReassignModal: (candidate: Candidate) => void;
   onCandidateUpdated: () => void;
+  refreshTrigger?: number;
 }
 
 export const CandidateDrawer: React.FC<Props> = ({
@@ -41,6 +42,7 @@ export const CandidateDrawer: React.FC<Props> = ({
   onOpenStatusModal,
   onOpenReassignModal,
   onCandidateUpdated,
+  refreshTrigger = 0,
 }) => {
   const [candidate, setCandidate] = useState<Candidate | null>(null);
   const [statusHistory, setStatusHistory] = useState<StatusHistoryEntry[]>([]);
@@ -58,6 +60,15 @@ export const CandidateDrawer: React.FC<Props> = ({
   const isParrainOnly = currentUserRole === 'PARRAIN';
   const isAdmin = currentUserRole === 'ADMINISTRATEUR';
   const isResponsableOrAdmin = currentUserRole === 'ADMINISTRATEUR' || currentUserRole === 'RESPONSABLE';
+
+  useEffect(() => {
+    if (!candidateId) return;
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handleKey);
+    return () => window.removeEventListener('keydown', handleKey);
+  }, [candidateId, onClose]);
 
   useEffect(() => {
     if (!candidateId) {
@@ -86,7 +97,7 @@ export const CandidateDrawer: React.FC<Props> = ({
     };
 
     loadData();
-  }, [candidateId]);
+  }, [candidateId, refreshTrigger]);
 
   if (!candidateId) return null;
 

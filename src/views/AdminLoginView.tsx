@@ -42,7 +42,7 @@ export const AdminLoginView: React.FC<Props> = ({
       );
 
       if (!authWindow) {
-        setErrorMessage('Veuillez autoriser les fenêtres pop-up pour vous connecter avec Discord.');
+        window.location.href = info.url;
       }
     } catch (err: any) {
       setErrorMessage(err.message || 'Erreur lors du lancement de la connexion Discord');

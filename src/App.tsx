@@ -30,14 +30,16 @@ import { ReassignReferrerModal } from './components/ReassignReferrerModal';
 import { NewCandidateModal } from './components/NewCandidateModal';
 import { PawakoLogo } from './components/PawakoLogo';
 import { ThemeToggle } from './components/ThemeToggle';
-import { LogOut, UserCheck, Shield } from 'lucide-react';
+import { LogOut, Shield, AlertCircle, RefreshCw } from 'lucide-react';
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [isAuthLoading, setIsAuthLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<NavigationTab>('dashboard');
   const [isOAuthConfigured, setIsOAuthConfigured] = useState(false);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
   // URL Path router state
   const [currentPath, setCurrentPath] = useState<string>(() => {
@@ -70,10 +72,11 @@ export default function App() {
   const [activeReassignCandidate, setActiveReassignCandidate] = useState<Candidate | null>(null);
   const [isNewCandidateModalOpen, setIsNewCandidateModalOpen] = useState(false);
 
-  // Status and shortcut filters from dashboard
+  // Status and shortcut filters from dashboard & referrers
   const [candidateStatusFilter, setCandidateStatusFilter] = useState<string | undefined>(undefined);
   const [candidateVaTypeFilter, setCandidateVaTypeFilter] = useState<string | undefined>(undefined);
   const [candidateAnomalyFilter, setCandidateAnomalyFilter] = useState<boolean | undefined>(undefined);
+  const [candidateReferrerFilter, setCandidateReferrerFilter] = useState<string | undefined>(undefined);
 
   const triggerRefresh = useCallback(() => {
     setRefreshTrigger(t => t + 1);
@@ -81,6 +84,7 @@ export default function App() {
 
   const loadAuthAndGlobals = useCallback(async () => {
     try {
+      setLoadError(null);
       const pathNow = typeof window !== 'undefined' ? window.location.pathname : '/';
       const preferAdminBootstrap = pathNow.startsWith('/admin') && pathNow !== '/admin/login';
 
@@ -92,8 +96,11 @@ export default function App() {
           setStats(boot.stats);
           setReferrers(boot.referrers || []);
           return;
-        } catch {
-          // Si non authentifié (401) ou parrain (403), basculer proprement sur /api/auth/me
+        } catch (bootErr: any) {
+          if (bootErr?.status !== 401 && bootErr?.status !== 403 && bootErr?.status !== 404) {
+            setLoadError(bootErr?.message || 'Erreur lors du chargement des données.');
+          }
+          // Bascule sur /api/auth/me pour vérifier la session réelle
         }
       }
 
@@ -108,8 +115,8 @@ export default function App() {
             const boot = await api.getAdminBootstrap();
             setStats(boot.stats);
             setReferrers(boot.referrers || []);
-          } catch {
-            // Fallback silencieux
+          } catch (err: any) {
+            setLoadError(err?.message || 'Impossible de charger les statistiques globales.');
           }
         }
       } else {
@@ -117,8 +124,9 @@ export default function App() {
         setStats(null);
         setReferrers([]);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to load initial data:', err);
+      setLoadError(err?.message || 'Impossible de contacter le serveur PAWAKO.');
     } finally {
       setIsAuthLoading(false);
     }
@@ -165,7 +173,7 @@ export default function App() {
         allowedOrigins.add('http://127.0.0.1:5173');
       }
 
-      // 3. Contrôle strict de l'origine : refus catégorique de toute origine inconnue (pas de .includes() ou .endsWith())
+      // 3. Contrôle strict de l'origine : refus catégorique de toute origine inconnue
       if (!allowedOrigins.has(event.origin)) {
         return;
       }
@@ -200,9 +208,10 @@ export default function App() {
 
   const handleOpenDiscordLogin = async (portal: 'admin' | 'parrain' = 'admin') => {
     try {
+      setOauthError(null);
       const info = await api.getOAuthUrl(portal);
       if (!info.isConfigured || !info.url) {
-        alert(
+        setOauthError(
           'Les identifiants DISCORD_CLIENT_ID et DISCORD_CLIENT_SECRET ne sont pas encore configurés dans les variables d environnement.'
         );
         return;
@@ -215,10 +224,11 @@ export default function App() {
       );
 
       if (!authWindow) {
-        alert('Veuillez autoriser les fenêtres pop-up pour vous connecter avec Discord.');
+        // Fallback propre sur mobile / navigateur bloquant les pop-ups
+        window.location.href = info.url;
       }
     } catch (err: any) {
-      alert(err.message || 'Erreur lors du lancement de l authentification Discord');
+      setOauthError(err.message || 'Erreur lors du lancement de l authentification Discord');
     }
   };
 
@@ -227,6 +237,7 @@ export default function App() {
     setCurrentUser(null);
     setStats(null);
     setReferrers([]);
+    setIsMobileMenuOpen(false);
     triggerRefresh();
     if (redirectTarget) {
       navigate(redirectTarget);
@@ -354,32 +365,32 @@ export default function App() {
     return (
       <div className="min-h-screen bg-slate-50 dark:bg-[#06040a] text-slate-900 dark:text-[#f4f1fa] flex flex-col font-sans antialiased transition-colors">
         {/* Parrain Portal Top Bar */}
-        <header className="border-b border-slate-200 dark:border-[#1e1530] bg-white/95 dark:bg-[#090611]/95 sticky top-0 z-10 px-6 h-16 flex items-center justify-between transition-colors">
-          <div className="flex items-center gap-3 min-w-0">
+        <header className="border-b border-slate-200 dark:border-[#1e1530] bg-white/95 dark:bg-[#090611]/95 sticky top-0 z-10 px-3 sm:px-6 h-16 flex items-center justify-between gap-2 transition-colors">
+          <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
             <PawakoLogo size="sm" />
             <div className="flex items-center gap-2 text-sm tracking-tight min-w-0">
               <span className="font-bold text-slate-900 dark:text-[#f4f1fa] whitespace-nowrap">PAWAKO</span>
-              <span className="text-slate-300 dark:text-[#3b2d5c]" aria-hidden="true">·</span>
-              <span className="text-xs font-semibold text-violet-700 dark:text-violet-300 whitespace-nowrap">
+              <span className="text-slate-300 dark:text-[#3b2d5c] hidden xs:inline" aria-hidden="true">·</span>
+              <span className="text-xs font-semibold text-violet-700 dark:text-violet-300 truncate">
                 Espace Parrain
               </span>
             </div>
           </div>
 
-          <div className="flex items-center gap-3 shrink-0">
+          <div className="flex items-center gap-2 sm:gap-3 shrink-0">
             {(currentUser.role === 'ADMINISTRATEUR' || currentUser.role === 'RESPONSABLE') && (
               <button
                 onClick={() => navigate('/admin')}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-violet-700 dark:text-violet-200 bg-violet-50 dark:bg-[#191129] border border-violet-200 dark:border-violet-500/35 rounded-lg hover:bg-violet-100 dark:hover:bg-[#231839] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                className="min-h-[38px] flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs font-semibold text-violet-700 dark:text-violet-200 bg-violet-50 dark:bg-[#191129] border border-violet-200 dark:border-violet-500/35 rounded-lg hover:bg-violet-100 dark:hover:bg-[#231839] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
               >
                 <Shield className="w-3.5 h-3.5" />
-                <span>Administration</span>
+                <span className="hidden sm:inline">Administration</span>
               </button>
             )}
 
             <ThemeToggle compact />
 
-            <div className="flex items-center gap-2.5 pl-1">
+            <div className="flex items-center gap-2 pl-0.5">
               {currentUser.avatar ? (
                 <img
                   src={currentUser.avatar}
@@ -402,7 +413,7 @@ export default function App() {
 
             <button
               onClick={() => handleLogout('/parrain/login')}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-600 dark:text-[#c4badb] hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-[#191129] rounded-lg border border-slate-200 dark:border-[#241a38] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+              className="min-h-[38px] flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs font-medium text-slate-600 dark:text-[#c4badb] hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-[#191129] rounded-lg border border-slate-200 dark:border-[#241a38] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
             >
               <LogOut className="w-3.5 h-3.5" />
               <span className="hidden sm:inline">Déconnexion</span>
@@ -411,11 +422,12 @@ export default function App() {
         </header>
 
         {/* Parrain Main Content */}
-        <main className="flex-1 p-6 max-w-6xl mx-auto w-full">
+        <main className="flex-1 p-4 sm:p-6 max-w-6xl mx-auto w-full">
           <ParrainPortalView
             currentUserRole={currentUser.role}
             onSelectCandidate={id => setSelectedCandidateId(id)}
             refreshTrigger={refreshTrigger}
+            onManualRefresh={triggerRefresh}
           />
         </main>
 
@@ -427,6 +439,7 @@ export default function App() {
           onOpenStatusModal={() => {}}
           onOpenReassignModal={() => {}}
           onCandidateUpdated={triggerRefresh}
+          refreshTrigger={refreshTrigger}
         />
       </div>
     );
@@ -488,12 +501,15 @@ export default function App() {
           setCandidateStatusFilter(undefined);
           setCandidateVaTypeFilter(undefined);
           setCandidateAnomalyFilter(undefined);
+          setCandidateReferrerFilter(undefined);
         }}
         currentUser={currentUser}
         servers={stats?.servers}
         onLogout={() => handleLogout('/admin/login')}
         onOpenDiscordLogin={() => handleOpenDiscordLogin('admin')}
         isOAuthConfigured={isOAuthConfigured}
+        isMobileOpen={isMobileMenuOpen}
+        onCloseMobile={() => setIsMobileMenuOpen(false)}
       />
 
       {/* Main Body */}
@@ -506,11 +522,28 @@ export default function App() {
           onLogout={() => handleLogout('/admin/login')}
           isOAuthConfigured={isOAuthConfigured}
           onRefresh={triggerRefresh}
+          onOpenMobileMenu={() => setIsMobileMenuOpen(true)}
         />
 
         {/* View Content Area */}
-        <main className="flex-1 overflow-y-auto p-6">
-          <div className="max-w-7xl mx-auto space-y-6">
+        <main className="flex-1 overflow-y-auto p-3.5 sm:p-6">
+          <div className="max-w-7xl mx-auto space-y-5 sm:space-y-6">
+            {loadError && (
+              <div className="p-3.5 bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-500/30 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-rose-800 dark:text-rose-200">
+                <div className="flex items-start gap-2">
+                  <AlertCircle className="w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0 mt-0.5" />
+                  <span>{loadError}</span>
+                </div>
+                <button
+                  onClick={triggerRefresh}
+                  className="px-3 py-1.5 bg-rose-600 hover:bg-rose-500 text-white font-semibold rounded-lg transition-colors flex items-center gap-1.5 self-start sm:self-auto shrink-0 cursor-pointer"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  <span>Réessayer</span>
+                </button>
+              </div>
+            )}
+
             {activeTab === 'dashboard' && (
               <DashboardView
                 stats={stats}
@@ -518,6 +551,7 @@ export default function App() {
                   setCandidateStatusFilter(filterStatus);
                   setCandidateVaTypeFilter(extraParams?.vaType);
                   setCandidateAnomalyFilter(extraParams?.hasAnomaly);
+                  setCandidateReferrerFilter(undefined);
                   setActiveTab('candidates');
                 }}
                 onNavigateToReferrers={() => setActiveTab('referrers')}
@@ -530,6 +564,8 @@ export default function App() {
                 initialStatusFilter={candidateStatusFilter}
                 initialVaTypeFilter={candidateVaTypeFilter}
                 initialAnomalyFilter={candidateAnomalyFilter}
+                initialReferrerIdFilter={candidateReferrerFilter}
+                onClearReferrerFilter={() => setCandidateReferrerFilter(undefined)}
                 onSelectCandidate={id => setSelectedCandidateId(id)}
                 onOpenStatusModal={candidate => setActiveStatusCandidate(candidate)}
                 onOpenReassignModal={candidate => setActiveReassignCandidate(candidate)}
@@ -541,10 +577,16 @@ export default function App() {
             {activeTab === 'referrers' && (
               <ReferrersView
                 currentUserRole={currentUser?.role || 'ADMINISTRATEUR'}
-                onSelectReferrerFilter={() => {
+                onSelectReferrerFilter={referrerId => {
+                  setCandidateStatusFilter(undefined);
+                  setCandidateVaTypeFilter(undefined);
+                  setCandidateAnomalyFilter(undefined);
+                  setCandidateReferrerFilter(referrerId);
                   setActiveTab('candidates');
                 }}
+                onSelectCandidate={id => setSelectedCandidateId(id)}
                 refreshTrigger={refreshTrigger}
+                onRefreshAll={triggerRefresh}
                 initialReferrers={referrers}
               />
             )}
@@ -554,6 +596,7 @@ export default function App() {
                 currentUserRole={currentUser?.role || 'ADMINISTRATEUR'}
                 onSelectCandidate={id => setSelectedCandidateId(id)}
                 refreshTrigger={refreshTrigger}
+                onManualRefresh={triggerRefresh}
               />
             )}
 
@@ -589,6 +632,7 @@ export default function App() {
         onOpenStatusModal={candidate => setActiveStatusCandidate(candidate)}
         onOpenReassignModal={candidate => setActiveReassignCandidate(candidate)}
         onCandidateUpdated={triggerRefresh}
+        refreshTrigger={refreshTrigger}
       />
 
       {/* Status Transition Modal */}

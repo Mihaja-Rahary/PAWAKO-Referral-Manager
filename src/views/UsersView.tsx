@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { User, UserRole } from '../types';
+import { User, UserRole, UserStatus } from '../types';
 import { api } from '../api';
 import { formatDate } from '../utils/statusUtils';
 import { RefreshCw, AlertCircle } from 'lucide-react';
@@ -18,10 +18,12 @@ export const UsersView: React.FC<Props> = ({ refreshTrigger, onRefreshAll }) => 
   const fetchUsers = async () => {
     try {
       setIsLoading(true);
+      setError(null);
       const res = await api.getUsers();
       setUsers(res.users);
-    } catch (err) {
+    } catch (err: any) {
       console.error('Error fetching users:', err);
+      setError(err?.message || 'Impossible de charger les utilisateurs.');
     } finally {
       setIsLoading(false);
     }
@@ -45,16 +47,38 @@ export const UsersView: React.FC<Props> = ({ refreshTrigger, onRefreshAll }) => 
     }
   };
 
+  const handleStatusChange = async (userId: string, newStatus: UserStatus) => {
+    try {
+      setError(null);
+      setUpdatingId(userId);
+      await api.updateUserStatus(userId, newStatus);
+      await fetchUsers();
+      onRefreshAll();
+    } catch (err: any) {
+      setError(err.message || 'Erreur lors du changement de statut');
+    } finally {
+      setUpdatingId(null);
+    }
+  };
+
   return (
     <div className="space-y-4">
       {error && (
-        <div className="p-3 text-xs bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-500/30 text-rose-700 dark:text-rose-300 rounded-xl flex items-center gap-2">
-          <AlertCircle className="w-4 h-4 shrink-0" />
-          <span>{error}</span>
+        <div className="p-3 text-xs bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-500/30 text-rose-700 dark:text-rose-300 rounded-xl flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 shrink-0" />
+            <span>{error}</span>
+          </div>
+          <button
+            onClick={fetchUsers}
+            className="px-2.5 py-1 bg-rose-600 text-white rounded-md font-semibold shrink-0 cursor-pointer"
+          >
+            Réessayer
+          </button>
         </div>
       )}
 
-      {/* Users Table */}
+      {/* Users Table & Mobile Cards */}
       <div className="bg-white dark:bg-[#100b1a] border border-slate-200 dark:border-[#241a38] rounded-xl overflow-hidden shadow-xs transition-colors">
         <div className="p-4 border-b border-slate-100 dark:border-[#241a38] flex items-center justify-between">
           <h2 className="font-bold text-slate-900 dark:text-[#f4f1fa] text-sm">
@@ -62,7 +86,74 @@ export const UsersView: React.FC<Props> = ({ refreshTrigger, onRefreshAll }) => 
           </h2>
         </div>
 
-        <div className="overflow-x-auto">
+        {/* Mobile Card View */}
+        <div className="md:hidden divide-y divide-slate-100 dark:divide-[#241a38]/80">
+          {isLoading ? (
+            <div className="py-8 text-center text-xs text-slate-400 dark:text-[#9d93b8]">
+              <RefreshCw className="w-5 h-5 animate-spin mx-auto mb-1 text-violet-500" />
+              Chargement des utilisateurs...
+            </div>
+          ) : users.length === 0 ? (
+            <div className="py-10 text-center text-slate-500 dark:text-[#9d93b8] text-xs">
+              Aucun compte utilisateur enregistré.
+            </div>
+          ) : (
+            users.map(u => (
+              <div key={u.id} className="p-4 space-y-3 text-xs">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    {u.avatar ? (
+                      <img
+                        src={u.avatar}
+                        alt={u.displayName}
+                        referrerPolicy="no-referrer"
+                        className="w-8 h-8 rounded-full object-cover border border-slate-200 dark:border-[#2e224a] shrink-0"
+                      />
+                    ) : (
+                      <div className="w-8 h-8 rounded-full bg-violet-600 text-white flex items-center justify-center font-bold text-xs shrink-0">
+                        {u.displayName.charAt(0)}
+                      </div>
+                    )}
+                    <div className="min-w-0">
+                      <div className="font-semibold text-slate-900 dark:text-[#f4f1fa] truncate">{u.displayName}</div>
+                      <div className="text-[11px] text-slate-400 dark:text-[#7c7296] truncate">@{u.username}</div>
+                    </div>
+                  </div>
+                  <span className="font-mono text-[10px] text-slate-400 dark:text-[#7c7296] shrink-0">{u.id}</span>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <select
+                    value={u.status}
+                    disabled={updatingId === u.id}
+                    aria-label={`Statut de ${u.displayName}`}
+                    onChange={e => handleStatusChange(u.id, e.target.value as UserStatus)}
+                    className="min-h-[38px] text-xs px-2 py-1.5 border border-slate-200 dark:border-[#241a38] rounded-lg text-slate-800 dark:text-[#f4f1fa] bg-white dark:bg-[#171026] font-medium"
+                  >
+                    <option value="ACTIVE">Actif</option>
+                    <option value="SUSPENDED">Suspendu</option>
+                    <option value="PENDING_APPROVAL">En attente</option>
+                  </select>
+
+                  <select
+                    value={u.role}
+                    disabled={updatingId === u.id}
+                    aria-label={`Rôle de ${u.displayName}`}
+                    onChange={e => handleRoleChange(u.id, e.target.value as UserRole)}
+                    className="min-h-[38px] text-xs px-2 py-1.5 border border-slate-200 dark:border-[#241a38] rounded-lg text-slate-800 dark:text-[#f4f1fa] bg-white dark:bg-[#171026] font-medium"
+                  >
+                    <option value="PARRAIN">PARRAIN</option>
+                    <option value="RESPONSABLE">RESPONSABLE</option>
+                    <option value="ADMINISTRATEUR">ADMINISTRATEUR</option>
+                  </select>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+
+        {/* Desktop Table View */}
+        <div className="hidden md:block overflow-x-auto">
           <table className="w-full text-left text-xs">
             <thead className="bg-slate-50 dark:bg-[#171026] text-slate-500 dark:text-[#9d93b8] uppercase tracking-wider text-[11px] border-b border-slate-200 dark:border-[#241a38]">
               <tr>
@@ -115,10 +206,17 @@ export const UsersView: React.FC<Props> = ({ refreshTrigger, onRefreshAll }) => 
                       {u.id}
                     </td>
                     <td className="py-3 px-4">
-                      <span className="text-[11px] text-emerald-700 dark:text-emerald-400 font-medium flex items-center gap-1.5">
-                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                        Actif
-                      </span>
+                      <select
+                        value={u.status}
+                        disabled={updatingId === u.id}
+                        aria-label={`Statut de ${u.displayName}`}
+                        onChange={e => handleStatusChange(u.id, e.target.value as UserStatus)}
+                        className="text-xs p-1.5 border border-slate-200 dark:border-[#241a38] rounded-lg text-slate-800 dark:text-[#f4f1fa] bg-white dark:bg-[#171026] font-medium focus:outline-none focus:ring-1 focus:ring-violet-500"
+                      >
+                        <option value="ACTIVE">Actif</option>
+                        <option value="SUSPENDED">Suspendu</option>
+                        <option value="PENDING_APPROVAL">En attente</option>
+                      </select>
                     </td>
                     <td className="py-3 px-4 text-slate-500 dark:text-[#9d93b8] font-mono text-[11px]">
                       {formatDate(u.createdAt)}
@@ -130,6 +228,7 @@ export const UsersView: React.FC<Props> = ({ refreshTrigger, onRefreshAll }) => 
                       <select
                         value={u.role}
                         disabled={updatingId === u.id}
+                        aria-label={`Rôle de ${u.displayName}`}
                         onChange={e => handleRoleChange(u.id, e.target.value as UserRole)}
                         className="text-xs p-1.5 border border-slate-200 dark:border-[#241a38] rounded-lg text-slate-800 dark:text-[#f4f1fa] bg-white dark:bg-[#171026] font-medium focus:outline-none focus:ring-1 focus:ring-violet-500"
                       >
