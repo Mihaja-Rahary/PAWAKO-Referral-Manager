@@ -26,6 +26,8 @@ import {
 import {
   generateSecureOAuthState,
   verifyAndConsumeOAuthState,
+  generateBotInstallState,
+  verifyBotInstallState,
   createSignedSessionToken,
   verifySignedSessionToken,
   validateWebhookTimestampAndEventId,
@@ -614,6 +616,13 @@ const handleAuthCallback = async (c: any) => {
   const code = c.req.query('code');
   const state = c.req.query('state') || '';
   const error = c.req.query('error');
+  const guildIdParam = (c.req.query('guild_id') || '').trim();
+  const isBotInstallCallback =
+    state.startsWith('botinstall_') ||
+    (Boolean(guildIdParam) &&
+      /^\d{17,20}$/.test(guildIdParam) &&
+      !state.startsWith('admin_') &&
+      !state.startsWith('parrain_'));
 
   // Détection préliminaire du portail visé depuis le state ou le cookie (avant consommation atomique)
   const cookieHeader = c.req.header('Cookie') || '';
@@ -633,6 +642,161 @@ const handleAuthCallback = async (c: any) => {
 
   let portalLoginUrl = `${targetOrigin}/${portal}/login`;
   let portalDestUrl = `${targetOrigin}/${portal}`;
+
+  if (isBotInstallCallback) {
+    if (error || !code) {
+      return c.html(`
+        <!DOCTYPE html>
+        <html>
+          <head><title>Ajout du bot annulé — PAWAKO</title></head>
+          <body style="font-family: system-ui, sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; background: #0f172a; color: white;">
+            <div style="background: #1e293b; padding: 32px; border-radius: 14px; border: 1px solid #334155; text-align: center; max-width: 440px;">
+              <h3 style="margin: 0 0 8px 0; color: #f8fafc;">Ajout du bot annulé</h3>
+              <p style="color: #cbd5e1; font-size: 13px;">L'autorisation d'ajouter le bot au serveur Discord a été annulée.</p>
+              <button id="btn-back" style="background: #7c3aed; color: white; border: none; padding: 10px 18px; border-radius: 8px; cursor: pointer; font-size: 13px; margin-top: 12px;">Retour à PAWAKO</button>
+            </div>
+            <script>
+              const targetOrigin = ${JSON.stringify(targetOrigin)};
+              document.getElementById('btn-back').addEventListener('click', function() {
+                if (window.opener) {
+                  window.close();
+                } else {
+                  window.location.href = targetOrigin + '/admin';
+                }
+              });
+            </script>
+          </body>
+        </html>
+      `, 400);
+    }
+
+    if (state.startsWith('botinstall_')) {
+      const botStateCheck = await verifyBotInstallState(state, signingSecret);
+      if (!botStateCheck.valid) {
+        return c.html(`
+          <!DOCTYPE html>
+          <html>
+            <head><title>Sécurité Bot Discord — PAWAKO</title></head>
+            <body style="font-family: system-ui, sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; background: #0f172a; color: white;">
+              <div style="background: #1e293b; padding: 32px; border-radius: 14px; border: 1px solid #dc2626; text-align: center; max-width: 440px;">
+                <h3 style="margin: 0 0 8px 0; color: #f87171;">Lien d'invitation bot expiré ou invalide</h3>
+                <p style="color: #cbd5e1; font-size: 13px;">${escapeHtml(botStateCheck.reason || 'Validation de sécurité échouée.')}</p>
+                <button id="btn-back" style="background: #334155; color: white; border: none; padding: 9px 18px; border-radius: 8px; cursor: pointer; font-size: 13px; margin-top: 12px;">Retour à PAWAKO</button>
+              </div>
+              <script>
+                const targetOrigin = ${JSON.stringify(targetOrigin)};
+                document.getElementById('btn-back').addEventListener('click', function() {
+                  if (window.opener) { window.close(); } else { window.location.href = targetOrigin + '/admin'; }
+                });
+              </script>
+            </body>
+          </html>
+        `, 403);
+      }
+    }
+
+    const redirectUri = getDiscordRedirectUri(c.env, c.req.url);
+    const clientId = c.env.DISCORD_CLIENT_ID?.trim() || '';
+    const clientSecret = c.env.DISCORD_CLIENT_SECRET?.trim() || '';
+
+    if (!clientId || !clientSecret) {
+      return c.html(`
+        <!DOCTYPE html>
+        <html>
+          <head><title>Configuration Discord incomplète — PAWAKO</title></head>
+          <body style="font-family: system-ui, sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; background: #0f172a; color: white;">
+            <div style="background: #1e293b; padding: 32px; border-radius: 14px; border: 1px solid #dc2626; text-align: center; max-width: 460px;">
+              <h3 style="margin: 0 0 8px 0; color: #f87171;">DISCORD_CLIENT_ID / DISCORD_CLIENT_SECRET manquant</h3>
+              <p style="color: #cbd5e1; font-size: 13px;">Impossible de finaliser l'échange OAuth2 Code Grant du bot sans les identifiants client Discord côté Worker.</p>
+            </div>
+          </body>
+        </html>
+      `, 503);
+    }
+
+    const tokenRes = await fetch('https://discord.com/api/v10/oauth2/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        client_id: clientId,
+        client_secret: clientSecret,
+        grant_type: 'authorization_code',
+        code,
+        redirect_uri: redirectUri,
+      }),
+    });
+
+    if (!tokenRes.ok) {
+      const errJson = (await tokenRes.json().catch(() => null)) as {
+        error?: string;
+        error_description?: string;
+      } | null;
+      const errMsg = errJson?.error_description || errJson?.error || `HTTP ${tokenRes.status}`;
+      return c.html(`
+        <!DOCTYPE html>
+        <html>
+          <head><title>Erreur ajout bot Discord — PAWAKO</title></head>
+          <body style="font-family: system-ui, sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; background: #0f172a; color: white;">
+            <div style="background: #1e293b; padding: 32px; border-radius: 14px; border: 1px solid #dc2626; text-align: center; max-width: 460px;">
+              <h3 style="margin: 0 0 8px 0; color: #f87171;">Échec de finalisation Code Grant</h3>
+              <p style="color: #cbd5e1; font-size: 13px;">Discord a refusé l'échange du code d'autorisation bot : <code>${escapeHtml(errMsg)}</code></p>
+              <p style="color: #94a3b8; font-size: 12px; margin-top: 8px;">Vérifiez que DISCORD_CLIENT_SECRET correspond à votre application Discord et que la Redirect URI <code>${escapeHtml(redirectUri)}</code> est enregistrée.</p>
+              <button id="btn-back" style="background: #334155; color: white; border: none; padding: 9px 18px; border-radius: 8px; cursor: pointer; font-size: 13px; margin-top: 12px;">Retour à PAWAKO</button>
+            </div>
+            <script>
+              const targetOrigin = ${JSON.stringify(targetOrigin)};
+              document.getElementById('btn-back').addEventListener('click', function() {
+                if (window.opener) { window.close(); } else { window.location.href = targetOrigin + '/admin'; }
+              });
+            </script>
+          </body>
+        </html>
+      `, 400);
+    }
+
+    const tokenData = (await tokenRes.json().catch(() => ({}))) as {
+      guild?: { id?: string; name?: string };
+    };
+    const addedGuildId = tokenData?.guild?.id || guildIdParam || '';
+    const addedGuildName = tokenData?.guild?.name || '';
+
+    return c.html(`
+      <!DOCTYPE html>
+      <html>
+        <head><title>Bot PAWAKO ajouté — PAWAKO</title></head>
+        <body style="font-family: system-ui, sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; background: #0f172a; color: white;">
+          <div style="background: #1e293b; padding: 34px; border-radius: 16px; border: 1px solid #10b981; text-align: center; max-width: 460px;">
+            <div style="width: 48px; height: 48px; background: rgba(16,185,129,0.18); color: #34d399; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 16px auto; font-size: 24px;">✓</div>
+            <h2 style="margin: 0 0 8px 0; font-size: 20px; color: #f8fafc;">Bot Discord ajouté avec succès</h2>
+            <p style="color: #cbd5e1; font-size: 14px; margin: 0 0 16px 0;">
+              Serveur connecté : <strong>${escapeHtml(addedGuildName || addedGuildId || 'Serveur Discord')}</strong>
+            </p>
+            <p style="color: #94a3b8; font-size: 12px; margin: 0 0 18px 0;">
+              Vous pouvez fermer cet onglet et cliquer sur « Scanner » ou « Détecter &amp; tout relier » dans votre espace PAWAKO.
+            </p>
+            <button id="btn-done" style="background: #7c3aed; color: white; border: none; padding: 10px 20px; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 600;">Retour au Dashboard</button>
+          </div>
+          <script>
+            const targetOrigin = ${JSON.stringify(targetOrigin)};
+            const payload = {
+              type: 'DISCORD_BOT_INVITED',
+              guildId: ${JSON.stringify(addedGuildId)},
+              guildName: ${JSON.stringify(addedGuildName)}
+            };
+            if (window.opener) {
+              try { window.opener.postMessage(payload, targetOrigin); } catch (e) {}
+            }
+            document.getElementById('btn-done').addEventListener('click', function() {
+              if (window.opener) { window.close(); } else { window.location.replace(targetOrigin + '/admin'); }
+            });
+            if (window.opener) {
+              setTimeout(function() { try { window.close(); } catch (e) {} }, 900);
+            }
+          </script>
+        </body>
+      </html>
+    `, 200);
+  }
 
   // Vérifier d'abord l'annulation Discord ou l'absence de code avant de consommer le nonce dans Firestore
   if (error || !code) {
@@ -2055,9 +2219,19 @@ app.get('/api/discord/bot/discover', async c => {
 
   const envGuildIds = getEnvGuildIds(c.env);
   const savedServers = await repo.getDiscordServers(envGuildIds);
+  const redirectUri = getDiscordRedirectUri(c.env, c.req.url);
+  let botInstallState: string | undefined;
+  try {
+    botInstallState = await generateBotInstallState(getValidatedSessionSecret(c.env));
+  } catch {
+    botInstallState = undefined;
+  }
+
   const full = await discoverDiscordBotEnvironment({
     botToken: c.env.DISCORD_BOT_TOKEN?.trim(),
     clientId: c.env.DISCORD_CLIENT_ID?.trim(),
+    redirectUri,
+    botInstallState,
     envGuildIds,
     savedServers,
     includeMembers: false,
@@ -2080,9 +2254,19 @@ app.post('/api/discord/bot/auto-configure', async c => {
   }
 
   const body = await c.req.json().catch(() => ({}));
+  const redirectUri = getDiscordRedirectUri(c.env, c.req.url);
+  let botInstallState: string | undefined;
+  try {
+    botInstallState = await generateBotInstallState(getValidatedSessionSecret(c.env));
+  } catch {
+    botInstallState = undefined;
+  }
+
   const result = await repo.autoConfigureFromDiscordBot({
     botToken: c.env.DISCORD_BOT_TOKEN?.trim(),
     clientId: c.env.DISCORD_CLIENT_ID?.trim(),
+    redirectUri,
+    botInstallState,
     envGuildIds: getEnvGuildIds(c.env),
     overwriteExisting: Boolean(body?.overwriteExisting),
     syncInvites: body?.syncInvites !== false,

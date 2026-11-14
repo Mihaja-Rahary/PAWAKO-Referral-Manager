@@ -3066,6 +3066,8 @@ export class FirestoreRepository {
   async autoConfigureFromDiscordBot(params: {
     botToken?: string;
     clientId?: string;
+    redirectUri?: string;
+    botInstallState?: string;
     envGuildIds?: Partial<Record<DiscordServerType, string>>;
     overwriteExisting?: boolean;
     syncInvites?: boolean;
@@ -3092,6 +3094,8 @@ export class FirestoreRepository {
     const fullDiscovery = await discoverDiscordBotEnvironment({
       botToken: params.botToken,
       clientId: params.clientId,
+      redirectUri: params.redirectUri,
+      botInstallState: params.botInstallState,
       envGuildIds: params.envGuildIds,
       savedServers: existingServers,
       includeMembers: params.syncMembers !== false,

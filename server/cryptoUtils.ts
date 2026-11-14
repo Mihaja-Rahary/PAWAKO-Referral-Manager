@@ -424,6 +424,53 @@ export async function verifyAndConsumeOAuthState(
   return { valid: true, portal, nonce };
 }
 
+/**
+ * Génère un state signé pour l'installation OAuth2 Code Grant du bot Discord (valide 2h, multi-serveurs).
+ */
+export async function generateBotInstallState(secret: string): Promise<string> {
+  if (!secret || typeof secret !== 'string' || secret.trim().length < 32) {
+    throw new Error('SESSION_SECRET obligatoire manquant ou inférieur à 32 caractères');
+  }
+  const nonce = crypto.randomUUID();
+  const timestamp = Date.now();
+  const message = `botinstall:${nonce}:${timestamp}`;
+  const sig = await hmacSha256(secret, message);
+  return `botinstall_${nonce}_${timestamp}_${sig.slice(0, 16)}`;
+}
+
+/**
+ * Vérifie la signature HMAC et la validité (2 heures) d'un state d'installation du bot Discord.
+ */
+export async function verifyBotInstallState(
+  state: string,
+  secret: string
+): Promise<{ valid: boolean; reason?: string }> {
+  if (!secret || typeof secret !== 'string' || secret.trim().length < 32) {
+    return { valid: false, reason: 'SESSION_SECRET manquant.' };
+  }
+  const parts = (state || '').trim().split('_');
+  if (parts.length !== 4 || parts[0] !== 'botinstall' || parts.some(p => !p)) {
+    return { valid: false, reason: 'Format de state bot invalide.' };
+  }
+  const [, nonce, timestampStr, receivedSig] = parts;
+  if (!/^[a-zA-Z0-9-]{8,128}$/.test(nonce) || !/^[1-9]\d{9,15}$/.test(timestampStr)) {
+    return { valid: false, reason: 'Nonce ou horodatage bot invalide.' };
+  }
+  const timestamp = parseInt(timestampStr, 10);
+  const expectedSig = (await hmacSha256(secret, `botinstall:${nonce}:${timestamp}`)).slice(0, 16);
+  if (!constantTimeEqual(receivedSig, expectedSig)) {
+    return { valid: false, reason: 'Signature HMAC bot invalide.' };
+  }
+  const now = Date.now();
+  if (now - timestamp > 2 * 60 * 60 * 1000) {
+    return { valid: false, reason: "Le lien d'invitation bot a expiré (> 2 heures). Veuillez cliquer sur Scanner." };
+  }
+  if (timestamp > now + 60000) {
+    return { valid: false, reason: 'Horodatage futur détecté.' };
+  }
+  return { valid: true };
+}
+
 // =============================================================================
 // 2. JETONS DE SESSION CRYPTOGRAPHIQUES (COMPATIBILITÉ 3RD-PARTY COOKIES)
 // =============================================================================

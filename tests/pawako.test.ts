@@ -81,6 +81,18 @@ class MockExternalServices {
     }>;
     membersForbidden?: boolean;
   }> = [];
+  public mockBotApplication: {
+    id: string;
+    bot_public: boolean;
+    bot_require_code_grant: boolean;
+    redirect_uris: string[];
+  } = {
+    id: '123456789012345678',
+    bot_public: true,
+    bot_require_code_grant: false,
+    redirect_uris: [],
+  };
+  public discordBotInstallCodes = new Map<string, { guildId: string; guildName: string }>();
 
   private getCollection(col: string): Map<string, StoredDoc> {
     let map = this.collections.get(col);
@@ -378,6 +390,21 @@ class MockExternalServices {
               ? init.body
               : new URLSearchParams(typeof init?.body === 'string' ? init.body : '');
           const code = params.get('code') || '';
+          const botInstall = this.discordBotInstallCodes.get(code);
+          if (botInstall) {
+            return new Response(
+              JSON.stringify({
+                access_token: `bot-install-token:${code}`,
+                token_type: 'Bearer',
+                scope: 'bot applications.commands',
+                guild: { id: botInstall.guildId, name: botInstall.guildName },
+              }),
+              {
+                status: 200,
+                headers: { 'Content-Type': 'application/json' },
+              }
+            );
+          }
           if (!this.discordAuthCodes.has(code)) {
             return new Response(JSON.stringify({ error: 'invalid_grant' }), {
               status: 400,
@@ -385,6 +412,20 @@ class MockExternalServices {
             });
           }
           return new Response(JSON.stringify({ access_token: `discord-token:${code}`, token_type: 'Bearer' }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+
+        if (url.pathname === '/api/v10/applications/@me' && method === 'GET') {
+          const authHeader = (init?.headers as Record<string, string>)?.Authorization || '';
+          if (!authHeader.startsWith('Bot ')) {
+            return new Response(JSON.stringify({ message: '401: Unauthorized' }), {
+              status: 401,
+              headers: { 'Content-Type': 'application/json' },
+            });
+          }
+          return new Response(JSON.stringify(this.mockBotApplication), {
             status: 200,
             headers: { 'Content-Type': 'application/json' },
           });
@@ -2102,6 +2143,72 @@ describe('PAWAKO Referral Manager — Tests Complets Isolés (Mockés)', () => {
     assert.equal(createRefJson.referrer.inviteChannelId, '900000000000000011');
     assert.match(createRefJson.referrer.inviteUrl, /^https:\/\/discord\.gg\/realDisc/);
   });
+
+  it('7.6 Bot Discord : gère "Requires OAuth2 Code Grant" automatiquement (URL + échange /auth/callback sans session)', async () => {
+    mock.mockBotApplication = {
+      id: env.DISCORD_CLIENT_ID!,
+      bot_public: true,
+      bot_require_code_grant: true,
+      redirect_uris: [env.DISCORD_REDIRECT_URI!],
+    };
+
+    const adminLogin = await loginViaWorkerOAuth(mock, env, 'admin', {
+      id: env.INITIAL_ADMIN_DISCORD_ID!,
+      username: 'super_admin',
+      global_name: 'Super Admin',
+      avatar: null,
+    });
+
+    const discoverRes = await app.fetch(
+      new Request(`${WORKER_ORIGIN}/api/discord/bot/discover`, {
+        headers: {
+          Cookie: `pawako_session=${adminLogin.sessionCookie}`,
+          Origin: FRONTEND_ORIGIN,
+        },
+      }),
+      env
+    );
+    assert.equal(discoverRes.status, 200);
+    const discoverJson = (await discoverRes.json()) as any;
+    assert.equal(discoverJson.bot.requiresCodeGrant, true);
+    assert.equal(discoverJson.bot.redirectUriRegistered, true);
+
+    const inviteUrl = new URL(discoverJson.bot.inviteBotUrl);
+    assert.equal(inviteUrl.searchParams.get('response_type'), 'code');
+    assert.equal(inviteUrl.searchParams.get('redirect_uri'), env.DISCORD_REDIRECT_URI);
+    const state = inviteUrl.searchParams.get('state') || '';
+    assert.match(state, /^botinstall_/);
+
+    // Simuler la redirection Discord après autorisation du bot sur un serveur
+    mock.discordBotInstallCodes.set('bot-grant-code-1', {
+      guildId: GUILD_IDS.RECRUTEMENT,
+      guildName: 'PAWAKO Recrutement Officiel',
+    });
+
+    const callbackRes = await app.fetch(
+      new Request(
+        `${WORKER_ORIGIN}/auth/callback?code=bot-grant-code-1&guild_id=${GUILD_IDS.RECRUTEMENT}&permissions=8&state=${encodeURIComponent(state)}`
+      ),
+      env
+    );
+    assert.equal(callbackRes.status, 200);
+    assert.equal(callbackRes.headers.get('Set-Cookie'), null);
+    const html = await callbackRes.text();
+    assert.match(html, /Bot Discord ajouté avec succès/);
+    assert.match(html, /PAWAKO Recrutement Officiel/);
+    assert.match(html, /DISCORD_BOT_INVITED/);
+
+    // Vérifier aussi un callback direct sans state (ex: depuis OAuth2 URL Generator du Developer Portal)
+    const directRes = await app.fetch(
+      new Request(
+        `${WORKER_ORIGIN}/auth/callback?code=bot-grant-code-1&guild_id=${GUILD_IDS.RECRUTEMENT}&permissions=8`
+      ),
+      env
+    );
+    assert.equal(directRes.status, 200);
+    assert.equal(directRes.headers.get('Set-Cookie'), null);
+  });
 });
+
 
 

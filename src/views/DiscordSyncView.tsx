@@ -83,6 +83,20 @@ export const DiscordSyncView: React.FC<Props> = ({
     fetchDiscovery();
   }, [refreshTrigger]);
 
+  useEffect(() => {
+    const onMessage = (event: MessageEvent) => {
+      if (event.data?.type === 'DISCORD_BOT_INVITED') {
+        const label = event.data.guildName || event.data.guildId || 'votre serveur Discord';
+        setActionError(null);
+        setActionSuccess(`Bot ajouté sur « ${label} ». Actualisation de la liste des serveurs...`);
+        fetchDiscovery();
+        fetchServers();
+      }
+    };
+    window.addEventListener('message', onMessage);
+    return () => window.removeEventListener('message', onMessage);
+  }, []);
+
   const handleAutoConfigure = async () => {
     try {
       setIsAutoConfiguring(true);
@@ -303,6 +317,29 @@ export const DiscordSyncView: React.FC<Props> = ({
           <div className="p-3 bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-500/30 text-rose-800 dark:text-rose-200 rounded-lg text-xs flex items-start gap-2">
             <AlertCircle className="w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0 mt-0.5" />
             <span>{actionError}</span>
+          </div>
+        )}
+
+        {discovery?.bot?.isBotPublic === false && (
+          <div className="p-3 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-500/30 text-amber-900 dark:text-amber-200 rounded-lg text-xs flex items-start gap-2.5">
+            <AlertCircle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+            <div>
+              <strong>Bot privé (Public Bot désactivé) :</strong> seul le compte propriétaire de l'application sur
+              Discord Developer Portal peut inviter ce bot sur un serveur.
+            </div>
+          </div>
+        )}
+
+        {discovery?.bot?.requiresCodeGrant && discovery.bot.redirectUriRegistered === false && (
+          <div className="p-3 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-500/30 text-amber-900 dark:text-amber-200 rounded-lg text-xs flex items-start gap-2.5">
+            <AlertCircle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+            <div>
+              <strong>« Requires OAuth2 Code Grant » est activé sur Discord Developer Portal</strong>, mais la Redirect
+              URI du Worker n'est pas encore listée dans <em>OAuth2 → Redirects</em>. Soit ajoutez l'URL{' '}
+              <code className="px-1 py-0.5 rounded bg-amber-100 dark:bg-amber-900/40 font-mono">/auth/callback</code>{' '}
+              du Worker dans <em>OAuth2 → Redirects</em>, soit décochez <em>Requires OAuth2 Code Grant</em> dans
+              l'onglet <em>Bot</em>.
+            </div>
           </div>
         )}
 

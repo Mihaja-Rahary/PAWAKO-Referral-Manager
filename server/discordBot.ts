@@ -976,6 +976,8 @@ export function suggestRoleMappingsForGuild(
 export async function fetchBotIdentity(params: {
   botToken?: string;
   clientId?: string;
+  redirectUri?: string;
+  botInstallState?: string;
 }): Promise<{
   ok: boolean;
   bot: DiscordBotIdentity | null;
@@ -993,12 +995,15 @@ export async function fetchBotIdentity(params: {
   }
 
   try {
-    const res = await fetch(`${DISCORD_API_BASE}/users/@me`, {
-      headers: {
-        Authorization: `Bot ${token}`,
-        'User-Agent': 'PawakoReferralManager/1.0',
-      },
-    });
+    const authHeaders = {
+      Authorization: `Bot ${token}`,
+      'User-Agent': 'PawakoReferralManager/1.0',
+    };
+
+    const [res, appRes] = await Promise.all([
+      fetch(`${DISCORD_API_BASE}/users/@me`, { headers: authHeaders }),
+      fetch(`${DISCORD_API_BASE}/applications/@me`, { headers: authHeaders }).catch(() => null),
+    ]);
 
     if (res.status === 401) {
       return {
@@ -1026,10 +1031,44 @@ export async function fetchBotIdentity(params: {
       avatar?: string | null;
     };
 
-    const appId = (params.clientId || '').trim() || data.id;
-    const inviteBotUrl = `https://discord.com/oauth2/authorize?client_id=${encodeURIComponent(
+    const appData =
+      appRes && appRes.ok
+        ? ((await appRes.json().catch(() => null)) as {
+            id?: string;
+            bot_public?: boolean;
+            bot_require_code_grant?: boolean;
+            redirect_uris?: string[];
+          } | null)
+        : null;
+
+    const appId = (params.clientId || '').trim() || (appData?.id ? String(appData.id) : '') || data.id;
+    const requiresCodeGrant = appData ? Boolean(appData.bot_require_code_grant) : undefined;
+    const isBotPublic = appData ? appData.bot_public !== false : undefined;
+    const registeredRedirects = Array.isArray(appData?.redirect_uris) ? appData.redirect_uris.map(String) : [];
+    const normalizedRedirectUri = (params.redirectUri || '').trim();
+    const redirectUriRegistered =
+      appData && normalizedRedirectUri ? registeredRedirects.includes(normalizedRedirectUri) : undefined;
+
+    const directInviteBotUrl = `https://discord.com/oauth2/authorize?client_id=${encodeURIComponent(
       appId
     )}&permissions=8&scope=bot%20applications.commands`;
+
+    let codeGrantInviteBotUrl: string | undefined;
+    if (normalizedRedirectUri) {
+      const cgParams = new URLSearchParams({
+        client_id: appId,
+        permissions: '8',
+        scope: 'bot applications.commands',
+        response_type: 'code',
+        redirect_uri: normalizedRedirectUri,
+      });
+      if (params.botInstallState) {
+        cgParams.set('state', params.botInstallState);
+      }
+      codeGrantInviteBotUrl = `https://discord.com/oauth2/authorize?${cgParams.toString()}`;
+    }
+
+    const inviteBotUrl = requiresCodeGrant && codeGrantInviteBotUrl ? codeGrantInviteBotUrl : directInviteBotUrl;
 
     return {
       ok: true,
@@ -1039,6 +1078,11 @@ export async function fetchBotIdentity(params: {
         displayName: (data.global_name || data.username || 'Bot PAWAKO').trim(),
         avatar: buildDiscordAvatarUrl(data.id, data.avatar),
         inviteBotUrl,
+        directInviteBotUrl,
+        codeGrantInviteBotUrl,
+        requiresCodeGrant,
+        isBotPublic,
+        redirectUriRegistered,
       },
     };
   } catch (err: any) {
@@ -1054,6 +1098,8 @@ export async function fetchBotIdentity(params: {
 export async function discoverDiscordBotEnvironment(params: {
   botToken?: string;
   clientId?: string;
+  redirectUri?: string;
+  botInstallState?: string;
   envGuildIds?: Partial<Record<DiscordServerType, string>>;
   savedServers?: DiscordServerInfo[];
   includeMembers?: boolean;
@@ -1061,7 +1107,12 @@ export async function discoverDiscordBotEnvironment(params: {
   const token = (params.botToken || '').trim();
   const hasBotToken = Boolean(token);
 
-  const identity = await fetchBotIdentity({ botToken: token, clientId: params.clientId });
+  const identity = await fetchBotIdentity({
+    botToken: token,
+    clientId: params.clientId,
+    redirectUri: params.redirectUri,
+    botInstallState: params.botInstallState,
+  });
   if (!identity.ok || !identity.bot) {
     return {
       ok: false,

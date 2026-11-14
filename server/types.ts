@@ -268,6 +268,11 @@ export interface DiscordBotIdentity {
   displayName: string;
   avatar: string | null;
   inviteBotUrl: string;
+  directInviteBotUrl?: string;
+  codeGrantInviteBotUrl?: string;
+  requiresCodeGrant?: boolean;
+  isBotPublic?: boolean;
+  redirectUriRegistered?: boolean;
 }
 
 export interface DiscordBotDiscoveryResult {
