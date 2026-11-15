@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   ParrainGuide,
   ParrainGuideBlock,
@@ -9,6 +9,7 @@ import {
 } from '../types';
 import { api } from '../api';
 import { ParrainGuideRenderer } from '../components/ParrainGuideRenderer';
+import { SimpleRichTextEditor } from '../components/SimpleRichTextEditor';
 import { formatDate } from '../utils/statusUtils';
 import {
   BookOpen,
@@ -28,6 +29,10 @@ import {
   AlertCircle,
   CheckCircle2,
   Lock,
+  Search,
+  RotateCcw,
+  X,
+  FilePlus2,
 } from 'lucide-react';
 
 interface Props {
@@ -36,8 +41,62 @@ interface Props {
 
 const FIRESTORE_SAFE_LIMIT_BYTES = 800_000;
 
+const CATEGORY_PRESETS = ['Onboarding', 'Rémunération', 'Bonnes pratiques', 'Règles & Suivi', 'Outils'];
+
+type StarterTemplate = 'onboarding' | 'remuneration' | 'blank';
+
 function createBlockId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+}
+
+function buildStarterBlocks(template: StarterTemplate, vaType: VAType): ParrainGuideBlock[] {
+  const trackLabel = vaType === 'CHATTEUR' ? 'VA Chatteur' : 'VA Instagram';
+  if (template === 'onboarding') {
+    return [
+      {
+        id: createBlockId('txt'),
+        type: 'TEXT',
+        title: `Bienvenue dans le parcours ${trackLabel}`,
+        body: `## Vos premières étapes de parrainage\n\n1. Vérifiez que votre lien Discord officiel est actif dans l'onglet **Mes Filleuls & Lien**.\n2. Présentez clairement les attentes du poste **${trackLabel}** avant d'envoyer votre lien.\n3. Suivez chaque filleul dès son arrivée jusqu'à sa mise en production.`,
+      },
+      {
+        id: createBlockId('call'),
+        type: 'CALLOUT',
+        tone: 'condition',
+        title: 'Point clé à retenir',
+        body: `Seuls les filleuls actifs en **${trackLabel}** sont affichés dans votre espace et éligibles à la rémunération.`,
+      },
+    ];
+  }
+  if (template === 'remuneration') {
+    return [
+      {
+        id: createBlockId('tbl'),
+        type: 'TABLE',
+        title: `Barème & Paliers ${trackLabel}`,
+        headers: ['Palier', 'Condition de validation', 'Rémunération'],
+        rows: [
+          ['Palier 1', 'Filleul validé et actif 14 jours', 'À compléter'],
+          ['Palier 2', 'Objectif de performance atteint', 'À compléter'],
+        ],
+      },
+      {
+        id: createBlockId('call'),
+        type: 'CALLOUT',
+        tone: 'info',
+        title: 'Modalités de versement',
+        body: 'Précisez ici les dates de calcul et les conditions de versement des primes.',
+      },
+    ];
+  }
+  return [
+    {
+      id: createBlockId('txt'),
+      type: 'TEXT',
+      title: 'Introduction',
+      body: 'Rédigez le contenu de votre guide avec la barre de mise en forme ci-dessus.',
+    },
+  ];
 }
 
 async function compressImageFileToDataUrl(file: File): Promise<string> {
@@ -47,7 +106,7 @@ async function compressImageFileToDataUrl(file: File): Promise<string> {
 
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.onerror = () => reject(new Error("Impossible de lire le fichier image."));
+    reader.onerror = () => reject(new Error('Impossible de lire le fichier image.'));
     reader.onload = () => {
       const img = new Image();
       img.onerror = () => reject(new Error("Format d'image non reconnu par le navigateur."));
@@ -74,7 +133,6 @@ async function compressImageFileToDataUrl(file: File): Promise<string> {
 
           ctx.drawImage(img, 0, 0, targetW, targetH);
 
-          // Tente WebP (plus léger) puis JPEG en secours
           let dataUrl = canvas.toDataURL('image/webp', 0.78);
           if (!dataUrl.startsWith('data:image/webp')) {
             dataUrl = canvas.toDataURL('image/jpeg', 0.78);
@@ -107,10 +165,13 @@ async function compressImageFileToDataUrl(file: File): Promise<string> {
 export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => {
   const isAdmin = currentUserRole === 'ADMINISTRATEUR';
 
-  const [guides, setGuides] = useState<Record<VAType, ParrainGuide> | null>(null);
+  const [guideList, setGuideList] = useState<ParrainGuide[]>([]);
   const [activeVaType, setActiveVaType] = useState<VAType>('CHATTEUR');
+  const [selectedGuideId, setSelectedGuideId] = useState<string>('CHATTEUR');
   const [draft, setDraft] = useState<ParrainGuide | null>(null);
+  const [isDirty, setIsDirty] = useState(false);
   const [mode, setMode] = useState<'edit' | 'preview'>('edit');
+  const [guideSearch, setGuideSearch] = useState('');
 
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
@@ -119,7 +180,27 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loadErrorStatus, setLoadErrorStatus] = useState<number | null>(null);
   const [feedback, setFeedback] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
-  const activeVaTypeRef = React.useRef<VAType>(activeVaType);
+
+  // Create Modal state
+  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [newTitle, setNewTitle] = useState('');
+  const [newVaType, setNewVaType] = useState<VAType>('CHATTEUR');
+  const [newCategory, setNewCategory] = useState('Onboarding');
+  const [newSubtitle, setNewSubtitle] = useState('');
+  const [newTemplate, setNewTemplate] = useState<StarterTemplate>('onboarding');
+  const [createError, setCreateError] = useState<string | null>(null);
+  const [isCreating, setIsCreating] = useState(false);
+
+  // Delete / Reset Confirmation Modal state
+  const [confirmDeleteGuide, setConfirmDeleteGuide] = useState<ParrainGuide | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+
+  // Unsaved guard modal when switching guides
+  const [pendingSwitchGuide, setPendingSwitchGuide] = useState<ParrainGuide | null>(null);
+
+  const selectedGuideIdRef = useRef(selectedGuideId);
+  selectedGuideIdRef.current = selectedGuideId;
+  const activeVaTypeRef = useRef(activeVaType);
   activeVaTypeRef.current = activeVaType;
 
   const loadGuides = useCallback(async () => {
@@ -128,9 +209,25 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
       setLoadError(null);
       setLoadErrorStatus(null);
       const res = await api.getAdminParrainGuides();
-      setGuides(res.guides);
-      const currentTrack = activeVaTypeRef.current;
-      setDraft(structuredClone(res.guides[currentTrack]));
+      const list: ParrainGuide[] =
+        Array.isArray(res.guideList) && res.guideList.length > 0
+          ? res.guideList
+          : [res.guides.CHATTEUR, res.guides.INSTAGRAM].filter(Boolean);
+
+      setGuideList(list);
+
+      const target =
+        list.find(g => g.id === selectedGuideIdRef.current) ||
+        list.find(g => g.vaType === activeVaTypeRef.current) ||
+        list[0] ||
+        null;
+
+      if (target) {
+        setSelectedGuideId(target.id);
+        setActiveVaType(target.vaType);
+        setDraft(structuredClone(target));
+        setIsDirty(false);
+      }
     } catch (err: any) {
       setLoadErrorStatus(typeof err?.status === 'number' ? err.status : null);
       setLoadError(err?.message || 'Impossible de charger les guides parrains.');
@@ -143,12 +240,56 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
     loadGuides();
   }, [loadGuides]);
 
-  const handleSelectTrack = (vaType: VAType) => {
-    setActiveVaType(vaType);
+  const guidesByTrack = useMemo(() => {
+    return {
+      CHATTEUR: guideList.filter(g => g.vaType === 'CHATTEUR'),
+      INSTAGRAM: guideList.filter(g => g.vaType === 'INSTAGRAM'),
+    };
+  }, [guideList]);
+
+  const filteredTrackGuides = useMemo(() => {
+    const trackList = guidesByTrack[activeVaType] || [];
+    const q = guideSearch.trim().toLowerCase();
+    if (!q) return trackList;
+    return trackList.filter(
+      g =>
+        g.title.toLowerCase().includes(q) ||
+        (g.category || '').toLowerCase().includes(q) ||
+        (g.subtitle || '').toLowerCase().includes(q)
+    );
+  }, [guidesByTrack, activeVaType, guideSearch]);
+
+  const applyGuideSelection = (target: ParrainGuide) => {
+    setSelectedGuideId(target.id);
+    setActiveVaType(target.vaType);
+    setDraft(structuredClone(target));
+    setIsDirty(false);
     setFeedback(null);
-    if (guides?.[vaType]) {
-      setDraft(structuredClone(guides[vaType]));
+  };
+
+  const handleSelectGuide = (target: ParrainGuide) => {
+    if (draft && target.id === draft.id) return;
+    if (isDirty) {
+      setPendingSwitchGuide(target);
+      return;
     }
+    applyGuideSelection(target);
+  };
+
+  const handleSelectTrack = (vaType: VAType) => {
+    if (vaType === activeVaType) return;
+    setGuideSearch('');
+    const trackGuides = guidesByTrack[vaType] || [];
+    const primary = trackGuides.find(g => g.id === vaType) || trackGuides[0];
+    if (!primary) {
+      setActiveVaType(vaType);
+      return;
+    }
+    if (isDirty) {
+      setPendingSwitchGuide(primary);
+      return;
+    }
+    applyGuideSelection(primary);
   };
 
   const estimatedBytes = useMemo(() => {
@@ -166,6 +307,7 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
 
   const updateDraft = (updater: (prev: ParrainGuide) => ParrainGuide) => {
     setDraft(prev => (prev ? updater(prev) : prev));
+    setIsDirty(true);
     setFeedback(null);
   };
 
@@ -178,9 +320,7 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
         type: 'TABLE',
         title: 'Nouveau tableau',
         headers: ['Critère', 'Détail', 'Validation'],
-        rows: [
-          ['Exemple ligne 1', 'À compléter', 'Condition requise'],
-        ],
+        rows: [['Exemple ligne 1', 'À compléter', 'Condition requise']],
       };
     } else if (type === 'IMAGE') {
       newBlock = {
@@ -196,14 +336,14 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
         type: 'CALLOUT',
         tone: 'condition',
         title: 'Condition / Point d’attention',
-        body: 'Expliquez ici la règle importante ou la bonne pratique à respecter.',
+        body: 'Expliquez ici la **règle importante** ou la bonne pratique à respecter.',
       };
     } else {
       newBlock = {
         id: createBlockId('txt'),
         type: 'TEXT',
         title: 'Nouvelle section',
-        body: 'Rédigez votre contenu ici.\n\n- Utilisez **gras** pour mettre en valeur\n- Utilisez *italique* pour les précisions',
+        body: 'Rédigez votre contenu ici.\n\n- Utilisez la barre ci-dessus pour mettre en **gras**, *italique*, ou ajouter des listes\n- Ajoutez des liens utiles pour accompagner les nouveaux parrains',
       };
     }
 
@@ -317,25 +457,29 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
     try {
       setIsSaving(true);
       setFeedback(null);
-      const res = await api.saveAdminParrainGuide(activeVaType, {
+      const res = await api.saveAdminParrainGuide(draft.id, {
+        vaType: draft.vaType,
         title: draft.title.trim(),
         subtitle: draft.subtitle || '',
+        category: draft.category || (draft.isPrimary ? 'Guide principal' : 'Onboarding'),
+        order: typeof draft.order === 'number' ? draft.order : draft.isPrimary ? 0 : 10,
         heroImageUrl: draft.heroImageUrl || null,
         blocks: draft.blocks,
       });
 
-      setGuides(prev =>
-        prev
-          ? {
-              ...prev,
-              [activeVaType]: res.guide,
-            }
-          : prev
-      );
+      setGuideList(prev => {
+        const exists = prev.some(g => g.id === res.guide.id);
+        return exists ? prev.map(g => (g.id === res.guide.id ? res.guide : g)) : [...prev, res.guide];
+      });
+      setActiveVaType(res.guide.vaType);
+      setSelectedGuideId(res.guide.id);
       setDraft(structuredClone(res.guide));
+      setIsDirty(false);
       setFeedback({
         type: 'ok',
-        text: `Guide ${activeVaType === 'CHATTEUR' ? 'VA Chatteur' : 'VA Instagram'} enregistré et publié immédiatement dans l'accueil des parrains.`,
+        text: `Guide « ${res.guide.title} » enregistré et publié dans l'accueil des parrains ${
+          res.guide.vaType === 'CHATTEUR' ? 'VA Chatteur' : 'VA Instagram'
+        }.`,
       });
     } catch (err: any) {
       setFeedback({
@@ -344,6 +488,102 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
       });
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  const openCreateModal = () => {
+    setNewTitle('');
+    setNewVaType(activeVaType);
+    setNewCategory('Onboarding');
+    setNewSubtitle('');
+    setNewTemplate('onboarding');
+    setCreateError(null);
+    setShowCreateModal(true);
+  };
+
+  const handleCreateGuide = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!isAdmin || isCreating) return;
+    if (!newTitle.trim()) {
+      setCreateError('Veuillez saisir un titre pour le nouveau guide.');
+      return;
+    }
+
+    try {
+      setIsCreating(true);
+      setCreateError(null);
+      const nextOrder = (guidesByTrack[newVaType]?.length || 1) * 10;
+      const res = await api.createAdminParrainGuide({
+        vaType: newVaType,
+        title: newTitle.trim(),
+        subtitle: newSubtitle.trim(),
+        category: newCategory.trim() || 'Onboarding',
+        order: nextOrder,
+        heroImageUrl: null,
+        blocks: buildStarterBlocks(newTemplate, newVaType),
+      });
+
+      setGuideList(prev => [...prev, res.guide]);
+      setShowCreateModal(false);
+      setActiveVaType(res.guide.vaType);
+      setSelectedGuideId(res.guide.id);
+      setDraft(structuredClone(res.guide));
+      setIsDirty(false);
+      setMode('edit');
+      setFeedback({
+        type: 'ok',
+        text: `Nouveau guide « ${res.guide.title} » créé. Vous pouvez maintenant enrichir son contenu et publier vos modifications.`,
+      });
+    } catch (err: any) {
+      setCreateError(err?.message || 'Impossible de créer le guide.');
+    } finally {
+      setIsCreating(false);
+    }
+  };
+
+  const handleConfirmDeleteGuide = async () => {
+    if (!confirmDeleteGuide || !isAdmin || isDeleting) return;
+    try {
+      setIsDeleting(true);
+      const target = confirmDeleteGuide;
+      const res = await api.deleteAdminParrainGuide(target.id);
+
+      const nextList: ParrainGuide[] =
+        Array.isArray(res.guideList) && res.guideList.length > 0
+          ? res.guideList
+          : guideList.filter(g => g.id !== target.id);
+
+      setGuideList(nextList);
+      setConfirmDeleteGuide(null);
+
+      const fallbackGuide =
+        (target.isPrimary
+          ? nextList.find(g => g.id === target.id)
+          : nextList.find(g => g.id === target.vaType)) ||
+        nextList.find(g => g.vaType === target.vaType) ||
+        nextList[0] ||
+        null;
+
+      if (fallbackGuide) {
+        setActiveVaType(fallbackGuide.vaType);
+        setSelectedGuideId(fallbackGuide.id);
+        setDraft(structuredClone(fallbackGuide));
+      }
+      setIsDirty(false);
+      setFeedback({
+        type: 'ok',
+        text: res.resetToDefault
+          ? `Le guide principal « ${target.title} » a été réinitialisé sur le modèle par défaut.`
+          : `Le guide « ${target.title} » a été supprimé définitivement.`,
+      });
+    } catch (err: any) {
+      setConfirmDeleteGuide(null);
+      setFeedback({
+        type: 'err',
+        text: err?.message || 'Erreur lors de la suppression du guide.',
+      });
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -388,6 +628,8 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
     );
   }
 
+  const isPrimaryDraft = Boolean(draft.isPrimary || draft.id === 'CHATTEUR' || draft.id === 'INSTAGRAM');
+
   return (
     <div className="space-y-5">
       {/* Top Bar */}
@@ -396,10 +638,10 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
           <div className="space-y-1">
             <h2 className="text-base font-bold text-slate-900 dark:text-[#f4f1fa] flex items-center gap-2">
               <BookOpen className="w-4 h-4 text-violet-600 dark:text-violet-400" />
-              <span>Guides &amp; Accueil Parrains</span>
+              <span>Guides &amp; Onboarding Parrains</span>
             </h2>
             <p className="text-xs text-slate-500 dark:text-[#9d93b8]">
-              Personnalisez la page d&apos;accueil affichée aux parrains selon leur spécialité (rôle, rémunération, conditions de suivi, bonnes pratiques, tableaux et photos).
+              Créez, modifiez et organisez les guides affichés dans l&apos;accueil des nouveaux parrains (texte enrichi, conditions, tableaux et photos).
             </p>
           </div>
 
@@ -433,22 +675,33 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
             </div>
 
             {isAdmin && (
-              <button
-                type="button"
-                onClick={handleSave}
-                disabled={isSaving || isOverSizeLimit}
-                className="min-h-[40px] px-4 py-2 text-xs font-semibold text-white bg-violet-600 hover:bg-violet-500 disabled:opacity-50 rounded-lg transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
-              >
-                {isSaving ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
-                <span>{isSaving ? 'Enregistrement...' : 'Enregistrer & Publier'}</span>
-              </button>
+              <>
+                <button
+                  type="button"
+                  onClick={openCreateModal}
+                  className="min-h-[40px] px-3.5 py-2 text-xs font-semibold text-slate-800 dark:text-[#f4f1fa] bg-slate-100 dark:bg-[#171026] hover:bg-slate-200 dark:hover:bg-[#231839] border border-slate-200 dark:border-[#241a38] rounded-lg transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
+                >
+                  <FilePlus2 className="w-3.5 h-3.5 text-violet-600 dark:text-violet-400" />
+                  <span>Nouveau guide</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleSave}
+                  disabled={isSaving || isOverSizeLimit}
+                  className="min-h-[40px] px-4 py-2 text-xs font-semibold text-white bg-violet-600 hover:bg-violet-500 disabled:opacity-50 rounded-lg transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
+                >
+                  {isSaving ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+                  <span>{isSaving ? 'Enregistrement...' : isDirty ? 'Enregistrer *' : 'Enregistrer & Publier'}</span>
+                </button>
+              </>
             )}
           </div>
         </div>
 
         {/* Specialty Tabs + Doc Size */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-3 border-t border-slate-100 dark:border-[#1e1530]">
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             {(
               [
                 { id: 'CHATTEUR' as VAType, label: 'Parcours VA Chatteur' },
@@ -456,27 +709,35 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
               ]
             ).map(tab => {
               const active = activeVaType === tab.id;
+              const count = guidesByTrack[tab.id].length;
               return (
                 <button
                   key={tab.id}
                   type="button"
                   onClick={() => handleSelectTrack(tab.id)}
-                  className={`min-h-[38px] px-3.5 py-1.5 text-xs font-semibold rounded-lg border transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                  className={`min-h-[38px] px-3.5 py-1.5 text-xs font-semibold rounded-lg border transition-colors whitespace-nowrap shrink-0 flex items-center gap-2 cursor-pointer ${
                     active
                       ? 'bg-violet-600 text-white border-violet-600'
                       : 'bg-slate-50 dark:bg-[#171026] text-slate-700 dark:text-[#d8d0eb] border-slate-200 dark:border-[#241a38] hover:bg-slate-100 dark:hover:bg-[#231839]'
                   }`}
                 >
-                  {tab.label}
+                  <span>{tab.label}</span>
+                  <span
+                    className={`font-mono tabular-nums text-[11px] ${
+                      active ? 'text-violet-100' : 'text-slate-400 dark:text-[#7c7296]'
+                    }`}
+                  >
+                    {count}
+                  </span>
                 </button>
               );
             })}
           </div>
 
-          <div className="flex items-center gap-3 text-[11px] text-slate-500 dark:text-[#9d93b8]">
+          <div className="flex flex-wrap items-center gap-3 text-[11px] text-slate-500 dark:text-[#9d93b8]">
             {draft.updatedAt && (
               <span>
-                Dernière modif : <span className="font-mono">{formatDate(draft.updatedAt)}</span>
+                Dernière modif : <span className="font-mono tabular-nums">{formatDate(draft.updatedAt)}</span>
               </span>
             )}
             <span
@@ -490,13 +751,81 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
             </span>
           </div>
         </div>
+
+        {/* Guide Library / Selector for the Active Specialty */}
+        <div className="pt-3 border-t border-slate-100 dark:border-[#1e1530] space-y-3">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-500 dark:text-[#9d93b8]">
+              Guides publiés dans ce parcours ({guidesByTrack[activeVaType].length})
+            </div>
+            {guidesByTrack[activeVaType].length > 2 && (
+              <div className="relative w-full sm:w-64">
+                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                <input
+                  type="text"
+                  value={guideSearch}
+                  onChange={e => setGuideSearch(e.target.value)}
+                  placeholder="Filtrer les guides..."
+                  className="w-full min-h-[32px] pl-8 pr-3 py-1 text-xs border border-slate-200 dark:border-[#241a38] rounded-lg bg-slate-50 dark:bg-[#08050f] text-slate-900 dark:text-[#f4f1fa]"
+                />
+              </div>
+            )}
+          </div>
+
+          {filteredTrackGuides.length === 0 ? (
+            <div className="p-4 rounded-lg border border-dashed border-slate-200 dark:border-[#241a38] text-xs text-slate-500 dark:text-[#9d93b8] text-center">
+              Aucun guide ne correspond à « {guideSearch} ».
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
+              {filteredTrackGuides.map(g => {
+                const isSelected = g.id === draft.id;
+                const isPrimary = Boolean(g.isPrimary || g.id === 'CHATTEUR' || g.id === 'INSTAGRAM');
+                return (
+                  <button
+                    key={g.id}
+                    type="button"
+                    onClick={() => handleSelectGuide(g)}
+                    className={`text-left p-3 rounded-lg border transition-colors cursor-pointer flex flex-col justify-between gap-2 ${
+                      isSelected
+                        ? 'bg-violet-50/70 dark:bg-[#191129] border-violet-600 dark:border-violet-400'
+                        : 'bg-slate-50/70 dark:bg-[#150e23] border-slate-200 dark:border-[#241a38] hover:border-slate-300 dark:hover:border-[#392959]'
+                    }`}
+                  >
+                    <div className="space-y-1 min-w-0">
+                      <div className="flex items-center justify-between gap-2 text-[11px]">
+                        <span className="font-semibold text-violet-700 dark:text-violet-300 truncate">
+                          {g.category || (isPrimary ? 'Guide principal' : 'Onboarding')}
+                        </span>
+                        <span className="font-mono tabular-nums text-slate-400 dark:text-[#7c7296] shrink-0">
+                          {g.blocks.length} bloc{g.blocks.length > 1 ? 's' : ''}
+                        </span>
+                      </div>
+                      <div className="text-xs font-bold text-slate-900 dark:text-[#f4f1fa] line-clamp-1">
+                        {g.title}
+                      </div>
+                    </div>
+                    <div className="flex items-center justify-between text-[11px] text-slate-500 dark:text-[#9d93b8]">
+                      <span>{isPrimary ? (g.isDefault ? 'Modèle par défaut' : 'Guide principal') : 'Guide personnalisé'}</span>
+                      {isSelected && (
+                        <span className="font-semibold text-violet-600 dark:text-violet-300">
+                          En cours d&apos;édition
+                        </span>
+                      )}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
       </div>
 
       {!isAdmin && (
         <div className="p-3.5 bg-amber-50 dark:bg-[#1b1410] border border-amber-200 dark:border-amber-500/30 rounded-xl flex items-center gap-2.5 text-xs text-amber-900 dark:text-amber-200">
           <Lock className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
           <span>
-            Mode lecture seule : seuls les comptes <strong>Administrateur</strong> peuvent modifier et publier les guides parrains.
+            Mode lecture seule : seuls les comptes <strong>Administrateur</strong> peuvent créer, modifier et supprimer les guides parrains.
           </span>
         </div>
       )}
@@ -521,7 +850,7 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
       {mode === 'preview' ? (
         <div className="space-y-2">
           <div className="text-[11px] uppercase tracking-wider font-semibold text-slate-500 dark:text-[#9d93b8]">
-            Aperçu tel que vu par un parrain {activeVaType === 'CHATTEUR' ? 'VA Chatteur' : 'VA Instagram'}
+            Aperçu tel que vu par un parrain {draft.vaType === 'CHATTEUR' ? 'VA Chatteur' : 'VA Instagram'}
           </div>
           <ParrainGuideRenderer guide={draft} />
         </div>
@@ -529,12 +858,25 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
         <div className="space-y-4">
           {/* Header & Hero Image Editor */}
           <div className="bg-white dark:bg-[#100b1a] border border-slate-200 dark:border-[#241a38] rounded-xl p-4 sm:p-5 space-y-4 text-xs">
-            <div className="font-bold text-sm text-slate-900 dark:text-[#f4f1fa]">
-              En-tête du guide ({activeVaType === 'CHATTEUR' ? 'VA Chatteur' : 'VA Instagram'})
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-slate-100 dark:border-[#1e1530]">
+              <div className="font-bold text-sm text-slate-900 dark:text-[#f4f1fa]">
+                Paramètres du guide ({draft.vaType === 'CHATTEUR' ? 'VA Chatteur' : 'VA Instagram'})
+              </div>
+
+              {isAdmin && (!isPrimaryDraft || !draft.isDefault) && (
+                <button
+                  type="button"
+                  onClick={() => setConfirmDeleteGuide(draft)}
+                  className="min-h-[34px] px-3 py-1.5 text-xs font-semibold text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/25 hover:bg-rose-100 dark:hover:bg-rose-950/45 border border-rose-200 dark:border-rose-500/30 rounded-lg flex items-center gap-1.5 self-start sm:self-auto cursor-pointer transition-colors"
+                >
+                  {isPrimaryDraft ? <RotateCcw className="w-3.5 h-3.5" /> : <Trash2 className="w-3.5 h-3.5" />}
+                  <span>{isPrimaryDraft ? 'Réinitialiser par défaut' : 'Supprimer ce guide'}</span>
+                </button>
+              )}
             </div>
 
-            <div className="grid grid-cols-1 gap-3">
-              <div>
+            <div className="grid grid-cols-1 md:grid-cols-12 gap-3">
+              <div className="md:col-span-6">
                 <label className="block text-[11px] font-semibold text-slate-600 dark:text-[#9d93b8] mb-1">
                   Titre principal *
                 </label>
@@ -547,7 +889,42 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
                 />
               </div>
 
-              <div>
+              <div className="md:col-span-3">
+                <label className="block text-[11px] font-semibold text-slate-600 dark:text-[#9d93b8] mb-1">
+                  Catégorie
+                </label>
+                <input
+                  type="text"
+                  disabled={!isAdmin}
+                  list="pawako-guide-categories"
+                  value={draft.category || ''}
+                  onChange={e => updateDraft(prev => ({ ...prev, category: e.target.value }))}
+                  placeholder="Ex: Onboarding"
+                  className="w-full min-h-[38px] px-3 py-2 border border-slate-200 dark:border-[#241a38] rounded-lg bg-slate-50 dark:bg-[#08050f] text-slate-900 dark:text-[#f4f1fa] disabled:opacity-70"
+                />
+                <datalist id="pawako-guide-categories">
+                  {CATEGORY_PRESETS.map(cat => (
+                    <option key={cat} value={cat} />
+                  ))}
+                </datalist>
+              </div>
+
+              <div className="md:col-span-3">
+                <label className="block text-[11px] font-semibold text-slate-600 dark:text-[#9d93b8] mb-1">
+                  Parcours cible
+                </label>
+                <select
+                  disabled={!isAdmin || isPrimaryDraft}
+                  value={draft.vaType}
+                  onChange={e => updateDraft(prev => ({ ...prev, vaType: e.target.value as VAType }))}
+                  className="w-full min-h-[38px] px-3 py-2 border border-slate-200 dark:border-[#241a38] rounded-lg bg-slate-50 dark:bg-[#08050f] text-slate-900 dark:text-[#f4f1fa] disabled:opacity-70"
+                >
+                  <option value="CHATTEUR">VA Chatteur</option>
+                  <option value="INSTAGRAM">VA Instagram</option>
+                </select>
+              </div>
+
+              <div className="md:col-span-10">
                 <label className="block text-[11px] font-semibold text-slate-600 dark:text-[#9d93b8] mb-1">
                   Sous-titre / Introduction courte
                 </label>
@@ -560,7 +937,27 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
                 />
               </div>
 
-              <div>
+              <div className="md:col-span-2">
+                <label className="block text-[11px] font-semibold text-slate-600 dark:text-[#9d93b8] mb-1">
+                  Ordre
+                </label>
+                <input
+                  type="number"
+                  min={0}
+                  max={999}
+                  disabled={!isAdmin || isPrimaryDraft}
+                  value={typeof draft.order === 'number' ? draft.order : 0}
+                  onChange={e =>
+                    updateDraft(prev => ({
+                      ...prev,
+                      order: Math.max(0, Math.min(999, parseInt(e.target.value || '0', 10) || 0)),
+                    }))
+                  }
+                  className="w-full min-h-[38px] px-3 py-2 font-mono tabular-nums border border-slate-200 dark:border-[#241a38] rounded-lg bg-slate-50 dark:bg-[#08050f] text-slate-900 dark:text-[#f4f1fa] disabled:opacity-70"
+                />
+              </div>
+
+              <div className="md:col-span-12">
                 <label className="block text-[11px] font-semibold text-slate-600 dark:text-[#9d93b8] mb-1">
                   Image de bannière (Optionnel — URL https:// ou import depuis votre PC)
                 </label>
@@ -616,11 +1013,11 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
               >
                 <div className="flex items-center justify-between gap-2 pb-2.5 border-b border-slate-100 dark:border-[#1e1530]">
                   <div className="flex items-center gap-2 font-bold text-slate-900 dark:text-[#f4f1fa]">
-                    <span className="font-mono text-[11px] text-slate-400 dark:text-[#7c7296]">
+                    <span className="font-mono tabular-nums text-[11px] text-slate-400 dark:text-[#7c7296]">
                       #{index + 1}
                     </span>
-                    <span className="px-2 py-0.5 rounded bg-slate-100 dark:bg-[#171026] border border-slate-200 dark:border-[#241a38] text-[10px] uppercase tracking-wider text-violet-700 dark:text-violet-300">
-                      {block.type === 'TEXT' && 'Texte'}
+                    <span className="text-[11px] uppercase tracking-wider text-violet-700 dark:text-violet-300 font-semibold">
+                      {block.type === 'TEXT' && 'Texte enrichi'}
                       {block.type === 'CALLOUT' && 'Encadré'}
                       {block.type === 'TABLE' && 'Tableau'}
                       {block.type === 'IMAGE' && 'Photo'}
@@ -696,34 +1093,26 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
                         <option value="success">Validation / Astuce (Émeraude)</option>
                       </select>
                     </div>
-                    <div>
-                      <label className="block text-[11px] font-semibold text-slate-600 dark:text-[#9d93b8] mb-1">
-                        Contenu (supporte **gras**, *italique*, et listes commençant par &quot;- &quot;)
-                      </label>
-                      <textarea
-                        rows={4}
-                        disabled={!isAdmin}
-                        value={block.body || ''}
-                        onChange={e => handleUpdateBlock(block.id, { body: e.target.value })}
-                        className="w-full p-2.5 border border-slate-200 dark:border-[#241a38] rounded-lg bg-slate-50 dark:bg-[#08050f] text-slate-900 dark:text-[#f4f1fa] leading-relaxed"
-                      />
-                    </div>
+                    <SimpleRichTextEditor
+                      label="Contenu enrichi de l'encadré"
+                      rows={4}
+                      disabled={!isAdmin}
+                      value={block.body || ''}
+                      onChange={nextBody => handleUpdateBlock(block.id, { body: nextBody })}
+                      placeholder="Rédigez les conditions ou points importants..."
+                    />
                   </div>
                 )}
 
                 {block.type === 'TEXT' && (
-                  <div>
-                    <label className="block text-[11px] font-semibold text-slate-600 dark:text-[#9d93b8] mb-1">
-                      Texte (supporte **gras**, *italique*, et listes commençant par &quot;- &quot;)
-                    </label>
-                    <textarea
-                      rows={5}
-                      disabled={!isAdmin}
-                      value={block.body || ''}
-                      onChange={e => handleUpdateBlock(block.id, { body: e.target.value })}
-                      className="w-full p-2.5 border border-slate-200 dark:border-[#241a38] rounded-lg bg-slate-50 dark:bg-[#08050f] text-slate-900 dark:text-[#f4f1fa] leading-relaxed"
-                    />
-                  </div>
+                  <SimpleRichTextEditor
+                    label="Contenu texte enrichi"
+                    rows={6}
+                    disabled={!isAdmin}
+                    value={block.body || ''}
+                    onChange={nextBody => handleUpdateBlock(block.id, { body: nextBody })}
+                    placeholder="Utilisez la barre d'outils pour formater votre texte (titres, gras, listes, liens)..."
+                  />
                 )}
 
                 {block.type === 'IMAGE' && (
@@ -902,7 +1291,7 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
                   className="min-h-[36px] px-3 py-1.5 bg-slate-100 dark:bg-[#171026] hover:bg-slate-200 dark:hover:bg-[#231839] border border-slate-200 dark:border-[#241a38] rounded-lg font-semibold flex items-center gap-1.5 cursor-pointer"
                 >
                   <AlignLeft className="w-3.5 h-3.5 text-violet-500" />
-                  <span>+ Texte</span>
+                  <span>+ Texte enrichi</span>
                 </button>
                 <button
                   type="button"
@@ -931,6 +1320,223 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {/* Modal: Créer un nouveau guide de parrainage */}
+      {showCreateModal && (
+        <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <form
+            onSubmit={handleCreateGuide}
+            className="w-full max-w-lg bg-white dark:bg-[#100b1a] border border-slate-200 dark:border-[#241a38] rounded-xl p-5 sm:p-6 space-y-4 text-xs shadow-xl"
+          >
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-[#1e1530]">
+              <h3 className="text-sm font-bold text-slate-900 dark:text-[#f4f1fa] flex items-center gap-2">
+                <FilePlus2 className="w-4 h-4 text-violet-500" />
+                <span>Créer un guide d&apos;onboarding parrain</span>
+              </h3>
+              <button
+                type="button"
+                onClick={() => setShowCreateModal(false)}
+                className="p-1 text-slate-400 hover:text-slate-700 dark:hover:text-[#f4f1fa] cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {createError && (
+              <div className="p-2.5 rounded-lg bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-500/30 text-rose-800 dark:text-rose-200">
+                {createError}
+              </div>
+            )}
+
+            <div className="space-y-3">
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-600 dark:text-[#9d93b8] mb-1">
+                  Titre du guide *
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={newTitle}
+                  onChange={e => setNewTitle(e.target.value)}
+                  placeholder="Ex: Checklist des 7 premiers jours pour un nouveau parrain"
+                  className="w-full min-h-[38px] px-3 py-2 border border-slate-200 dark:border-[#241a38] rounded-lg bg-slate-50 dark:bg-[#08050f] text-slate-900 dark:text-[#f4f1fa]"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600 dark:text-[#9d93b8] mb-1">
+                    Parcours concerné *
+                  </label>
+                  <select
+                    value={newVaType}
+                    onChange={e => setNewVaType(e.target.value as VAType)}
+                    className="w-full min-h-[38px] px-3 py-2 border border-slate-200 dark:border-[#241a38] rounded-lg bg-slate-50 dark:bg-[#08050f] text-slate-900 dark:text-[#f4f1fa]"
+                  >
+                    <option value="CHATTEUR">VA Chatteur</option>
+                    <option value="INSTAGRAM">VA Instagram</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600 dark:text-[#9d93b8] mb-1">
+                    Catégorie
+                  </label>
+                  <input
+                    type="text"
+                    list="pawako-guide-categories"
+                    value={newCategory}
+                    onChange={e => setNewCategory(e.target.value)}
+                    placeholder="Onboarding"
+                    className="w-full min-h-[38px] px-3 py-2 border border-slate-200 dark:border-[#241a38] rounded-lg bg-slate-50 dark:bg-[#08050f] text-slate-900 dark:text-[#f4f1fa]"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-600 dark:text-[#9d93b8] mb-1">
+                  Introduction courte (Optionnel)
+                </label>
+                <textarea
+                  rows={2}
+                  value={newSubtitle}
+                  onChange={e => setNewSubtitle(e.target.value)}
+                  placeholder="Résumé affiché en haut du guide pour orienter les parrains..."
+                  className="w-full p-2.5 border border-slate-200 dark:border-[#241a38] rounded-lg bg-slate-50 dark:bg-[#08050f] text-slate-900 dark:text-[#f4f1fa]"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-600 dark:text-[#9d93b8] mb-1">
+                  Structure de départ
+                </label>
+                <div className="grid grid-cols-3 gap-2">
+                  {(
+                    [
+                      { id: 'onboarding' as StarterTemplate, label: 'Onboarding' },
+                      { id: 'remuneration' as StarterTemplate, label: 'Rémunération' },
+                      { id: 'blank' as StarterTemplate, label: 'Page vierge' },
+                    ]
+                  ).map(tpl => (
+                    <button
+                      key={tpl.id}
+                      type="button"
+                      onClick={() => setNewTemplate(tpl.id)}
+                      className={`min-h-[36px] px-2.5 py-1.5 rounded-lg border font-semibold cursor-pointer transition-colors ${
+                        newTemplate === tpl.id
+                          ? 'bg-violet-600 text-white border-violet-600'
+                          : 'bg-slate-50 dark:bg-[#171026] text-slate-700 dark:text-[#d8d0eb] border-slate-200 dark:border-[#241a38]'
+                      }`}
+                    >
+                      {tpl.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100 dark:border-[#1e1530]">
+              <button
+                type="button"
+                onClick={() => setShowCreateModal(false)}
+                className="min-h-[38px] px-3.5 py-1.5 bg-slate-100 dark:bg-[#171026] text-slate-700 dark:text-[#d8d0eb] font-semibold rounded-lg cursor-pointer"
+              >
+                Annuler
+              </button>
+              <button
+                type="submit"
+                disabled={isCreating}
+                className="min-h-[38px] px-4 py-1.5 bg-violet-600 hover:bg-violet-500 disabled:opacity-50 text-white font-semibold rounded-lg flex items-center gap-1.5 cursor-pointer"
+              >
+                {isCreating ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
+                <span>{isCreating ? 'Création...' : 'Créer le guide'}</span>
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* Modal: Confirmer la suppression ou réinitialisation */}
+      {confirmDeleteGuide && (
+        <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="w-full max-w-md bg-white dark:bg-[#100b1a] border border-slate-200 dark:border-[#241a38] rounded-xl p-5 sm:p-6 space-y-4 text-xs shadow-xl">
+            <div className="space-y-1.5">
+              <h3 className="text-sm font-bold text-slate-900 dark:text-[#f4f1fa]">
+                {confirmDeleteGuide.isPrimary
+                  ? 'Réinitialiser le guide principal ?'
+                  : 'Supprimer ce guide de parrainage ?'}
+              </h3>
+              <p className="text-slate-600 dark:text-[#b7aed0] leading-relaxed">
+                {confirmDeleteGuide.isPrimary
+                  ? `Cette action supprime vos personnalisations sur « ${confirmDeleteGuide.title} » et restaure le modèle officiel par défaut.`
+                  : `Le guide « ${confirmDeleteGuide.title} » sera retiré immédiatement de l'accueil des parrains. Cette action est irréversible.`}
+              </p>
+            </div>
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100 dark:border-[#1e1530]">
+              <button
+                type="button"
+                disabled={isDeleting}
+                onClick={() => setConfirmDeleteGuide(null)}
+                className="min-h-[38px] px-3.5 py-1.5 bg-slate-100 dark:bg-[#171026] text-slate-700 dark:text-[#d8d0eb] font-semibold rounded-lg cursor-pointer"
+              >
+                Annuler
+              </button>
+              <button
+                type="button"
+                disabled={isDeleting}
+                onClick={handleConfirmDeleteGuide}
+                className="min-h-[38px] px-4 py-1.5 bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white font-semibold rounded-lg flex items-center gap-1.5 cursor-pointer"
+              >
+                {isDeleting ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                <span>
+                  {isDeleting
+                    ? 'Suppression...'
+                    : confirmDeleteGuide.isPrimary
+                      ? 'Réinitialiser'
+                      : 'Supprimer définitivement'}
+                </span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Modifications non enregistrées */}
+      {pendingSwitchGuide && (
+        <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="w-full max-w-md bg-white dark:bg-[#100b1a] border border-slate-200 dark:border-[#241a38] rounded-xl p-5 sm:p-6 space-y-4 text-xs shadow-xl">
+            <div className="space-y-1.5">
+              <h3 className="text-sm font-bold text-slate-900 dark:text-[#f4f1fa]">
+                Modifications non enregistrées
+              </h3>
+              <p className="text-slate-600 dark:text-[#b7aed0] leading-relaxed">
+                Vous avez modifié le guide actuel sans enregistrer. Voulez-vous abandonner ces modifications et ouvrir «{' '}
+                <strong>{pendingSwitchGuide.title}</strong> » ?
+              </p>
+            </div>
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100 dark:border-[#1e1530]">
+              <button
+                type="button"
+                onClick={() => setPendingSwitchGuide(null)}
+                className="min-h-[38px] px-3.5 py-1.5 bg-slate-100 dark:bg-[#171026] text-slate-700 dark:text-[#d8d0eb] font-semibold rounded-lg cursor-pointer"
+              >
+                Rester sur l&apos;éditeur
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const target = pendingSwitchGuide;
+                  setPendingSwitchGuide(null);
+                  applyGuideSelection(target);
+                }}
+                className="min-h-[38px] px-4 py-1.5 bg-violet-600 hover:bg-violet-500 text-white font-semibold rounded-lg cursor-pointer"
+              >
+                Abandonner et ouvrir
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

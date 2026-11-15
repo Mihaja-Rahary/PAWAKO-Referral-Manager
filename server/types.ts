@@ -137,16 +137,20 @@ export interface ParrainGuideBlock {
 }
 
 export interface ParrainGuide {
-  id: VAType;
+  id: string;
   vaType: VAType;
+  category?: string;
+  order?: number;
   title: string;
   subtitle: string;
   heroImageUrl?: string | null;
   blocks: ParrainGuideBlock[];
+  createdAt?: string;
   updatedAt: string;
   updatedByUserId: string;
   updatedByName: string;
   isDefault?: boolean;
+  isPrimary?: boolean;
 }
 
 export interface ReferrerDependencySummary {
@@ -365,7 +369,7 @@ export interface DatabaseSchema {
   discord_memberships: DiscordMembership[];
   recruitment_events: RecruitmentEvent[];
   audit_logs: AuditLog[];
-  parrain_guides?: Partial<Record<VAType, ParrainGuide>>;
+  parrain_guides?: Record<string, ParrainGuide>;
   meta?: {
     initialAdminClaimed: boolean;
     initialAdminClaimedAt?: string;

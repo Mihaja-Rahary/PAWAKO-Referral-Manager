@@ -286,24 +286,28 @@
     },
     "ParrainGuide": {
       "title": "ParrainGuide",
-      "description": "Contenu éditorial (Accueil Parrain) par spécialité VA Chatteur ou VA Instagram.",
+      "description": "Contenu éditorial (Guides d'onboarding & Accueil Parrain) par spécialité VA Chatteur ou VA Instagram.",
       "type": "object",
       "properties": {
         "id": {
           "type": "string",
-          "enum": ["CHATTEUR", "INSTAGRAM"]
+          "description": "Identifiant unique du guide (CHATTEUR, INSTAGRAM, ou guide-...)"
         },
         "vaType": {
           "type": "string",
           "enum": ["CHATTEUR", "INSTAGRAM"]
         },
+        "category": { "type": "string" },
+        "order": { "type": "number" },
         "title": { "type": "string" },
         "subtitle": { "type": "string" },
         "heroImageUrl": { "type": "string" },
         "blocks": { "type": "array" },
+        "createdAt": { "type": "string" },
         "updatedAt": { "type": "string" },
         "updatedByUserId": { "type": "string" },
-        "updatedByName": { "type": "string" }
+        "updatedByName": { "type": "string" },
+        "isPrimary": { "type": "boolean" }
       },
       "required": ["id", "vaType", "title", "blocks", "updatedAt"]
     }

@@ -1533,7 +1533,7 @@ app.get('/api/parrain/guide', async c => {
     if (myRef.vaType === 'CHATTEUR' || myRef.vaType === 'INSTAGRAM') {
       targetVaType = myRef.vaType;
     } else if (!targetVaType) {
-      return c.json({ guide: null, requiresSpecialtyChoice: true });
+      return c.json({ guide: null, guides: [], requiresSpecialtyChoice: true });
     }
   } else if (!targetVaType) {
     const myRef = await repo.getReferrerByDiscordUserId(user.id).catch(() => null);
@@ -1541,8 +1541,9 @@ app.get('/api/parrain/guide', async c => {
       myRef?.vaType === 'CHATTEUR' || myRef?.vaType === 'INSTAGRAM' ? myRef.vaType : 'CHATTEUR';
   }
 
-  const guide = await repo.getParrainGuide(targetVaType);
-  return c.json({ guide });
+  const guides = await repo.getParrainGuidesForSpecialty(targetVaType);
+  const primaryGuide = guides.find(g => g.id === targetVaType) || guides[0] || null;
+  return c.json({ guide: primaryGuide, guides });
 });
 
 app.get('/api/admin/parrain-guides', async c => {
@@ -1557,11 +1558,53 @@ app.get('/api/admin/parrain-guides', async c => {
     return c.json({ error: 'Accès réservé exclusivement à la Direction et aux Responsables.' }, 403);
   }
 
-  const guides = await repo.getAllParrainGuides();
-  return c.json({ guides });
+  const guideList = await repo.listParrainGuides();
+  const guides = {
+    CHATTEUR: guideList.find(g => g.id === 'CHATTEUR'),
+    INSTAGRAM: guideList.find(g => g.id === 'INSTAGRAM'),
+  };
+  return c.json({ guides, guideList });
 });
 
-app.put('/api/admin/parrain-guides/:vaType', async c => {
+app.post('/api/admin/parrain-guides', async c => {
+  const repo = getRepository(c.env);
+  const user = await getAuthenticatedUser(c, repo);
+
+  if (!user) {
+    return c.json({ error: 'Session non authentifiée.' }, 401);
+  }
+
+  if (user.role !== 'ADMINISTRATEUR') {
+    return c.json({ error: 'Seuls les Administrateurs peuvent créer des guides parrains.' }, 403);
+  }
+
+  const body = await c.req.json().catch(() => ({}));
+  const rawVaType = typeof body.vaType === 'string' ? body.vaType.toUpperCase() : '';
+  if (rawVaType !== 'CHATTEUR' && rawVaType !== 'INSTAGRAM') {
+    return c.json({ error: 'Spécialité invalide (CHATTEUR ou INSTAGRAM attendu).' }, 400);
+  }
+
+  try {
+    const guide = await repo.createParrainGuide(
+      {
+        vaType: rawVaType as VAType,
+        title: typeof body.title === 'string' ? body.title : '',
+        subtitle: typeof body.subtitle === 'string' ? body.subtitle : '',
+        category: typeof body.category === 'string' ? body.category : undefined,
+        order: typeof body.order === 'number' ? body.order : undefined,
+        heroImageUrl: typeof body.heroImageUrl === 'string' ? body.heroImageUrl : null,
+        blocks: Array.isArray(body.blocks) ? body.blocks : [],
+      },
+      { id: user.id, displayName: user.displayName }
+    );
+    return c.json({ success: true, guide }, 201);
+  } catch (err: any) {
+    if (err instanceof FirestoreRestError) throw err;
+    return c.json({ error: err?.message || 'Impossible de créer le guide parrain.' }, 400);
+  }
+});
+
+app.put('/api/admin/parrain-guides/:guideId', async c => {
   const repo = getRepository(c.env);
   const user = await getAuthenticatedUser(c, repo);
 
@@ -1573,18 +1616,22 @@ app.put('/api/admin/parrain-guides/:vaType', async c => {
     return c.json({ error: 'Seuls les Administrateurs peuvent modifier les guides parrains.' }, 403);
   }
 
-  const rawVaType = c.req.param('vaType')?.toUpperCase();
-  if (rawVaType !== 'CHATTEUR' && rawVaType !== 'INSTAGRAM') {
-    return c.json({ error: 'Spécialité invalide (CHATTEUR ou INSTAGRAM attendu).' }, 400);
-  }
-
+  const rawParam = c.req.param('guideId') || '';
   const body = await c.req.json().catch(() => ({}));
+  const rawVaType =
+    typeof body.vaType === 'string' && (body.vaType.toUpperCase() === 'CHATTEUR' || body.vaType.toUpperCase() === 'INSTAGRAM')
+      ? (body.vaType.toUpperCase() as VAType)
+      : undefined;
+
   try {
     const guide = await repo.saveParrainGuide(
-      rawVaType as VAType,
+      rawParam,
       {
+        vaType: rawVaType,
         title: typeof body.title === 'string' ? body.title : '',
         subtitle: typeof body.subtitle === 'string' ? body.subtitle : '',
+        category: typeof body.category === 'string' ? body.category : undefined,
+        order: typeof body.order === 'number' ? body.order : undefined,
         heroImageUrl: typeof body.heroImageUrl === 'string' ? body.heroImageUrl : null,
         blocks: Array.isArray(body.blocks) ? body.blocks : [],
       },
@@ -1593,7 +1640,39 @@ app.put('/api/admin/parrain-guides/:vaType', async c => {
     return c.json({ success: true, guide });
   } catch (err: any) {
     if (err instanceof FirestoreRestError) throw err;
-    return c.json({ error: err?.message || 'Impossible de enregistrer le guide parrain.' }, 400);
+    const status = err?.status === 404 ? 404 : 400;
+    return c.json({ error: err?.message || 'Impossible d’enregistrer le guide parrain.' }, status);
+  }
+});
+
+app.delete('/api/admin/parrain-guides/:guideId', async c => {
+  const repo = getRepository(c.env);
+  const user = await getAuthenticatedUser(c, repo);
+
+  if (!user) {
+    return c.json({ error: 'Session non authentifiée.' }, 401);
+  }
+
+  if (user.role !== 'ADMINISTRATEUR') {
+    return c.json({ error: 'Seuls les Administrateurs peuvent supprimer des guides parrains.' }, 403);
+  }
+
+  const rawParam = c.req.param('guideId') || '';
+  try {
+    const result = await repo.deleteParrainGuide(rawParam, {
+      id: user.id,
+      displayName: user.displayName,
+    });
+    const guideList = await repo.listParrainGuides();
+    const guides = {
+      CHATTEUR: guideList.find(g => g.id === 'CHATTEUR'),
+      INSTAGRAM: guideList.find(g => g.id === 'INSTAGRAM'),
+    };
+    return c.json({ success: true, ...result, guides, guideList });
+  } catch (err: any) {
+    if (err instanceof FirestoreRestError) throw err;
+    const status = err?.status === 404 ? 404 : 400;
+    return c.json({ error: err?.message || 'Impossible de supprimer le guide parrain.' }, status);
   }
 });
 

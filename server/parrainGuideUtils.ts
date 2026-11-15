@@ -20,12 +20,35 @@ export function validateSafeImageUrl(rawUrl: string): string {
   );
 }
 
+export function isValidGuideId(rawId: string): boolean {
+  return typeof rawId === 'string' && /^[a-zA-Z0-9_-]{2,80}$/.test(rawId.trim());
+}
+
+export function isPrimaryGuideId(rawId: string): rawId is VAType {
+  const upper = (rawId || '').trim().toUpperCase();
+  return upper === 'CHATTEUR' || upper === 'INSTAGRAM';
+}
+
+export function generateCustomGuideId(vaType: VAType, title: string): string {
+  const slug = (title || 'guide')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 28) || 'onboarding';
+  const rand = Math.random().toString(36).slice(2, 6);
+  return `guide-${vaType.toLowerCase()}-${slug}-${Date.now().toString(36)}-${rand}`;
+}
+
 export function buildDefaultParrainGuide(vaType: VAType): ParrainGuide {
   const now = new Date().toISOString();
   if (vaType === 'CHATTEUR') {
     return {
       id: 'CHATTEUR',
       vaType: 'CHATTEUR',
+      category: 'Guide principal',
+      order: 0,
       title: 'Guide Officiel Parrain — Pôle VA Chatteur',
       subtitle:
         'Votre rôle d’accompagnement, les conditions de suivi et le barème de rémunération pour vos filleuls VA Chatteurs.',
@@ -69,12 +92,15 @@ export function buildDefaultParrainGuide(vaType: VAType): ParrainGuide {
       updatedByUserId: 'SYSTEM',
       updatedByName: 'PAWAKO Administration',
       isDefault: true,
+      isPrimary: true,
     };
   }
 
   return {
     id: 'INSTAGRAM',
     vaType: 'INSTAGRAM',
+    category: 'Guide principal',
+    order: 0,
     title: 'Guide Officiel Parrain — Pôle VA Instagram',
     subtitle:
       'Votre rôle d’accompagnement, les conditions d’éligibilité et les standards de suivi pour vos filleuls VA Instagram.',
@@ -118,7 +144,51 @@ export function buildDefaultParrainGuide(vaType: VAType): ParrainGuide {
     updatedByUserId: 'SYSTEM',
     updatedByName: 'PAWAKO Administration',
     isDefault: true,
+    isPrimary: true,
   };
+}
+
+export function normalizeStoredParrainGuide(raw: ParrainGuide): ParrainGuide {
+  const vaType: VAType = raw.vaType === 'INSTAGRAM' ? 'INSTAGRAM' : 'CHATTEUR';
+  const id = String(raw.id || vaType).trim();
+  const isPrimary = id === 'CHATTEUR' || id === 'INSTAGRAM';
+  const fallbackTitle = isPrimary ? buildDefaultParrainGuide(vaType).title : 'Guide de parrainage';
+
+  return {
+    ...raw,
+    id,
+    vaType,
+    category:
+      typeof raw.category === 'string' && raw.category.trim()
+        ? raw.category.trim().slice(0, 60)
+        : isPrimary
+          ? 'Guide principal'
+          : 'Onboarding',
+    order: typeof raw.order === 'number' && Number.isFinite(raw.order) ? raw.order : isPrimary ? 0 : 10,
+    title: String(raw.title || '').trim() || fallbackTitle,
+    subtitle: String(raw.subtitle || ''),
+    heroImageUrl: raw.heroImageUrl || null,
+    blocks: Array.isArray(raw.blocks) ? raw.blocks : [],
+    isDefault: false,
+    isPrimary,
+  };
+}
+
+export function sortParrainGuides(guides: ParrainGuide[]): ParrainGuide[] {
+  return [...guides].sort((a, b) => {
+    if (a.vaType !== b.vaType) {
+      return a.vaType === 'CHATTEUR' ? -1 : 1;
+    }
+    const aPrimary = a.isPrimary || a.id === 'CHATTEUR' || a.id === 'INSTAGRAM' ? 0 : 1;
+    const bPrimary = b.isPrimary || b.id === 'CHATTEUR' || b.id === 'INSTAGRAM' ? 0 : 1;
+    if (aPrimary !== bPrimary) return aPrimary - bPrimary;
+
+    const aOrder = typeof a.order === 'number' ? a.order : 10;
+    const bOrder = typeof b.order === 'number' ? b.order : 10;
+    if (aOrder !== bOrder) return aOrder - bOrder;
+
+    return new Date(a.createdAt || a.updatedAt || 0).getTime() - new Date(b.createdAt || b.updatedAt || 0).getTime();
+  });
 }
 
 export function sanitizeAndBuildParrainGuide(
@@ -126,14 +196,27 @@ export function sanitizeAndBuildParrainGuide(
   payload: {
     title: string;
     subtitle?: string;
+    category?: string;
+    order?: number;
     heroImageUrl?: string | null;
     blocks: ParrainGuideBlock[];
   },
-  actor: { id: string; displayName: string }
+  actor: { id: string; displayName: string },
+  options?: {
+    guideId?: string;
+    existingCreatedAt?: string;
+  }
 ): { doc: ParrainGuide; byteLength: number } {
   if (vaType !== 'CHATTEUR' && vaType !== 'INSTAGRAM') {
     throw new Error('Spécialité invalide (CHATTEUR ou INSTAGRAM attendu).');
   }
+
+  const targetId = options?.guideId?.trim() || vaType;
+  if (!isValidGuideId(targetId)) {
+    throw new Error('Identifiant de guide invalide.');
+  }
+  const isPrimary = targetId === 'CHATTEUR' || targetId === 'INSTAGRAM';
+  const resolvedVaType: VAType = isPrimary ? (targetId as VAType) : vaType;
 
   const cleanTitle = typeof payload.title === 'string' ? payload.title.trim() : '';
   if (!cleanTitle) {
@@ -144,6 +227,19 @@ export function sanitizeAndBuildParrainGuide(
   }
 
   const cleanSubtitle = typeof payload.subtitle === 'string' ? payload.subtitle.trim().slice(0, 500) : '';
+  const cleanCategory =
+    typeof payload.category === 'string' && payload.category.trim()
+      ? payload.category.trim().slice(0, 60)
+      : isPrimary
+        ? 'Guide principal'
+        : 'Onboarding';
+  const cleanOrder =
+    typeof payload.order === 'number' && Number.isFinite(payload.order)
+      ? Math.max(0, Math.min(999, Math.round(payload.order)))
+      : isPrimary
+        ? 0
+        : 10;
+
   const cleanHeroImageUrl =
     typeof payload.heroImageUrl === 'string' && payload.heroImageUrl.trim()
       ? validateSafeImageUrl(payload.heroImageUrl)
@@ -234,15 +330,19 @@ export function sanitizeAndBuildParrainGuide(
 
   const now = new Date().toISOString();
   const doc: ParrainGuide = {
-    id: vaType,
-    vaType,
+    id: targetId,
+    vaType: resolvedVaType,
+    category: cleanCategory,
+    order: cleanOrder,
     title: cleanTitle,
     subtitle: cleanSubtitle,
     heroImageUrl: cleanHeroImageUrl,
     blocks: sanitizedBlocks,
+    createdAt: options?.existingCreatedAt || now,
     updatedAt: now,
     updatedByUserId: actor.id,
     updatedByName: actor.displayName,
+    isPrimary,
   };
 
   const byteLength = new TextEncoder().encode(JSON.stringify(doc)).length;

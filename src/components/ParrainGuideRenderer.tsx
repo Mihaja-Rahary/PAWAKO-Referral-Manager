@@ -16,14 +16,20 @@ interface Props {
 }
 
 /**
- * Formateur sûr en React pur (aucun HTML injecté) :
+ * Formateur sûr en React pur (aucun HTML injecté / aucun dangerouslySetInnerHTML) :
+ * - Titres ## et sous-titres ###
  * - Paragraphes séparés par des sauts de ligne
- * - Listes à puces commençant par "• ", "- " ou "* "
- * - Mise en gras **texte** et italique *texte*
+ * - Listes à puces ("• ", "- ", "* ") et listes numérotées ("1. ")
+ * - Citations ("> ")
+ * - Gras (**texte**), italique (*texte*), souligné (__texte__), code (`texte`), liens [label](https://...)
  */
+function isSafeHttpUrl(url: string): boolean {
+  return /^https?:\/\/[^\s<>"']+$/i.test(url.trim());
+}
+
 function renderInlineText(text: string): React.ReactNode[] {
   const tokens: React.ReactNode[] = [];
-  const regex = /(\*\*[^*]+\*\*|\*[^*]+\*)/g;
+  const regex = /(\[[^\]]+\]\([^)]+\)|\*\*[^*]+\*\*|__[^_]+__|\*[^*]+\*|`[^`]+`)/g;
   let lastIndex = 0;
   let match: RegExpExecArray | null;
 
@@ -32,17 +38,49 @@ function renderInlineText(text: string): React.ReactNode[] {
       tokens.push(text.slice(lastIndex, match.index));
     }
     const raw = match[0];
-    if (raw.startsWith('**') && raw.endsWith('**')) {
+    if (raw.startsWith('[')) {
+      const linkMatch = raw.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
+      if (linkMatch && isSafeHttpUrl(linkMatch[2])) {
+        tokens.push(
+          <a
+            key={`${match.index}-a`}
+            href={linkMatch[2].trim()}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="font-medium text-violet-600 dark:text-violet-400 underline underline-offset-2 hover:text-violet-500"
+          >
+            {linkMatch[1]}
+          </a>
+        );
+      } else {
+        tokens.push(raw);
+      }
+    } else if (raw.startsWith('**') && raw.endsWith('**')) {
       tokens.push(
         <strong key={`${match.index}-b`} className="font-semibold text-slate-900 dark:text-[#f4f1fa]">
           {raw.slice(2, -2)}
         </strong>
+      );
+    } else if (raw.startsWith('__') && raw.endsWith('__')) {
+      tokens.push(
+        <span key={`${match.index}-u`} className="underline underline-offset-2 decoration-violet-500/70">
+          {raw.slice(2, -2)}
+        </span>
       );
     } else if (raw.startsWith('*') && raw.endsWith('*')) {
       tokens.push(
         <em key={`${match.index}-i`} className="italic">
           {raw.slice(1, -1)}
         </em>
+      );
+    } else if (raw.startsWith('`') && raw.endsWith('`')) {
+      tokens.push(
+        <code
+          key={`${match.index}-c`}
+          className="px-1.5 py-0.5 rounded bg-slate-100 dark:bg-[#171026] border border-slate-200/70 dark:border-[#2e224a] font-mono text-[11px] text-slate-800 dark:text-[#e9e5f5]"
+        >
+          {raw.slice(1, -1)}
+        </code>
       );
     }
     lastIndex = match.index + raw.length;
@@ -55,38 +93,101 @@ function renderInlineText(text: string): React.ReactNode[] {
   return tokens;
 }
 
-function FormattedBody({ text, className = '' }: { text?: string; className?: string }) {
+export function RichTextContent({ text, className = '' }: { text?: string; className?: string }) {
   if (!text || !text.trim()) return null;
 
   const lines = text.split('\n');
   const elements: React.ReactNode[] = [];
-  let listBuffer: string[] = [];
+  let unorderedBuffer: string[] = [];
+  let orderedBuffer: string[] = [];
+  let quoteBuffer: string[] = [];
 
-  const flushList = (keyPrefix: string) => {
-    if (listBuffer.length === 0) return;
+  const flushUnordered = (keyPrefix: string) => {
+    if (unorderedBuffer.length === 0) return;
     elements.push(
       <ul key={keyPrefix} className="space-y-1.5 pl-4 list-disc marker:text-violet-500">
-        {listBuffer.map((item, idx) => (
+        {unorderedBuffer.map((item, idx) => (
           <li key={`${keyPrefix}-${idx}`} className="leading-relaxed">
             {renderInlineText(item)}
           </li>
         ))}
       </ul>
     );
-    listBuffer = [];
+    unorderedBuffer = [];
+  };
+
+  const flushOrdered = (keyPrefix: string) => {
+    if (orderedBuffer.length === 0) return;
+    elements.push(
+      <ol key={keyPrefix} className="space-y-1.5 pl-5 list-decimal marker:font-mono marker:text-violet-500 tabular-nums">
+        {orderedBuffer.map((item, idx) => (
+          <li key={`${keyPrefix}-${idx}`} className="leading-relaxed pl-1">
+            {renderInlineText(item)}
+          </li>
+        ))}
+      </ol>
+    );
+    orderedBuffer = [];
+  };
+
+  const flushQuote = (keyPrefix: string) => {
+    if (quoteBuffer.length === 0) return;
+    elements.push(
+      <blockquote
+        key={keyPrefix}
+        className="border-l-2 border-violet-300 dark:border-violet-500/50 pl-3 py-0.5 text-slate-600 dark:text-[#b7aed0] italic space-y-1"
+      >
+        {quoteBuffer.map((qLine, idx) => (
+          <p key={`${keyPrefix}-${idx}`} className="leading-relaxed">
+            {renderInlineText(qLine)}
+          </p>
+        ))}
+      </blockquote>
+    );
+    quoteBuffer = [];
+  };
+
+  const flushAll = (keyPrefix: string) => {
+    flushUnordered(`${keyPrefix}-ul`);
+    flushOrdered(`${keyPrefix}-ol`);
+    flushQuote(`${keyPrefix}-q`);
   };
 
   lines.forEach((rawLine, idx) => {
     const trimmed = rawLine.trim();
     if (!trimmed) {
-      flushList(`list-${idx}`);
+      flushAll(`empty-${idx}`);
       return;
     }
 
-    if (/^(?:•|-|\*)\s+/.test(trimmed)) {
-      listBuffer.push(trimmed.replace(/^(?:•|-|\*)\s+/, ''));
+    if (/^###\s+/.test(trimmed)) {
+      flushAll(`h3-pre-${idx}`);
+      elements.push(
+        <h5 key={`h3-${idx}`} className="text-xs sm:text-sm font-semibold text-slate-900 dark:text-[#f4f1fa] pt-1">
+          {renderInlineText(trimmed.replace(/^###\s+/, ''))}
+        </h5>
+      );
+    } else if (/^##?\s+/.test(trimmed)) {
+      flushAll(`h2-pre-${idx}`);
+      elements.push(
+        <h4 key={`h2-${idx}`} className="text-sm sm:text-[15px] font-bold text-slate-900 dark:text-[#f4f1fa] pt-1.5 tracking-tight">
+          {renderInlineText(trimmed.replace(/^##?\s+/, ''))}
+        </h4>
+      );
+    } else if (/^>\s?/.test(trimmed)) {
+      flushUnordered(`q-pre-ul-${idx}`);
+      flushOrdered(`q-pre-ol-${idx}`);
+      quoteBuffer.push(trimmed.replace(/^>\s?/, ''));
+    } else if (/^(?:•|-|\*)\s+/.test(trimmed)) {
+      flushOrdered(`ul-pre-ol-${idx}`);
+      flushQuote(`ul-pre-q-${idx}`);
+      unorderedBuffer.push(trimmed.replace(/^(?:•|-|\*)\s+/, ''));
+    } else if (/^\d+\.\s+/.test(trimmed)) {
+      flushUnordered(`ol-pre-ul-${idx}`);
+      flushQuote(`ol-pre-q-${idx}`);
+      orderedBuffer.push(trimmed.replace(/^\d+\.\s+/, ''));
     } else {
-      flushList(`list-before-${idx}`);
+      flushAll(`p-pre-${idx}`);
       elements.push(
         <p key={`p-${idx}`} className="leading-relaxed">
           {renderInlineText(trimmed)}
@@ -95,7 +196,7 @@ function FormattedBody({ text, className = '' }: { text?: string; className?: st
     }
   });
 
-  flushList('list-end');
+  flushAll('end');
 
   return <div className={`space-y-2.5 text-xs sm:text-sm ${className}`}>{elements}</div>;
 }
@@ -178,7 +279,7 @@ function renderBlock(block: ParrainGuideBlock) {
           <Icon className={`w-4 h-4 shrink-0 mt-0.5 ${styles.iconColor}`} />
           <div className="space-y-1.5 min-w-0 flex-1">
             {block.title && <h3 className="text-sm font-bold leading-snug">{block.title}</h3>}
-            <FormattedBody text={block.body} className="opacity-95" />
+            <RichTextContent text={block.body} className="opacity-95" />
           </div>
         </div>
       </div>
@@ -275,7 +376,7 @@ function renderBlock(block: ParrainGuideBlock) {
           {block.title}
         </h3>
       )}
-      <FormattedBody
+      <RichTextContent
         text={block.body}
         className="text-slate-600 dark:text-[#d8d0eb]"
       />
@@ -302,9 +403,14 @@ export const ParrainGuideRenderer: React.FC<Props> = ({ guide, compactHeader = f
             <span className="inline-flex items-center gap-1.5 font-semibold text-violet-700 dark:text-violet-300">
               <BookOpen className="w-3.5 h-3.5" />
               <span>Parcours {getVaTypeLabel(guide.vaType)}</span>
+              {guide.category && (
+                <span className="text-slate-400 dark:text-[#7c7296] font-normal">
+                  · {guide.category}
+                </span>
+              )}
             </span>
             {guide.updatedAt && (
-              <span className="font-mono">
+              <span className="font-mono tabular-nums">
                 Mis à jour : {formatDate(guide.updatedAt)}
               </span>
             )}

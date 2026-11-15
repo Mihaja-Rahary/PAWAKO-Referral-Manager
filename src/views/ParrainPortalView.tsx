@@ -74,8 +74,9 @@ export const ParrainPortalView: React.FC<Props> = ({
   // Navigation interne (Accueil / Mes Filleuls & Lien)
   const [activePortalTab, setActivePortalTab] = useState<'home' | 'filleuls'>('home');
 
-  // Guide d'accueil dynamique selon spécialité
-  const [guide, setGuide] = useState<ParrainGuide | null>(null);
+  // Guide d'accueil dynamique selon spécialité (guide principal + guides d'onboarding créés)
+  const [guides, setGuides] = useState<ParrainGuide[]>([]);
+  const [selectedGuideId, setSelectedGuideId] = useState<string | null>(null);
   const [isGuideLoading, setIsGuideLoading] = useState(false);
   const [guideError, setGuideError] = useState<string | null>(null);
 
@@ -90,7 +91,16 @@ export const ParrainPortalView: React.FC<Props> = ({
       setIsGuideLoading(true);
       setGuideError(null);
       const res = await api.getParrainGuide(vaType);
-      setGuide(res.guide);
+      const list =
+        Array.isArray(res.guides) && res.guides.length > 0
+          ? res.guides
+          : res.guide
+            ? [res.guide]
+            : [];
+      setGuides(list);
+      setSelectedGuideId(prev =>
+        prev && list.some(g => g.id === prev) ? prev : list[0]?.id || null
+      );
     } catch (err: any) {
       setGuideError(err?.message || "Impossible de charger le guide d'accueil.");
     } finally {
@@ -112,7 +122,8 @@ export const ParrainPortalView: React.FC<Props> = ({
         if (res.referrer?.vaType === 'CHATTEUR' || res.referrer?.vaType === 'INSTAGRAM') {
           loadGuide(res.referrer.vaType);
         } else {
-          setGuide(null);
+          setGuides([]);
+          setSelectedGuideId(null);
         }
       } catch (err: any) {
         setError(err.message || 'Impossible de charger votre espace parrain.');
@@ -559,8 +570,46 @@ export const ParrainPortalView: React.FC<Props> = ({
                 Réessayer
               </button>
             </div>
-          ) : guide ? (
-            <ParrainGuideRenderer guide={guide} />
+          ) : guides.length > 0 ? (
+            <div className="space-y-4">
+              {guides.length > 1 && (
+                <div className="bg-white dark:bg-[#100b1a] border border-slate-200 dark:border-[#241a38] rounded-xl p-3 sm:p-4 space-y-2.5">
+                  <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-500 dark:text-[#9d93b8]">
+                    Guides disponibles pour votre parcours ({guides.length})
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                    {guides.map(item => {
+                      const active = (selectedGuideId || guides[0]?.id) === item.id;
+                      return (
+                        <button
+                          key={item.id}
+                          type="button"
+                          onClick={() => setSelectedGuideId(item.id)}
+                          className={`text-left px-3 py-2.5 rounded-lg border transition-colors cursor-pointer ${
+                            active
+                              ? 'bg-violet-600 text-white border-violet-600'
+                              : 'bg-slate-50 dark:bg-[#171026] text-slate-800 dark:text-[#e9e5f5] border-slate-200 dark:border-[#241a38] hover:border-violet-400'
+                          }`}
+                        >
+                          <div
+                            className={`text-[10px] font-semibold uppercase tracking-wider ${
+                              active ? 'text-violet-100' : 'text-violet-600 dark:text-violet-300'
+                            }`}
+                          >
+                            {item.category || (item.isPrimary ? 'Guide principal' : 'Onboarding')}
+                          </div>
+                          <div className="text-xs font-bold line-clamp-1 mt-0.5">{item.title}</div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              <ParrainGuideRenderer
+                guide={guides.find(g => g.id === selectedGuideId) || guides[0]}
+              />
+            </div>
           ) : null}
         </div>
       )}

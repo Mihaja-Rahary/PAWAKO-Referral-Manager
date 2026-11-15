@@ -470,6 +470,7 @@ export const api = {
 
   async getParrainGuide(vaType?: VAType): Promise<{
     guide: ParrainGuide | null;
+    guides?: ParrainGuide[];
     requiresSpecialtyChoice?: boolean;
   }> {
     const qs = vaType ? `?vaType=${encodeURIComponent(vaType)}` : '';
@@ -478,23 +479,56 @@ export const api = {
 
   async getAdminParrainGuides(): Promise<{
     guides: Record<VAType, ParrainGuide>;
+    guideList?: ParrainGuide[];
   }> {
     return request('/api/admin/parrain-guides');
   },
 
+  async createAdminParrainGuide(payload: {
+    vaType: VAType;
+    title: string;
+    subtitle?: string;
+    category?: string;
+    order?: number;
+    heroImageUrl?: string | null;
+    blocks: ParrainGuideBlock[];
+  }): Promise<{ success: boolean; guide: ParrainGuide }> {
+    return request('/api/admin/parrain-guides', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  },
+
   async saveAdminParrainGuide(
-    vaType: VAType,
+    guideId: string,
     payload: {
+      vaType?: VAType;
       title: string;
       subtitle?: string;
+      category?: string;
+      order?: number;
       heroImageUrl?: string | null;
       blocks: ParrainGuideBlock[];
     }
   ): Promise<{ success: boolean; guide: ParrainGuide }> {
-    return request(`/api/admin/parrain-guides/${vaType}`, {
+    return request(`/api/admin/parrain-guides/${encodeURIComponent(guideId)}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
+    });
+  },
+
+  async deleteAdminParrainGuide(guideId: string): Promise<{
+    success: boolean;
+    deletedId: string;
+    resetToDefault: boolean;
+    vaType: VAType;
+    guides?: Record<VAType, ParrainGuide>;
+    guideList?: ParrainGuide[];
+  }> {
+    return request(`/api/admin/parrain-guides/${encodeURIComponent(guideId)}`, {
+      method: 'DELETE',
     });
   },
 

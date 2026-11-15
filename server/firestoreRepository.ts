@@ -47,7 +47,12 @@ import {
 } from './types';
 import {
   buildDefaultParrainGuide,
+  generateCustomGuideId,
+  isPrimaryGuideId,
+  isValidGuideId,
+  normalizeStoredParrainGuide,
   sanitizeAndBuildParrainGuide,
+  sortParrainGuides,
 } from './parrainGuideUtils';
 
 export { buildDefaultParrainGuide };
@@ -4366,57 +4371,204 @@ export class FirestoreRepository {
     }
 
     const cleaned = stripFirestoreMeta(doc);
-    return {
+    return normalizeStoredParrainGuide({
       ...cleaned,
       id: vaType,
       vaType,
-      title: String(cleaned.title || '').trim() || buildDefaultParrainGuide(vaType).title,
-      subtitle: String(cleaned.subtitle || ''),
-      heroImageUrl: cleaned.heroImageUrl || null,
-      blocks: Array.isArray(cleaned.blocks) ? cleaned.blocks : [],
-      isDefault: false,
-    };
+    });
+  }
+
+  async listParrainGuides(): Promise<ParrainGuide[]> {
+    const rawDocs = await this.client.listDocuments<ParrainGuide>('pawako_parrain_guides');
+    const byId = new Map<string, ParrainGuide>();
+
+    for (const rawDoc of rawDocs) {
+      const cleaned = stripFirestoreMeta(rawDoc);
+      const normalized = normalizeStoredParrainGuide(cleaned);
+      byId.set(normalized.id, normalized);
+    }
+
+    if (!byId.has('CHATTEUR')) {
+      byId.set('CHATTEUR', buildDefaultParrainGuide('CHATTEUR'));
+    }
+    if (!byId.has('INSTAGRAM')) {
+      byId.set('INSTAGRAM', buildDefaultParrainGuide('INSTAGRAM'));
+    }
+
+    return sortParrainGuides(Array.from(byId.values()));
+  }
+
+  async getParrainGuidesForSpecialty(vaType: VAType): Promise<ParrainGuide[]> {
+    const all = await this.listParrainGuides();
+    return all.filter(g => g.vaType === vaType);
   }
 
   async getAllParrainGuides(): Promise<Record<VAType, ParrainGuide>> {
-    const [chatteur, instagram] = await Promise.all([
-      this.getParrainGuide('CHATTEUR'),
-      this.getParrainGuide('INSTAGRAM'),
-    ]);
+    const all = await this.listParrainGuides();
     return {
-      CHATTEUR: chatteur,
-      INSTAGRAM: instagram,
+      CHATTEUR: all.find(g => g.id === 'CHATTEUR') || buildDefaultParrainGuide('CHATTEUR'),
+      INSTAGRAM: all.find(g => g.id === 'INSTAGRAM') || buildDefaultParrainGuide('INSTAGRAM'),
     };
   }
 
-  async saveParrainGuide(
-    vaType: VAType,
+  async createParrainGuide(
     payload: {
+      vaType: VAType;
       title: string;
       subtitle?: string;
+      category?: string;
+      order?: number;
       heroImageUrl?: string | null;
       blocks: ParrainGuideBlock[];
     },
     actor: { id: string; displayName: string }
   ): Promise<ParrainGuide> {
-    const { doc: docToSave, byteLength } = sanitizeAndBuildParrainGuide(vaType, payload, actor);
+    const guideId = generateCustomGuideId(payload.vaType, payload.title);
+    const { doc: docToSave, byteLength } = sanitizeAndBuildParrainGuide(
+      payload.vaType,
+      payload,
+      actor,
+      { guideId }
+    );
 
-    await this.client.setDocument('pawako_parrain_guides', vaType, docToSave);
+    await this.client.setDocument('pawako_parrain_guides', guideId, docToSave);
 
     await this.logAudit({
-      action: 'PARRAIN_GUIDE_UPDATED',
+      action: 'PARRAIN_GUIDE_CREATED',
       actorUserId: actor.id,
       actorName: actor.displayName,
       targetType: 'PARRAIN_GUIDE',
-      targetId: vaType,
+      targetId: guideId,
       details: {
-        vaType,
+        vaType: docToSave.vaType,
+        category: docToSave.category,
         title: docToSave.title,
         blocksCount: docToSave.blocks.length,
         sizeBytes: byteLength,
       },
     });
 
-    return { ...docToSave, isDefault: false };
+    return { ...docToSave, isDefault: false, isPrimary: false };
+  }
+
+  async saveParrainGuide(
+    guideIdOrVaType: string,
+    payload: {
+      vaType?: VAType;
+      title: string;
+      subtitle?: string;
+      category?: string;
+      order?: number;
+      heroImageUrl?: string | null;
+      blocks: ParrainGuideBlock[];
+    },
+    actor: { id: string; displayName: string }
+  ): Promise<ParrainGuide> {
+    const trimmedId = (guideIdOrVaType || '').trim();
+    const upperId = trimmedId.toUpperCase();
+    const isPrimary = upperId === 'CHATTEUR' || upperId === 'INSTAGRAM';
+    const targetId = isPrimary ? upperId : trimmedId;
+
+    if (!isValidGuideId(targetId)) {
+      throw new Error('Identifiant de guide invalide.');
+    }
+
+    let existingCreatedAt: string | undefined;
+    let resolvedVaType: VAType;
+
+    if (isPrimary) {
+      resolvedVaType = upperId as VAType;
+      const existing = await this.client.getDocument<ParrainGuide>('pawako_parrain_guides', targetId);
+      existingCreatedAt = existing?.createdAt;
+    } else {
+      const existing = await this.client.getDocument<ParrainGuide>('pawako_parrain_guides', targetId);
+      if (!existing) {
+        const err: any = new Error('Guide de parrainage introuvable.');
+        err.status = 404;
+        throw err;
+      }
+      existingCreatedAt = existing.createdAt;
+      resolvedVaType =
+        payload.vaType === 'CHATTEUR' || payload.vaType === 'INSTAGRAM'
+          ? payload.vaType
+          : existing.vaType === 'INSTAGRAM'
+            ? 'INSTAGRAM'
+            : 'CHATTEUR';
+    }
+
+    const { doc: docToSave, byteLength } = sanitizeAndBuildParrainGuide(
+      resolvedVaType,
+      payload,
+      actor,
+      { guideId: targetId, existingCreatedAt }
+    );
+
+    await this.client.setDocument('pawako_parrain_guides', targetId, docToSave);
+
+    await this.logAudit({
+      action: 'PARRAIN_GUIDE_UPDATED',
+      actorUserId: actor.id,
+      actorName: actor.displayName,
+      targetType: 'PARRAIN_GUIDE',
+      targetId,
+      details: {
+        vaType: docToSave.vaType,
+        category: docToSave.category,
+        title: docToSave.title,
+        blocksCount: docToSave.blocks.length,
+        sizeBytes: byteLength,
+      },
+    });
+
+    return { ...docToSave, isDefault: false, isPrimary };
+  }
+
+  async deleteParrainGuide(
+    guideId: string,
+    actor: { id: string; displayName: string }
+  ): Promise<{ deletedId: string; resetToDefault: boolean; vaType: VAType }> {
+    const trimmedId = (guideId || '').trim();
+    const isPrimary = isPrimaryGuideId(trimmedId);
+    const targetId = isPrimary ? trimmedId.toUpperCase() : trimmedId;
+
+    if (!isValidGuideId(targetId)) {
+      throw new Error('Identifiant de guide invalide.');
+    }
+
+    const existing = await this.client.getDocument<ParrainGuide>('pawako_parrain_guides', targetId);
+    if (!isPrimary && !existing) {
+      const err: any = new Error('Guide de parrainage introuvable.');
+      err.status = 404;
+      throw err;
+    }
+
+    const vaType: VAType = isPrimary
+      ? (targetId as VAType)
+      : existing?.vaType === 'INSTAGRAM'
+        ? 'INSTAGRAM'
+        : 'CHATTEUR';
+
+    if (existing) {
+      await this.client.deleteDocument('pawako_parrain_guides', targetId);
+    }
+
+    await this.logAudit({
+      action: 'PARRAIN_GUIDE_DELETED',
+      actorUserId: actor.id,
+      actorName: actor.displayName,
+      targetType: 'PARRAIN_GUIDE',
+      targetId,
+      details: {
+        vaType,
+        title: existing?.title || buildDefaultParrainGuide(vaType).title,
+        resetToDefault: isPrimary,
+      },
+    });
+
+    return {
+      deletedId: targetId,
+      resetToDefault: isPrimary,
+      vaType,
+    };
   }
 }

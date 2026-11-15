@@ -651,7 +651,7 @@ apiRouter.get('/parrain/guide', requireAuth, (req: Request, res: Response) => {
     if (myRef.vaType === 'CHATTEUR' || myRef.vaType === 'INSTAGRAM') {
       targetVaType = myRef.vaType;
     } else if (!targetVaType) {
-      return res.json({ guide: null, requiresSpecialtyChoice: true });
+      return res.json({ guide: null, guides: [], requiresSpecialtyChoice: true });
     }
   } else if (!targetVaType) {
     const myRef = db.getReferrerByDiscordUserId(currentUser.id);
@@ -659,29 +659,65 @@ apiRouter.get('/parrain/guide', requireAuth, (req: Request, res: Response) => {
       myRef?.vaType === 'CHATTEUR' || myRef?.vaType === 'INSTAGRAM' ? myRef.vaType : 'CHATTEUR';
   }
 
-  const guide = db.getParrainGuide(targetVaType);
-  res.json({ guide });
+  const guides = db.getParrainGuidesForSpecialty(targetVaType);
+  const primaryGuide = guides.find(g => g.id === targetVaType) || guides[0] || null;
+  res.json({ guide: primaryGuide, guides });
 });
 
 apiRouter.get('/admin/parrain-guides', requireResponsableOrAdmin, (_req: Request, res: Response) => {
-  const guides = db.getAllParrainGuides();
-  res.json({ guides });
+  const guideList = db.listParrainGuides();
+  const guides = {
+    CHATTEUR: guideList.find(g => g.id === 'CHATTEUR'),
+    INSTAGRAM: guideList.find(g => g.id === 'INSTAGRAM'),
+  };
+  res.json({ guides, guideList });
 });
 
-apiRouter.put('/admin/parrain-guides/:vaType', requireAdmin, (req: Request, res: Response) => {
+apiRouter.post('/admin/parrain-guides', requireAdmin, (req: Request, res: Response) => {
   const currentUser: User = (req as any).user;
-  const rawVaType = (req.params.vaType || '').toUpperCase();
+  const body = req.body || {};
+  const rawVaType = typeof body.vaType === 'string' ? body.vaType.toUpperCase() : '';
   if (rawVaType !== 'CHATTEUR' && rawVaType !== 'INSTAGRAM') {
     return res.status(400).json({ error: 'Spécialité invalide (CHATTEUR ou INSTAGRAM attendu).' });
   }
 
-  const body = req.body || {};
   try {
-    const guide = db.saveParrainGuide(
-      rawVaType as VAType,
+    const guide = db.createParrainGuide(
       {
+        vaType: rawVaType as VAType,
         title: typeof body.title === 'string' ? body.title : '',
         subtitle: typeof body.subtitle === 'string' ? body.subtitle : '',
+        category: typeof body.category === 'string' ? body.category : undefined,
+        order: typeof body.order === 'number' ? body.order : undefined,
+        heroImageUrl: typeof body.heroImageUrl === 'string' ? body.heroImageUrl : null,
+        blocks: Array.isArray(body.blocks) ? body.blocks : [],
+      },
+      { id: currentUser.id, displayName: currentUser.displayName }
+    );
+    res.status(201).json({ success: true, guide });
+  } catch (err: any) {
+    res.status(400).json({ error: err?.message || 'Impossible de créer le guide parrain.' });
+  }
+});
+
+apiRouter.put('/admin/parrain-guides/:guideId', requireAdmin, (req: Request, res: Response) => {
+  const currentUser: User = (req as any).user;
+  const rawParam = req.params.guideId || '';
+  const body = req.body || {};
+  const rawVaType =
+    typeof body.vaType === 'string' && (body.vaType.toUpperCase() === 'CHATTEUR' || body.vaType.toUpperCase() === 'INSTAGRAM')
+      ? (body.vaType.toUpperCase() as VAType)
+      : undefined;
+
+  try {
+    const guide = db.saveParrainGuide(
+      rawParam,
+      {
+        vaType: rawVaType,
+        title: typeof body.title === 'string' ? body.title : '',
+        subtitle: typeof body.subtitle === 'string' ? body.subtitle : '',
+        category: typeof body.category === 'string' ? body.category : undefined,
+        order: typeof body.order === 'number' ? body.order : undefined,
         heroImageUrl: typeof body.heroImageUrl === 'string' ? body.heroImageUrl : null,
         blocks: Array.isArray(body.blocks) ? body.blocks : [],
       },
@@ -689,7 +725,29 @@ apiRouter.put('/admin/parrain-guides/:vaType', requireAdmin, (req: Request, res:
     );
     res.json({ success: true, guide });
   } catch (err: any) {
-    res.status(400).json({ error: err?.message || 'Impossible de enregistrer le guide parrain.' });
+    const status = err?.status === 404 ? 404 : 400;
+    res.status(status).json({ error: err?.message || 'Impossible d’enregistrer le guide parrain.' });
+  }
+});
+
+apiRouter.delete('/admin/parrain-guides/:guideId', requireAdmin, (req: Request, res: Response) => {
+  const currentUser: User = (req as any).user;
+  const rawParam = req.params.guideId || '';
+
+  try {
+    const result = db.deleteParrainGuide(rawParam, {
+      id: currentUser.id,
+      displayName: currentUser.displayName,
+    });
+    const guideList = db.listParrainGuides();
+    const guides = {
+      CHATTEUR: guideList.find(g => g.id === 'CHATTEUR'),
+      INSTAGRAM: guideList.find(g => g.id === 'INSTAGRAM'),
+    };
+    res.json({ success: true, ...result, guides, guideList });
+  } catch (err: any) {
+    const status = err?.status === 404 ? 404 : 400;
+    res.status(status).json({ error: err?.message || 'Impossible de supprimer le guide parrain.' });
   }
 });
 

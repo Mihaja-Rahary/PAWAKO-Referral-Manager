@@ -2575,6 +2575,227 @@ describe('PAWAKO Referral Manager — Tests Complets Isolés (Mockés)', () => {
     const notFoundJson = (await notFoundRes.json()) as any;
     assert.equal(notFoundJson.code, 'ROUTE_NOT_FOUND');
   });
+
+  it('7.9 Multi-guides Onboarding Parrains : création (POST), modification (PUT), suppression (DELETE), RBAC & isolation', async () => {
+    const adminLogin = await loginViaWorkerOAuth(mock, env, 'admin', {
+      id: env.INITIAL_ADMIN_DISCORD_ID!,
+      username: 'super_admin',
+      global_name: 'Super Admin',
+      avatar: null,
+    });
+    const parrainInstaLogin = await loginViaWorkerOAuth(mock, env, 'parrain', {
+      id: '200000000000000795',
+      username: 'parrain_multi_insta',
+      global_name: 'Parrain Multi Insta',
+      avatar: null,
+    });
+
+    await app.fetch(
+      new Request(`${WORKER_ORIGIN}/api/parrain/specialty`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: `pawako_session=${parrainInstaLogin.sessionCookie}`,
+          Origin: FRONTEND_ORIGIN,
+        },
+        body: JSON.stringify({ vaType: 'INSTAGRAM' }),
+      }),
+      env
+    );
+
+    // 1. Un parrain ne peut pas créer ni supprimer un guide (403)
+    const forbiddenCreate = await app.fetch(
+      new Request(`${WORKER_ORIGIN}/api/admin/parrain-guides`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: `pawako_session=${parrainInstaLogin.sessionCookie}`,
+          Origin: FRONTEND_ORIGIN,
+        },
+        body: JSON.stringify({ vaType: 'INSTAGRAM', title: 'Interdit', blocks: [] }),
+      }),
+      env
+    );
+    assert.equal(forbiddenCreate.status, 403);
+
+    // 2. Admin crée deux nouveaux guides (1 INSTAGRAM, 1 CHATTEUR)
+    const createInstaRes = await app.fetch(
+      new Request(`${WORKER_ORIGIN}/api/admin/parrain-guides`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: `pawako_session=${adminLogin.sessionCookie}`,
+          Origin: FRONTEND_ORIGIN,
+        },
+        body: JSON.stringify({
+          vaType: 'INSTAGRAM',
+          title: 'Checklist 7 jours Nouveau Parrain Instagram',
+          subtitle: 'Étapes clés pour démarrer efficacement.',
+          category: 'Onboarding',
+          order: 15,
+          blocks: [
+            {
+              id: 'b-rich-1',
+              type: 'TEXT',
+              title: 'Démarrage rapide',
+              body: '## Étapes\n\n1. Préparer le **brief**\n2. Consulter [la charte](https://pawako.example/charte)',
+            },
+          ],
+        }),
+      }),
+      env
+    );
+    assert.equal(createInstaRes.status, 201);
+    const createdInsta = ((await createInstaRes.json()) as any).guide;
+    assert.ok(createdInsta.id.startsWith('guide-instagram-'));
+    assert.equal(createdInsta.category, 'Onboarding');
+    assert.equal(createdInsta.isPrimary, false);
+
+    const createChatRes = await app.fetch(
+      new Request(`${WORKER_ORIGIN}/api/admin/parrain-guides`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: `pawako_session=${adminLogin.sessionCookie}`,
+          Origin: FRONTEND_ORIGIN,
+        },
+        body: JSON.stringify({
+          vaType: 'CHATTEUR',
+          title: 'Guide Secret Chatteur',
+          category: 'Règles',
+          blocks: [],
+        }),
+      }),
+      env
+    );
+    assert.equal(createChatRes.status, 201);
+
+    // 3. Admin liste tous les guides via guideList
+    const adminListRes = await app.fetch(
+      new Request(`${WORKER_ORIGIN}/api/admin/parrain-guides`, {
+        headers: { Cookie: `pawako_session=${adminLogin.sessionCookie}`, Origin: FRONTEND_ORIGIN },
+      }),
+      env
+    );
+    assert.equal(adminListRes.status, 200);
+    const adminListJson = (await adminListRes.json()) as any;
+    assert.equal(adminListJson.guideList.length, 4);
+    assert.ok(adminListJson.guides.CHATTEUR);
+    assert.ok(adminListJson.guides.INSTAGRAM);
+
+    // 4. Parrain INSTAGRAM voit le guide principal + le nouveau guide INSTAGRAM, jamais le guide CHATTEUR
+    const parrainGuidesRes = await app.fetch(
+      new Request(`${WORKER_ORIGIN}/api/parrain/guide`, {
+        headers: { Cookie: `pawako_session=${parrainInstaLogin.sessionCookie}`, Origin: FRONTEND_ORIGIN },
+      }),
+      env
+    );
+    assert.equal(parrainGuidesRes.status, 200);
+    const parrainGuidesJson = (await parrainGuidesRes.json()) as any;
+    assert.equal(parrainGuidesJson.guides.length, 2);
+    assert.ok(parrainGuidesJson.guides.some((g: any) => g.id === createdInsta.id));
+    assert.ok(parrainGuidesJson.guides.every((g: any) => g.vaType === 'INSTAGRAM'));
+
+    // 5. Admin modifie le guide personnalisé (PUT) et obtient 404 sur un ID inexistant
+    const updateCustomRes = await app.fetch(
+      new Request(`${WORKER_ORIGIN}/api/admin/parrain-guides/${encodeURIComponent(createdInsta.id)}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: `pawako_session=${adminLogin.sessionCookie}`,
+          Origin: FRONTEND_ORIGIN,
+        },
+        body: JSON.stringify({
+          vaType: 'INSTAGRAM',
+          title: 'Checklist 7 jours — Version Finale',
+          category: 'Bonnes pratiques',
+          blocks: createdInsta.blocks,
+        }),
+      }),
+      env
+    );
+    assert.equal(updateCustomRes.status, 200);
+    const updatedCustom = ((await updateCustomRes.json()) as any).guide;
+    assert.equal(updatedCustom.title, 'Checklist 7 jours — Version Finale');
+    assert.equal(updatedCustom.category, 'Bonnes pratiques');
+
+    const updateMissingRes = await app.fetch(
+      new Request(`${WORKER_ORIGIN}/api/admin/parrain-guides/guide-inexistant-404`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: `pawako_session=${adminLogin.sessionCookie}`,
+          Origin: FRONTEND_ORIGIN,
+        },
+        body: JSON.stringify({ title: 'Test', blocks: [] }),
+      }),
+      env
+    );
+    assert.equal(updateMissingRes.status, 404);
+
+    // 6. Parrain ne peut pas supprimer (403)
+    const forbiddenDeleteRes = await app.fetch(
+      new Request(`${WORKER_ORIGIN}/api/admin/parrain-guides/${encodeURIComponent(createdInsta.id)}`, {
+        method: 'DELETE',
+        headers: { Cookie: `pawako_session=${parrainInstaLogin.sessionCookie}`, Origin: FRONTEND_ORIGIN },
+      }),
+      env
+    );
+    assert.equal(forbiddenDeleteRes.status, 403);
+
+    // 7. Admin supprime le guide personnalisé -> retiré de guideList et de l'accueil parrain
+    const deleteCustomRes = await app.fetch(
+      new Request(`${WORKER_ORIGIN}/api/admin/parrain-guides/${encodeURIComponent(createdInsta.id)}`, {
+        method: 'DELETE',
+        headers: { Cookie: `pawako_session=${adminLogin.sessionCookie}`, Origin: FRONTEND_ORIGIN },
+      }),
+      env
+    );
+    assert.equal(deleteCustomRes.status, 200);
+    const deleteCustomJson = (await deleteCustomRes.json()) as any;
+    assert.equal(deleteCustomJson.deletedId, createdInsta.id);
+    assert.equal(deleteCustomJson.resetToDefault, false);
+    assert.equal(deleteCustomJson.guideList.length, 3);
+
+    const afterDeleteParrainRes = await app.fetch(
+      new Request(`${WORKER_ORIGIN}/api/parrain/guide`, {
+        headers: { Cookie: `pawako_session=${parrainInstaLogin.sessionCookie}`, Origin: FRONTEND_ORIGIN },
+      }),
+      env
+    );
+    const afterDeleteParrainJson = (await afterDeleteParrainRes.json()) as any;
+    assert.equal(afterDeleteParrainJson.guides.length, 1);
+
+    // 8. Suppression d'un guide principal personnalise -> réinitialisation au modèle par défaut
+    await app.fetch(
+      new Request(`${WORKER_ORIGIN}/api/admin/parrain-guides/INSTAGRAM`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: `pawako_session=${adminLogin.sessionCookie}`,
+          Origin: FRONTEND_ORIGIN,
+        },
+        body: JSON.stringify({ title: 'Guide Insta Customisé', blocks: [] }),
+      }),
+      env
+    );
+    const resetPrimaryRes = await app.fetch(
+      new Request(`${WORKER_ORIGIN}/api/admin/parrain-guides/INSTAGRAM`, {
+        method: 'DELETE',
+        headers: { Cookie: `pawako_session=${adminLogin.sessionCookie}`, Origin: FRONTEND_ORIGIN },
+      }),
+      env
+    );
+    assert.equal(resetPrimaryRes.status, 200);
+    const resetPrimaryJson = (await resetPrimaryRes.json()) as any;
+    assert.equal(resetPrimaryJson.resetToDefault, true);
+    assert.equal(resetPrimaryJson.guides.INSTAGRAM.isDefault, true);
+
+    const repo = createRepo(env);
+    const logs = await repo.getAuditLogs(20);
+    assert.ok(logs.some(l => l.action === 'PARRAIN_GUIDE_CREATED'));
+    assert.ok(logs.some(l => l.action === 'PARRAIN_GUIDE_DELETED'));
+  });
 });
 
 
