@@ -39,6 +39,15 @@ interface Props {
   onCloseMobile?: () => void;
 }
 
+interface NavItemDef {
+  id: NavigationTab;
+  label: string;
+  icon: React.ComponentType<{ className?: string }>;
+  roles: UserRole[];
+  group: 'pilotage' | 'contenu' | 'infra';
+  countLabel?: string;
+}
+
 export const Sidebar: React.FC<Props> = ({
   activeTab,
   onTabChange,
@@ -61,63 +70,77 @@ export const Sidebar: React.FC<Props> = ({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isMobileOpen, onCloseMobile]);
 
-  // Navigation items strictly segregated by role
-  const navItems = [
+  const navItems: NavItemDef[] = [
     {
-      id: 'parrain_portal' as NavigationTab,
-      label: 'Mon Espace Parrain',
-      icon: UserCheck,
-      roles: ['PARRAIN', 'ADMINISTRATEUR', 'RESPONSABLE'],
-    },
-    {
-      id: 'candidates' as NavigationTab,
-      label: isParrainOnly ? 'Mes Filleuls' : 'Candidats',
-      icon: Users,
-      roles: ['PARRAIN', 'ADMINISTRATEUR', 'RESPONSABLE'],
-    },
-    {
-      id: 'dashboard' as NavigationTab,
+      id: 'dashboard',
       label: 'Tableau de bord',
       icon: LayoutDashboard,
       roles: ['ADMINISTRATEUR', 'RESPONSABLE'],
+      group: 'pilotage',
     },
     {
-      id: 'referrers' as NavigationTab,
+      id: 'candidates',
+      label: isParrainOnly ? 'Mes Filleuls' : 'Candidats',
+      icon: Users,
+      roles: ['PARRAIN', 'ADMINISTRATEUR', 'RESPONSABLE'],
+      group: 'pilotage',
+    },
+    {
+      id: 'referrers',
       label: 'Parrains',
       icon: Award,
       roles: ['ADMINISTRATEUR', 'RESPONSABLE'],
+      group: 'pilotage',
     },
     {
-      id: 'parrain_guides' as NavigationTab,
+      id: 'parrain_guides',
       label: 'Guides Parrains',
       icon: BookOpen,
       roles: ['ADMINISTRATEUR', 'RESPONSABLE'],
+      group: 'contenu',
     },
     {
-      id: 'discord_sync' as NavigationTab,
+      id: 'parrain_portal',
+      label: 'Mon Espace Parrain',
+      icon: UserCheck,
+      roles: ['PARRAIN', 'ADMINISTRATEUR', 'RESPONSABLE'],
+      group: 'contenu',
+    },
+    {
+      id: 'discord_sync',
       label: 'Serveurs Discord',
       icon: Server,
       roles: ['ADMINISTRATEUR', 'RESPONSABLE'],
+      group: 'infra',
       countLabel: '4',
     },
     {
-      id: 'users' as NavigationTab,
+      id: 'users',
       label: 'Utilisateurs & Rôles',
       icon: Shield,
       roles: ['ADMINISTRATEUR'],
+      group: 'infra',
     },
     {
-      id: 'audit_logs' as NavigationTab,
+      id: 'audit_logs',
       label: "Journal d'Audit",
       icon: FileText,
       roles: ['ADMINISTRATEUR'],
+      group: 'infra',
     },
     {
-      id: 'oauth_settings' as NavigationTab,
+      id: 'oauth_settings',
       label: 'Configuration',
       icon: Settings,
       roles: ['ADMINISTRATEUR'],
+      group: 'infra',
     },
+  ];
+
+  const groups: { id: 'pilotage' | 'contenu' | 'infra'; label: string }[] = [
+    { id: 'pilotage', label: 'Pilotage' },
+    { id: 'contenu', label: 'Onboarding & Contenu' },
+    { id: 'infra', label: 'Infrastructure' },
   ];
 
   const visibleItems = navItems.filter(item => item.roles.includes(role));
@@ -139,7 +162,7 @@ export const Sidebar: React.FC<Props> = ({
         <div className="flex items-center gap-3 min-w-0">
           <PawakoLogo size="md" />
           <div className="min-w-0">
-            <div className="font-extrabold text-slate-900 dark:text-[#f4f1fa] text-base tracking-tight leading-none whitespace-nowrap">
+            <div className="font-serif font-bold text-slate-950 dark:text-[#f8f6fc] text-lg tracking-tight leading-none whitespace-nowrap">
               PAWAKO
             </div>
             <p className="text-[11px] text-slate-500 dark:text-[#9d93b8] mt-1 font-medium truncate">
@@ -159,47 +182,61 @@ export const Sidebar: React.FC<Props> = ({
         )}
       </div>
 
-      {/* Navigation Links */}
-      <nav className="flex-1 p-3 space-y-1 overflow-y-auto">
-        {visibleItems.map(item => {
-          const Icon = item.icon;
-          const isActive = activeTab === item.id;
+      {/* Grouped Navigation Links */}
+      <nav className="flex-1 p-3.5 space-y-5 overflow-y-auto">
+        {groups.map(group => {
+          const groupItems = visibleItems.filter(item => item.group === group.id);
+          if (groupItems.length === 0) return null;
+
           return (
-            <button
-              key={item.id}
-              onClick={() => handleSelectTab(item.id)}
-              className={`w-full min-h-[44px] lg:min-h-0 flex items-center justify-between px-3 py-2.5 text-xs font-medium rounded-lg transition-colors text-left cursor-pointer ${
-                isActive
-                  ? 'bg-violet-600 text-white dark:bg-violet-600/20 dark:text-violet-200 dark:border dark:border-violet-500/40'
-                  : 'text-slate-600 dark:text-[#9d93b8] hover:text-slate-900 dark:hover:text-[#f4f1fa] hover:bg-slate-50 dark:hover:bg-[#140e24] border border-transparent'
-              }`}
-            >
-              <div className="flex items-center gap-2.5 min-w-0">
-                <Icon
-                  className={`w-4 h-4 shrink-0 ${
-                    isActive ? 'text-white dark:text-violet-400' : 'text-slate-400 dark:text-[#6e648c]'
-                  }`}
-                />
-                <span className="truncate whitespace-nowrap">{item.label}</span>
+            <div key={group.id} className="space-y-1">
+              <div className="px-3 pb-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400 dark:text-[#6e648c]">
+                {group.label}
               </div>
-              {item.countLabel && (
-                <span
-                  className={`text-[11px] font-mono tabular-nums shrink-0 ml-2 ${
-                    isActive ? 'text-violet-100 dark:text-violet-300' : 'text-slate-400 dark:text-[#6e648c]'
-                  }`}
-                >
-                  {item.countLabel}
-                </span>
-              )}
-            </button>
+              {groupItems.map(item => {
+                const Icon = item.icon;
+                const isActive = activeTab === item.id;
+                return (
+                  <button
+                    key={item.id}
+                    onClick={() => handleSelectTab(item.id)}
+                    className={`w-full min-h-[42px] lg:min-h-[38px] flex items-center justify-between px-3 py-2 text-xs font-medium rounded-xl transition-all text-left cursor-pointer ${
+                      isActive
+                        ? 'bg-slate-950 text-white dark:bg-[#19112b] dark:text-white border border-slate-950 dark:border-violet-500/45 shadow-xs'
+                        : 'text-slate-600 dark:text-[#9d93b8] hover:text-slate-950 dark:hover:text-[#f4f1fa] hover:bg-slate-100/80 dark:hover:bg-[#130d21] border border-transparent'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <Icon
+                        className={`w-4 h-4 shrink-0 ${
+                          isActive
+                            ? 'text-violet-300 dark:text-violet-400'
+                            : 'text-slate-400 dark:text-[#6e648c]'
+                        }`}
+                      />
+                      <span className="truncate whitespace-nowrap">{item.label}</span>
+                    </div>
+                    {item.countLabel && (
+                      <span
+                        className={`text-[11px] font-mono tabular-nums shrink-0 ml-2 ${
+                          isActive ? 'text-slate-300 dark:text-violet-300' : 'text-slate-400 dark:text-[#6e648c]'
+                        }`}
+                      >
+                        {item.countLabel}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
           );
         })}
       </nav>
 
       {/* Discord Servers Summary (Admins & Responsables only) */}
       {!isParrainOnly && (
-        <div className="p-3.5 mx-3 mb-3 bg-slate-50 dark:bg-[#100b1a] border border-slate-200 dark:border-[#241a38] rounded-xl text-xs space-y-2">
-          <div className="flex items-center justify-between text-[11px] font-semibold text-slate-700 dark:text-[#e9e5f5]">
+        <div className="p-3.5 mx-3.5 mb-3.5 bg-slate-50/90 dark:bg-[#100b1a] border border-slate-200 dark:border-[#241a38] rounded-xl text-xs space-y-2.5">
+          <div className="flex items-center justify-between text-[11px] font-semibold text-slate-800 dark:text-[#e9e5f5]">
             <span className="flex items-center gap-1.5">
               <Radio className="w-3.5 h-3.5 text-violet-600 dark:text-violet-400" />
               <span>Serveurs Discord</span>
@@ -208,7 +245,7 @@ export const Sidebar: React.FC<Props> = ({
               {connectedCount}/4
             </span>
           </div>
-          <div className="text-[11px] text-slate-500 dark:text-[#9d93b8] space-y-1">
+          <div className="text-[11px] text-slate-500 dark:text-[#9d93b8] space-y-1.5 pt-1 border-t border-slate-200/70 dark:border-[#1e1530]">
             <div className="flex justify-between">
               <span>Recrutement</span>
               <span className="font-mono tabular-nums text-slate-800 dark:text-[#f4f1fa] font-medium">
@@ -238,7 +275,7 @@ export const Sidebar: React.FC<Props> = ({
       )}
 
       {/* User Card & Logout */}
-      <div className="p-3 border-t border-slate-200 dark:border-[#1e1530] bg-slate-50/50 dark:bg-[#07040d]">
+      <div className="p-3.5 border-t border-slate-200 dark:border-[#1e1530] bg-slate-50/50 dark:bg-[#07040d]">
         {currentUser ? (
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-2.5 min-w-0">

@@ -244,8 +244,54 @@ export const CandidatesView: React.FC<Props> = ({
         )}
       </div>
 
-      {/* Control Bar: Filters & Actions */}
-      <div className="bg-white dark:bg-[#100b1a] border border-slate-200 dark:border-[#241a38] rounded-xl p-4 space-y-3 shadow-xs transition-colors">
+      {/* Control Bar: Header, Quick Tabs & Filters */}
+      <div className="bg-white dark:bg-[#100b1a] border border-slate-200 dark:border-[#241a38] rounded-xl p-4 sm:p-5 space-y-4 shadow-xs transition-colors">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100 dark:border-[#241a38]">
+          <div>
+            <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-violet-600 dark:text-violet-400">
+              Pipeline Recrutement
+            </div>
+            <h3 className="font-serif text-lg sm:text-xl font-bold text-slate-900 dark:text-[#f4f1fa] tracking-tight">
+              {total} dossier{total > 1 ? 's' : ''} candidat{total > 1 ? 's' : ''}
+            </h3>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-1.5">
+            {[
+              { id: 'ALL', label: 'Tous', active: status === 'ALL' && !anomalyOnly },
+              { id: 'EN_ATTENTE', label: 'En attente', active: status === 'EN_ATTENTE' && !anomalyOnly },
+              { id: 'EN_FORMATION', label: 'Formation', active: status === 'EN_FORMATION' && !anomalyOnly },
+              { id: 'EN_SIMULATION', label: 'Simulation', active: status === 'EN_SIMULATION' && !anomalyOnly },
+              { id: 'EN_PRODUCTION', label: 'En Production', active: status === 'EN_PRODUCTION' && !anomalyOnly },
+              { id: 'ANOMALY', label: 'Anomalies', active: anomalyOnly },
+            ].map(tab => (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => {
+                  if (tab.id === 'ANOMALY') {
+                    setAnomalyOnly(true);
+                    setStatus('ALL');
+                  } else {
+                    setAnomalyOnly(false);
+                    setStatus(tab.id as CandidateStatus | 'ALL');
+                  }
+                  setPage(1);
+                }}
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                  tab.active
+                    ? tab.id === 'ANOMALY'
+                      ? 'bg-rose-600 text-white shadow-xs'
+                      : 'bg-slate-950 dark:bg-violet-600 text-white shadow-xs'
+                    : 'bg-slate-100 dark:bg-[#171026] text-slate-600 dark:text-[#b4aacb] hover:text-slate-900 dark:hover:text-[#f4f1fa] hover:bg-slate-200/70 dark:hover:bg-[#1f1633]'
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
         <div className="flex flex-col md:flex-row gap-3 items-stretch md:items-center justify-between">
           {/* Search */}
           <div className="relative flex-1">
@@ -267,7 +313,7 @@ export const CandidatesView: React.FC<Props> = ({
             {isResponsableOrAdmin && (
               <button
                 onClick={onOpenNewCandidateModal}
-                className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-white bg-violet-600 hover:bg-violet-500 rounded-lg transition-colors shadow-xs shadow-violet-600/20 whitespace-nowrap"
+                className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-violet-600 hover:bg-violet-500 rounded-lg transition-all shadow-xs shadow-violet-600/20 hover:-translate-y-0.5 whitespace-nowrap cursor-pointer"
               >
                 <Plus className="w-4 h-4" />
                 <span>Nouveau Candidat</span>

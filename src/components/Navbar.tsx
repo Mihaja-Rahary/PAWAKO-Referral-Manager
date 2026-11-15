@@ -43,7 +43,7 @@ export const Navbar: React.FC<Props> = ({
             <Menu className="w-5 h-5" />
           </button>
         )}
-        <h2 className="text-sm sm:text-base font-bold text-slate-900 dark:text-[#f4f1fa] tracking-tight truncate">
+        <h2 className="font-serif text-base sm:text-xl font-bold text-slate-950 dark:text-[#f8f6fc] tracking-tight truncate">
           {title}
         </h2>
       </div>
