@@ -1,13 +1,16 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { ParrainGuide, ParrainGuideBlock, ParrainGuideCalloutTone } from '../types';
 import { formatDate, getVaTypeLabel } from '../utils/statusUtils';
+import { estimateReadingMinutes, resolveGuideCoverUrl } from '../utils/blogCovers';
 import {
   Info,
   ShieldCheck,
   AlertTriangle,
   CheckCircle2,
   ImageOff,
+  Clock,
   BookOpen,
+  ListChecks,
 } from 'lucide-react';
 
 interface Props {
@@ -15,14 +18,6 @@ interface Props {
   compactHeader?: boolean;
 }
 
-/**
- * Formateur sûr en React pur (aucun HTML injecté / aucun dangerouslySetInnerHTML) :
- * - Titres ## et sous-titres ###
- * - Paragraphes séparés par des sauts de ligne
- * - Listes à puces ("• ", "- ", "* ") et listes numérotées ("1. ")
- * - Citations ("> ")
- * - Gras (**texte**), italique (*texte*), souligné (__texte__), code (`texte`), liens [label](https://...)
- */
 function isSafeHttpUrl(url: string): boolean {
   return /^https?:\/\/[^\s<>"']+$/i.test(url.trim());
 }
@@ -47,7 +42,7 @@ function renderInlineText(text: string): React.ReactNode[] {
             href={linkMatch[2].trim()}
             target="_blank"
             rel="noopener noreferrer"
-            className="font-medium text-violet-600 dark:text-violet-400 underline underline-offset-2 hover:text-violet-500"
+            className="font-medium text-violet-700 dark:text-violet-300 underline decoration-violet-400/60 underline-offset-4 hover:text-violet-500 transition-colors"
           >
             {linkMatch[1]}
           </a>
@@ -57,13 +52,13 @@ function renderInlineText(text: string): React.ReactNode[] {
       }
     } else if (raw.startsWith('**') && raw.endsWith('**')) {
       tokens.push(
-        <strong key={`${match.index}-b`} className="font-semibold text-slate-900 dark:text-[#f4f1fa]">
+        <strong key={`${match.index}-b`} className="font-semibold text-slate-950 dark:text-white">
           {raw.slice(2, -2)}
         </strong>
       );
     } else if (raw.startsWith('__') && raw.endsWith('__')) {
       tokens.push(
-        <span key={`${match.index}-u`} className="underline underline-offset-2 decoration-violet-500/70">
+        <span key={`${match.index}-u`} className="underline underline-offset-4 decoration-violet-500/70">
           {raw.slice(2, -2)}
         </span>
       );
@@ -77,7 +72,7 @@ function renderInlineText(text: string): React.ReactNode[] {
       tokens.push(
         <code
           key={`${match.index}-c`}
-          className="px-1.5 py-0.5 rounded bg-slate-100 dark:bg-[#171026] border border-slate-200/70 dark:border-[#2e224a] font-mono text-[11px] text-slate-800 dark:text-[#e9e5f5]"
+          className="px-1.5 py-0.5 rounded bg-slate-100 dark:bg-[#171026] border border-slate-200/70 dark:border-[#2e224a] font-mono text-[12px] text-slate-800 dark:text-[#e9e5f5]"
         >
           {raw.slice(1, -1)}
         </code>
@@ -93,7 +88,15 @@ function renderInlineText(text: string): React.ReactNode[] {
   return tokens;
 }
 
-export function RichTextContent({ text, className = '' }: { text?: string; className?: string }) {
+export function RichTextContent({
+  text,
+  className = '',
+  enableDropCap = false,
+}: {
+  text?: string;
+  className?: string;
+  enableDropCap?: boolean;
+}) {
   if (!text || !text.trim()) return null;
 
   const lines = text.split('\n');
@@ -101,13 +104,14 @@ export function RichTextContent({ text, className = '' }: { text?: string; class
   let unorderedBuffer: string[] = [];
   let orderedBuffer: string[] = [];
   let quoteBuffer: string[] = [];
+  let hasUsedDropCap = false;
 
   const flushUnordered = (keyPrefix: string) => {
     if (unorderedBuffer.length === 0) return;
     elements.push(
-      <ul key={keyPrefix} className="space-y-1.5 pl-4 list-disc marker:text-violet-500">
+      <ul key={keyPrefix} className="space-y-2 pl-5 list-disc marker:text-violet-500">
         {unorderedBuffer.map((item, idx) => (
-          <li key={`${keyPrefix}-${idx}`} className="leading-relaxed">
+          <li key={`${keyPrefix}-${idx}`} className="leading-[1.72] pl-1">
             {renderInlineText(item)}
           </li>
         ))}
@@ -119,9 +123,9 @@ export function RichTextContent({ text, className = '' }: { text?: string; class
   const flushOrdered = (keyPrefix: string) => {
     if (orderedBuffer.length === 0) return;
     elements.push(
-      <ol key={keyPrefix} className="space-y-1.5 pl-5 list-decimal marker:font-mono marker:text-violet-500 tabular-nums">
+      <ol key={keyPrefix} className="space-y-2 pl-6 list-decimal marker:font-mono marker:font-semibold marker:text-violet-500 tabular-nums">
         {orderedBuffer.map((item, idx) => (
-          <li key={`${keyPrefix}-${idx}`} className="leading-relaxed pl-1">
+          <li key={`${keyPrefix}-${idx}`} className="leading-[1.72] pl-1.5">
             {renderInlineText(item)}
           </li>
         ))}
@@ -135,7 +139,7 @@ export function RichTextContent({ text, className = '' }: { text?: string; class
     elements.push(
       <blockquote
         key={keyPrefix}
-        className="border-l-2 border-violet-300 dark:border-violet-500/50 pl-3 py-0.5 text-slate-600 dark:text-[#b7aed0] italic space-y-1"
+        className="border-y border-slate-200 dark:border-[#241a38] py-4 my-4 px-4 sm:px-6 text-center font-serif italic text-base sm:text-lg text-slate-700 dark:text-[#d8d0eb] space-y-1.5"
       >
         {quoteBuffer.map((qLine, idx) => (
           <p key={`${keyPrefix}-${idx}`} className="leading-relaxed">
@@ -163,14 +167,20 @@ export function RichTextContent({ text, className = '' }: { text?: string; class
     if (/^###\s+/.test(trimmed)) {
       flushAll(`h3-pre-${idx}`);
       elements.push(
-        <h5 key={`h3-${idx}`} className="text-xs sm:text-sm font-semibold text-slate-900 dark:text-[#f4f1fa] pt-1">
+        <h5
+          key={`h3-${idx}`}
+          className="font-serif text-base sm:text-lg font-semibold text-slate-900 dark:text-[#f4f1fa] pt-2 tracking-tight"
+        >
           {renderInlineText(trimmed.replace(/^###\s+/, ''))}
         </h5>
       );
     } else if (/^##?\s+/.test(trimmed)) {
       flushAll(`h2-pre-${idx}`);
       elements.push(
-        <h4 key={`h2-${idx}`} className="text-sm sm:text-[15px] font-bold text-slate-900 dark:text-[#f4f1fa] pt-1.5 tracking-tight">
+        <h4
+          key={`h2-${idx}`}
+          className="font-serif text-lg sm:text-xl font-bold text-slate-900 dark:text-[#f4f1fa] pt-3 tracking-tight"
+        >
           {renderInlineText(trimmed.replace(/^##?\s+/, ''))}
         </h4>
       );
@@ -188,8 +198,17 @@ export function RichTextContent({ text, className = '' }: { text?: string; class
       orderedBuffer.push(trimmed.replace(/^\d+\.\s+/, ''));
     } else {
       flushAll(`p-pre-${idx}`);
+      const applyDropCap = enableDropCap && !hasUsedDropCap && trimmed.length > 40;
+      if (applyDropCap) hasUsedDropCap = true;
       elements.push(
-        <p key={`p-${idx}`} className="leading-relaxed">
+        <p
+          key={`p-${idx}`}
+          className={`leading-[1.78] ${
+            applyDropCap
+              ? 'first-letter:font-serif first-letter:text-4xl sm:first-letter:text-[2.75rem] first-letter:font-bold first-letter:float-left first-letter:mr-3 first-letter:leading-[0.88] first-letter:text-violet-700 dark:first-letter:text-violet-300'
+              : ''
+          }`}
+        >
           {renderInlineText(trimmed)}
         </p>
       );
@@ -198,7 +217,7 @@ export function RichTextContent({ text, className = '' }: { text?: string; class
 
   flushAll('end');
 
-  return <div className={`space-y-2.5 text-xs sm:text-sm ${className}`}>{elements}</div>;
+  return <div className={`space-y-4 text-[15px] sm:text-base ${className}`}>{elements}</div>;
 }
 
 function SafeImage({
@@ -214,9 +233,9 @@ function SafeImage({
 
   if (!src || hasError) {
     return (
-      <div className="w-full py-10 px-4 rounded-xl border border-dashed border-slate-200 dark:border-[#241a38] bg-slate-50 dark:bg-[#08050f] flex flex-col items-center justify-center gap-2 text-xs text-slate-400 dark:text-[#7c7296]">
+      <div className="w-full py-12 px-4 rounded-2xl border border-dashed border-slate-200 dark:border-[#241a38] bg-slate-50 dark:bg-[#08050f] flex flex-col items-center justify-center gap-2 text-xs text-slate-400 dark:text-[#7c7296]">
         <ImageOff className="w-5 h-5" />
-        <span>Image indisponible ou lien inaccessible</span>
+        <span>Illustration indisponible</span>
       </div>
     );
   }
@@ -237,52 +256,60 @@ function getCalloutStyles(tone: ParrainGuideCalloutTone = 'info') {
     case 'condition':
       return {
         container:
-          'bg-violet-50/70 dark:bg-[#171026] border-violet-200 dark:border-violet-500/35 text-violet-950 dark:text-violet-100',
+          'bg-violet-50/70 dark:bg-[#160f24] border-violet-200 dark:border-violet-500/30 text-violet-950 dark:text-violet-100',
         icon: ShieldCheck,
         iconColor: 'text-violet-600 dark:text-violet-400',
+        kicker: 'Règle & Condition',
       };
     case 'warning':
       return {
         container:
-          'bg-amber-50/80 dark:bg-[#1b1410] border-amber-200 dark:border-amber-500/35 text-amber-950 dark:text-amber-100',
+          'bg-amber-50/80 dark:bg-[#1a130e] border-amber-200 dark:border-amber-500/30 text-amber-950 dark:text-amber-100',
         icon: AlertTriangle,
         iconColor: 'text-amber-600 dark:text-amber-400',
+        kicker: 'Point de vigilance',
       };
     case 'success':
       return {
         container:
-          'bg-emerald-50/80 dark:bg-emerald-950/20 border-emerald-200 dark:border-emerald-500/35 text-emerald-950 dark:text-emerald-100',
+          'bg-emerald-50/80 dark:bg-emerald-950/20 border-emerald-200 dark:border-emerald-500/30 text-emerald-950 dark:text-emerald-100',
         icon: CheckCircle2,
         iconColor: 'text-emerald-600 dark:text-emerald-400',
+        kicker: 'Bonne pratique',
       };
     case 'info':
     default:
       return {
         container:
-          'bg-slate-50 dark:bg-[#171026] border-slate-200 dark:border-[#2e224a] text-slate-900 dark:text-[#f4f1fa]',
+          'bg-slate-50 dark:bg-[#140e22] border-slate-200 dark:border-[#2a1f42] text-slate-900 dark:text-[#f4f1fa]',
         icon: Info,
         iconColor: 'text-slate-600 dark:text-violet-300',
+        kicker: 'À noter',
       };
   }
 }
 
-function renderBlock(block: ParrainGuideBlock) {
+function renderArticleBlock(block: ParrainGuideBlock, index: number, firstTextBlockId?: string) {
+  const sectionDomId = `guide-sec-${block.id}`;
+
   if (block.type === 'CALLOUT') {
     const styles = getCalloutStyles(block.tone);
     const Icon = styles.icon;
     return (
-      <div
+      <aside
+        id={sectionDomId}
         key={block.id}
-        className={`rounded-xl border p-4 sm:p-5 space-y-2 transition-colors ${styles.container}`}
+        className={`rounded-2xl border p-5 sm:p-6 space-y-2.5 transition-colors scroll-mt-6 ${styles.container}`}
       >
-        <div className="flex items-start gap-2.5">
-          <Icon className={`w-4 h-4 shrink-0 mt-0.5 ${styles.iconColor}`} />
-          <div className="space-y-1.5 min-w-0 flex-1">
-            {block.title && <h3 className="text-sm font-bold leading-snug">{block.title}</h3>}
-            <RichTextContent text={block.body} className="opacity-95" />
-          </div>
+        <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wider opacity-80">
+          <Icon className={`w-4 h-4 shrink-0 ${styles.iconColor}`} />
+          <span>{styles.kicker}</span>
         </div>
-      </div>
+        {block.title && (
+          <h3 className="font-serif text-lg sm:text-xl font-bold leading-snug">{block.title}</h3>
+        )}
+        <RichTextContent text={block.body} className="opacity-95" />
+      </aside>
     );
   }
 
@@ -290,74 +317,80 @@ function renderBlock(block: ParrainGuideBlock) {
     const headers = block.headers || [];
     const rows = block.rows || [];
     return (
-      <div
+      <section
+        id={sectionDomId}
         key={block.id}
-        className="bg-white dark:bg-[#100b1a] border border-slate-200 dark:border-[#241a38] rounded-xl overflow-hidden transition-colors"
+        className="space-y-3 scroll-mt-6"
       >
         {block.title && (
-          <div className="px-4 sm:px-5 py-3.5 border-b border-slate-100 dark:border-[#241a38]">
-            <h3 className="text-sm font-bold text-slate-900 dark:text-[#f4f1fa]">{block.title}</h3>
-          </div>
+          <h3 className="font-serif text-xl sm:text-2xl font-bold text-slate-900 dark:text-[#f4f1fa] tracking-tight">
+            {block.title}
+          </h3>
         )}
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs">
-            <thead className="bg-slate-50 dark:bg-[#171026] text-slate-600 dark:text-[#9d93b8] uppercase tracking-wider text-[11px] border-b border-slate-200 dark:border-[#241a38]">
-              <tr>
-                {headers.map((h, i) => (
-                  <th key={i} className="py-3 px-4 font-semibold whitespace-nowrap">
-                    {h}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100 dark:divide-[#1e1530] text-slate-700 dark:text-[#d8d0eb] tabular-nums">
-              {rows.length === 0 ? (
+        <div className="bg-white dark:bg-[#100b1a] border border-slate-200 dark:border-[#241a38] rounded-2xl overflow-hidden transition-colors">
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs sm:text-sm">
+              <thead className="bg-slate-50 dark:bg-[#171026] text-slate-600 dark:text-[#9d93b8] uppercase tracking-wider text-[11px] border-b border-slate-200 dark:border-[#241a38]">
                 <tr>
-                  <td colSpan={Math.max(1, headers.length)} className="py-6 px-4 text-center text-slate-400">
-                    Aucune ligne dans ce tableau.
-                  </td>
+                  {headers.map((h, i) => (
+                    <th key={i} className="py-3.5 px-4 sm:px-5 font-semibold whitespace-nowrap">
+                      {h}
+                    </th>
+                  ))}
                 </tr>
-              ) : (
-                rows.map((row, rIdx) => (
-                  <tr key={rIdx} className="hover:bg-slate-50/60 dark:hover:bg-[#171026]/70 transition-colors">
-                    {headers.map((_, cIdx) => (
-                      <td
-                        key={cIdx}
-                        className={`py-3 px-4 align-top leading-relaxed ${
-                          cIdx === 0 ? 'font-semibold text-slate-900 dark:text-[#f4f1fa]' : ''
-                        }`}
-                      >
-                        {row[cIdx] || '—'}
-                      </td>
-                    ))}
+              </thead>
+              <tbody className="divide-y divide-slate-100 dark:divide-[#1e1530] text-slate-700 dark:text-[#d8d0eb] tabular-nums">
+                {rows.length === 0 ? (
+                  <tr>
+                    <td colSpan={Math.max(1, headers.length)} className="py-6 px-4 text-center text-slate-400">
+                      Aucune ligne dans ce tableau.
+                    </td>
                   </tr>
-                ))
-              )}
-            </tbody>
-          </table>
+                ) : (
+                  rows.map((row, rIdx) => (
+                    <tr key={rIdx} className="hover:bg-slate-50/60 dark:hover:bg-[#171026]/70 transition-colors">
+                      {headers.map((_, cIdx) => (
+                        <td
+                          key={cIdx}
+                          className={`py-3.5 px-4 sm:px-5 align-top leading-relaxed ${
+                            cIdx === 0 ? 'font-semibold text-slate-900 dark:text-[#f4f1fa]' : ''
+                          }`}
+                        >
+                          {row[cIdx] || '—'}
+                        </td>
+                      ))}
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
-      </div>
+      </section>
     );
   }
 
   if (block.type === 'IMAGE') {
     return (
       <figure
+        id={sectionDomId}
         key={block.id}
-        className="bg-white dark:bg-[#100b1a] border border-slate-200 dark:border-[#241a38] rounded-xl overflow-hidden p-4 sm:p-5 space-y-3 transition-colors"
+        className="space-y-3 py-2 scroll-mt-6"
       >
         {block.title && (
-          <h3 className="text-sm font-bold text-slate-900 dark:text-[#f4f1fa]">{block.title}</h3>
+          <h3 className="font-serif text-xl sm:text-2xl font-bold text-slate-900 dark:text-[#f4f1fa] tracking-tight">
+            {block.title}
+          </h3>
         )}
-        <div className="rounded-lg overflow-hidden bg-slate-50 dark:bg-[#08050f] border border-slate-100 dark:border-[#241a38]">
+        <div className="rounded-2xl overflow-hidden bg-slate-100 dark:bg-[#08050f] border border-slate-200 dark:border-[#241a38]">
           <SafeImage
             src={block.imageUrl || ''}
             alt={block.caption || block.title || 'Illustration PAWAKO'}
-            className="w-full max-h-[460px] object-contain mx-auto"
+            className="w-full max-h-[500px] object-contain mx-auto"
           />
         </div>
         {block.caption && (
-          <figcaption className="text-[11px] text-slate-500 dark:text-[#9d93b8] text-center">
+          <figcaption className="text-xs font-serif italic text-slate-500 dark:text-[#9d93b8] text-center">
             {block.caption}
           </figcaption>
         )}
@@ -365,75 +398,170 @@ function renderBlock(block: ParrainGuideBlock) {
     );
   }
 
-  // TEXT
+  // TEXT — Long-form editorial prose without heavy boxy frames
+  const showChapterRule = index > 0 && Boolean(block.title);
+  const useDropCap = block.id === firstTextBlockId;
+
   return (
     <section
+      id={sectionDomId}
       key={block.id}
-      className="bg-white dark:bg-[#100b1a] border border-slate-200 dark:border-[#241a38] rounded-xl p-4 sm:p-6 space-y-2.5 transition-colors"
+      className={`space-y-4 scroll-mt-6 ${
+        showChapterRule ? 'pt-7 border-t border-slate-200/80 dark:border-[#241a38]' : ''
+      }`}
     >
       {block.title && (
-        <h3 className="text-sm sm:text-base font-bold text-slate-900 dark:text-[#f4f1fa] tracking-tight">
+        <h3 className="font-serif text-xl sm:text-2xl font-bold text-slate-900 dark:text-[#f4f1fa] tracking-tight leading-snug [text-wrap:balance]">
           {block.title}
         </h3>
       )}
       <RichTextContent
         text={block.body}
-        className="text-slate-600 dark:text-[#d8d0eb]"
+        enableDropCap={useDropCap}
+        className="text-slate-700 dark:text-[#d8d0eb]"
       />
     </section>
   );
 }
 
 export const ParrainGuideRenderer: React.FC<Props> = ({ guide, compactHeader = false }) => {
+  const coverUrl = resolveGuideCoverUrl(guide);
+  const readingMinutes = useMemo(() => estimateReadingMinutes(guide), [guide]);
+
+  const tocSections = useMemo(
+    () =>
+      (guide.blocks || [])
+        .filter(b => Boolean(b.title && b.title.trim()))
+        .map((b, idx) => ({
+          id: b.id,
+          domId: `guide-sec-${b.id}`,
+          number: String(idx + 1).padStart(2, '0'),
+          title: b.title!.trim(),
+        })),
+    [guide.blocks]
+  );
+
+  const firstTextBlockId = useMemo(
+    () => (guide.blocks || []).find(b => b.type === 'TEXT' && Boolean(b.body?.trim()))?.id,
+    [guide.blocks]
+  );
+
+  const hasSidebarToc = tocSections.length >= 2;
+
+  const scrollToSection = (domId: string) => {
+    const el = document.getElementById(domId);
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  };
+
   return (
-    <div className="space-y-4 sm:space-y-5">
-      {/* Guide Intro Card */}
-      <div className="bg-white dark:bg-[#100b1a] border border-slate-200 dark:border-[#241a38] rounded-xl overflow-hidden transition-colors">
-        {guide.heroImageUrl && (
-          <div className="w-full max-h-60 overflow-hidden bg-slate-50 dark:bg-[#08050f] border-b border-slate-200 dark:border-[#241a38]">
-            <SafeImage
-              src={guide.heroImageUrl}
-              alt={guide.title}
-              className="w-full h-48 sm:h-60 object-cover"
-            />
-          </div>
-        )}
-        <div className={compactHeader ? 'p-4 sm:p-5 space-y-2' : 'p-5 sm:p-6 space-y-2.5'}>
-          <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-500 dark:text-[#9d93b8]">
-            <span className="inline-flex items-center gap-1.5 font-semibold text-violet-700 dark:text-violet-300">
-              <BookOpen className="w-3.5 h-3.5" />
-              <span>Parcours {getVaTypeLabel(guide.vaType)}</span>
-              {guide.category && (
-                <span className="text-slate-400 dark:text-[#7c7296] font-normal">
-                  · {guide.category}
-                </span>
-              )}
-            </span>
-            {guide.updatedAt && (
+    <article className="bg-white dark:bg-[#100b1a] border border-slate-200 dark:border-[#241a38] rounded-2xl overflow-hidden transition-colors">
+      {/* Editorial Article Header */}
+      <header className={`${compactHeader ? 'px-5 pt-6 pb-5 sm:px-8 sm:pt-8' : 'px-5 pt-7 pb-6 sm:px-10 sm:pt-10'} max-w-5xl mx-auto space-y-5`}>
+        {/* Unboxed Editorial Kicker & Metadata Line */}
+        <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-xs text-slate-500 dark:text-[#9d93b8]">
+          <span className="font-semibold uppercase tracking-wider text-violet-700 dark:text-violet-300">
+            {guide.category || (guide.isPrimary ? 'Guide principal' : 'Article')}
+          </span>
+          <span aria-hidden="true" className="text-slate-300 dark:text-[#3b2d5c]">·</span>
+          <span>Parcours {getVaTypeLabel(guide.vaType)}</span>
+          <span aria-hidden="true" className="text-slate-300 dark:text-[#3b2d5c]">·</span>
+          <span className="inline-flex items-center gap-1 font-mono tabular-nums">
+            <Clock className="w-3.5 h-3.5 text-slate-400 dark:text-[#7c7296]" />
+            {readingMinutes} min de lecture
+          </span>
+          {guide.updatedAt && (
+            <>
+              <span aria-hidden="true" className="text-slate-300 dark:text-[#3b2d5c]">·</span>
               <span className="font-mono tabular-nums">
-                Mis à jour : {formatDate(guide.updatedAt)}
+                Mis à jour le {formatDate(guide.updatedAt)}
               </span>
-            )}
-          </div>
-          <h2 className="text-lg sm:text-xl font-extrabold text-slate-900 dark:text-[#f4f1fa] tracking-tight leading-snug">
-            {guide.title}
-          </h2>
-          {guide.subtitle && (
-            <p className="text-xs sm:text-sm text-slate-600 dark:text-[#b7aed0] leading-relaxed">
-              {guide.subtitle}
-            </p>
+            </>
           )}
         </div>
-      </div>
 
-      {/* Content Blocks */}
-      {guide.blocks.length === 0 ? (
-        <div className="bg-white dark:bg-[#100b1a] border border-dashed border-slate-200 dark:border-[#241a38] rounded-xl p-8 text-center text-xs text-slate-500 dark:text-[#9d93b8]">
-          Aucun bloc de contenu renseigné pour ce parcours pour le moment.
+        {/* Display Serif Headline */}
+        <h1 className="font-serif text-2xl sm:text-4xl lg:text-[2.55rem] font-bold text-slate-950 dark:text-[#f8f6fc] tracking-tight leading-[1.14] [text-wrap:balance]">
+          {guide.title}
+        </h1>
+
+        {/* Lead Deck / Chapeau */}
+        {guide.subtitle && (
+          <p className="text-base sm:text-lg text-slate-600 dark:text-[#b7aed0] leading-relaxed max-w-3xl">
+            {guide.subtitle}
+          </p>
+        )}
+
+        {/* Featured Cover Photo cleanly framed below headline/deck */}
+        <div className="pt-2">
+          <div className="aspect-[16/9] max-h-[420px] w-full rounded-2xl overflow-hidden bg-slate-100 dark:bg-[#08050f] border border-slate-200/80 dark:border-[#241a38]">
+            <SafeImage
+              src={coverUrl}
+              alt={guide.title}
+              className="w-full h-full object-cover"
+            />
+          </div>
         </div>
-      ) : (
-        <div className="space-y-4">{guide.blocks.map(block => renderBlock(block))}</div>
-      )}
-    </div>
+      </header>
+
+      {/* Main Long-Form Editorial Body + Optional Sticky Sommaire */}
+      <div className="px-5 pb-8 sm:px-10 sm:pb-12 pt-4 sm:pt-6 max-w-5xl mx-auto">
+        {guide.blocks.length === 0 ? (
+          <div className="border border-dashed border-slate-200 dark:border-[#241a38] rounded-2xl p-10 text-center text-sm text-slate-500 dark:text-[#9d93b8]">
+            Aucun chapitre rédigé dans cet article pour le moment.
+          </div>
+        ) : hasSidebarToc ? (
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-12 items-start">
+            {/* Reading Column (~70%) */}
+            <div className="lg:col-span-8 space-y-8 min-w-0">
+              {guide.blocks.map((block, index) =>
+                renderArticleBlock(block, index, firstTextBlockId)
+              )}
+            </div>
+
+            {/* Sticky Table of Contents (~30%) */}
+            <aside className="hidden lg:block lg:col-span-4 sticky top-6 space-y-4">
+              <div className="rounded-2xl border border-slate-200 dark:border-[#241a38] bg-slate-50/70 dark:bg-[#140e22] p-5 space-y-4">
+                <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-[#9d93b8]">
+                  <ListChecks className="w-4 h-4 text-violet-600 dark:text-violet-400" />
+                  <span>Sommaire de l&apos;article</span>
+                </div>
+
+                <nav aria-label="Sommaire de l'article" className="space-y-1.5">
+                  {tocSections.map(sec => (
+                    <button
+                      key={sec.id}
+                      type="button"
+                      onClick={() => scrollToSection(sec.domId)}
+                      className="w-full text-left py-1.5 px-2.5 rounded-lg text-xs text-slate-600 dark:text-[#c4badb] hover:bg-white dark:hover:bg-[#1d1431] hover:text-slate-950 dark:hover:text-white transition-colors flex items-baseline gap-2.5 cursor-pointer"
+                    >
+                      <span className="font-mono tabular-nums text-[11px] text-violet-600 dark:text-violet-400 shrink-0">
+                        {sec.number}
+                      </span>
+                      <span className="leading-snug font-medium line-clamp-2">{sec.title}</span>
+                    </button>
+                  ))}
+                </nav>
+
+                <div className="pt-3 border-t border-slate-200/80 dark:border-[#241a38] text-[11px] text-slate-500 dark:text-[#9d93b8] flex items-center justify-between">
+                  <span className="inline-flex items-center gap-1.5">
+                    <BookOpen className="w-3.5 h-3.5 text-violet-500" />
+                    <span>PAWAKO Éditorial</span>
+                  </span>
+                  <span className="font-mono tabular-nums">{readingMinutes} min</span>
+                </div>
+              </div>
+            </aside>
+          </div>
+        ) : (
+          <div className="max-w-[740px] mx-auto space-y-8">
+            {guide.blocks.map((block, index) =>
+              renderArticleBlock(block, index, firstTextBlockId)
+            )}
+          </div>
+        )}
+      </div>
+    </article>
   );
 };

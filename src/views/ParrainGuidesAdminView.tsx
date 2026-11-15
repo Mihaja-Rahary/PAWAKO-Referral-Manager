@@ -12,6 +12,12 @@ import { ParrainGuideRenderer } from '../components/ParrainGuideRenderer';
 import { SimpleRichTextEditor } from '../components/SimpleRichTextEditor';
 import { formatDate } from '../utils/statusUtils';
 import {
+  BUILTIN_BLOG_COVERS,
+  estimateReadingMinutes,
+  extractGuideExcerpt,
+  resolveGuideCoverUrl,
+} from '../utils/blogCovers';
+import {
   BookOpen,
   Save,
   Eye,
@@ -33,6 +39,8 @@ import {
   RotateCcw,
   X,
   FilePlus2,
+  Clock,
+  Sparkles,
 } from 'lucide-react';
 
 interface Props {
@@ -94,7 +102,7 @@ function buildStarterBlocks(template: StarterTemplate, vaType: VAType): ParrainG
       id: createBlockId('txt'),
       type: 'TEXT',
       title: 'Introduction',
-      body: 'Rédigez le contenu de votre guide avec la barre de mise en forme ci-dessus.',
+      body: 'Rédigez votre article avec la barre visuelle ci-dessus : titres, listes, citations et liens.',
     },
   ];
 }
@@ -172,6 +180,7 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
   const [isDirty, setIsDirty] = useState(false);
   const [mode, setMode] = useState<'edit' | 'preview'>('edit');
   const [guideSearch, setGuideSearch] = useState('');
+  const [showCoverStudio, setShowCoverStudio] = useState(false);
 
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
@@ -342,8 +351,8 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
       newBlock = {
         id: createBlockId('txt'),
         type: 'TEXT',
-        title: 'Nouvelle section',
-        body: 'Rédigez votre contenu ici.\n\n- Utilisez la barre ci-dessus pour mettre en **gras**, *italique*, ou ajouter des listes\n- Ajoutez des liens utiles pour accompagner les nouveaux parrains',
+        title: 'Nouveau chapitre',
+        body: 'Rédigez votre contenu ici.\n\n- Utilisez la barre visuelle ci-dessus pour formater votre texte\n- Ajoutez des liens utiles pour accompagner les nouveaux parrains',
       };
     }
 
@@ -391,7 +400,7 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
       const dataUrl = await compressImageFileToDataUrl(file);
       updateDraft(prev => ({ ...prev, heroImageUrl: dataUrl }));
     } catch (err: any) {
-      setFeedback({ type: 'err', text: err?.message || "Échec de l'import de la bannière." });
+      setFeedback({ type: 'err', text: err?.message || "Échec de l'import de la couverture." });
     } finally {
       setIsUploadingHero(false);
     }
@@ -443,7 +452,7 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
   const handleSave = async () => {
     if (!draft || !isAdmin || isSaving) return;
     if (!draft.title.trim()) {
-      setFeedback({ type: 'err', text: 'Le titre du guide est obligatoire.' });
+      setFeedback({ type: 'err', text: "Le titre de l'article est obligatoire." });
       return;
     }
     if (isOverSizeLimit) {
@@ -477,14 +486,14 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
       setIsDirty(false);
       setFeedback({
         type: 'ok',
-        text: `Guide « ${res.guide.title} » enregistré et publié dans l'accueil des parrains ${
+        text: `Article « ${res.guide.title} » enregistré et publié dans le journal des parrains ${
           res.guide.vaType === 'CHATTEUR' ? 'VA Chatteur' : 'VA Instagram'
         }.`,
       });
     } catch (err: any) {
       setFeedback({
         type: 'err',
-        text: err?.message || "Erreur lors de l'enregistrement du guide.",
+        text: err?.message || "Erreur lors de l'enregistrement de l'article.",
       });
     } finally {
       setIsSaving(false);
@@ -505,7 +514,7 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
     e.preventDefault();
     if (!isAdmin || isCreating) return;
     if (!newTitle.trim()) {
-      setCreateError('Veuillez saisir un titre pour le nouveau guide.');
+      setCreateError('Veuillez saisir un titre pour le nouvel article.');
       return;
     }
 
@@ -532,10 +541,10 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
       setMode('edit');
       setFeedback({
         type: 'ok',
-        text: `Nouveau guide « ${res.guide.title} » créé. Vous pouvez maintenant enrichir son contenu et publier vos modifications.`,
+        text: `Nouvel article « ${res.guide.title} » créé. Vous pouvez maintenant le rédiger et le publier.`,
       });
     } catch (err: any) {
-      setCreateError(err?.message || 'Impossible de créer le guide.');
+      setCreateError(err?.message || "Impossible de créer l'article.");
     } finally {
       setIsCreating(false);
     }
@@ -573,14 +582,14 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
       setFeedback({
         type: 'ok',
         text: res.resetToDefault
-          ? `Le guide principal « ${target.title} » a été réinitialisé sur le modèle par défaut.`
-          : `Le guide « ${target.title} » a été supprimé définitivement.`,
+          ? `L'article principal « ${target.title} » a été réinitialisé sur le modèle par défaut.`
+          : `L'article « ${target.title} » a été supprimé définitivement.`,
       });
     } catch (err: any) {
       setConfirmDeleteGuide(null);
       setFeedback({
         type: 'err',
-        text: err?.message || 'Erreur lors de la suppression du guide.',
+        text: err?.message || 'Erreur lors de la suppression.',
       });
     } finally {
       setIsDeleting(false);
@@ -589,16 +598,16 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
 
   if (isLoading) {
     return (
-      <div className="bg-white dark:bg-[#100b1a] border border-slate-200 dark:border-[#241a38] rounded-xl p-12 text-center text-xs text-slate-500 dark:text-[#9d93b8]">
+      <div className="bg-white dark:bg-[#100b1a] border border-slate-200 dark:border-[#241a38] rounded-2xl p-12 text-center text-xs text-slate-500 dark:text-[#9d93b8]">
         <RefreshCw className="w-5 h-5 animate-spin mx-auto mb-2 text-violet-500" />
-        Chargement de l&apos;éditeur des guides parrains...
+        Chargement du studio éditorial PAWAKO...
       </div>
     );
   }
 
   if (loadError || !draft) {
     return (
-      <div className="bg-white dark:bg-[#100b1a] border border-rose-200 dark:border-rose-500/30 rounded-xl p-8 max-w-xl mx-auto text-center space-y-3 text-xs">
+      <div className="bg-white dark:bg-[#100b1a] border border-rose-200 dark:border-rose-500/30 rounded-2xl p-8 max-w-xl mx-auto text-center space-y-3 text-xs">
         <AlertCircle className="w-6 h-6 text-rose-500 mx-auto" />
         <p className="text-rose-800 dark:text-rose-200 font-medium leading-relaxed">
           {loadError || 'Guides introuvables.'}
@@ -629,48 +638,53 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
   }
 
   const isPrimaryDraft = Boolean(draft.isPrimary || draft.id === 'CHATTEUR' || draft.id === 'INSTAGRAM');
+  const resolvedCover = resolveGuideCoverUrl(draft);
+  const draftMinutes = estimateReadingMinutes(draft);
 
   return (
-    <div className="space-y-5">
-      {/* Top Bar */}
-      <div className="bg-white dark:bg-[#100b1a] border border-slate-200 dark:border-[#241a38] rounded-xl p-4 sm:p-5 space-y-4">
+    <div className="space-y-6">
+      {/* Studio Top Bar + Editorial Library */}
+      <div className="bg-white dark:bg-[#100b1a] border border-slate-200 dark:border-[#241a38] rounded-2xl p-5 sm:p-6 space-y-5">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
           <div className="space-y-1">
-            <h2 className="text-base font-bold text-slate-900 dark:text-[#f4f1fa] flex items-center gap-2">
-              <BookOpen className="w-4 h-4 text-violet-600 dark:text-violet-400" />
-              <span>Guides &amp; Onboarding Parrains</span>
+            <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wider text-violet-700 dark:text-violet-300">
+              <BookOpen className="w-3.5 h-3.5" />
+              <span>Studio Éditorial Parrains</span>
+            </div>
+            <h2 className="font-serif text-xl sm:text-2xl font-bold text-slate-950 dark:text-[#f8f6fc] tracking-tight">
+              Articles &amp; Guides d&apos;Onboarding
             </h2>
             <p className="text-xs text-slate-500 dark:text-[#9d93b8]">
-              Créez, modifiez et organisez les guides affichés dans l&apos;accueil des nouveaux parrains (texte enrichi, conditions, tableaux et photos).
+              Rédigez des articles immersifs avec couverture, mise en forme visuelle, tableaux de rémunération et photos.
             </p>
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            {/* Segmented Editor / Preview switch */}
-            <div className="inline-flex p-1 rounded-lg bg-slate-100 dark:bg-[#171026] border border-slate-200 dark:border-[#241a38]">
+            {/* Segmented Editor / Blog Preview switch */}
+            <div className="inline-flex p-1 rounded-xl bg-slate-100 dark:bg-[#171026] border border-slate-200 dark:border-[#241a38]">
               <button
                 type="button"
                 onClick={() => setMode('edit')}
-                className={`min-h-[34px] px-3 py-1 text-xs font-semibold rounded-md flex items-center gap-1.5 whitespace-nowrap cursor-pointer transition-colors ${
+                className={`min-h-[34px] px-3 py-1 text-xs font-semibold rounded-lg flex items-center gap-1.5 whitespace-nowrap cursor-pointer transition-colors ${
                   mode === 'edit'
                     ? 'bg-white dark:bg-[#231839] text-slate-900 dark:text-[#f4f1fa] shadow-xs'
                     : 'text-slate-600 dark:text-[#9d93b8]'
                 }`}
               >
                 <Edit3 className="w-3.5 h-3.5" />
-                <span>Éditeur</span>
+                <span>Studio</span>
               </button>
               <button
                 type="button"
                 onClick={() => setMode('preview')}
-                className={`min-h-[34px] px-3 py-1 text-xs font-semibold rounded-md flex items-center gap-1.5 whitespace-nowrap cursor-pointer transition-colors ${
+                className={`min-h-[34px] px-3 py-1 text-xs font-semibold rounded-lg flex items-center gap-1.5 whitespace-nowrap cursor-pointer transition-colors ${
                   mode === 'preview'
                     ? 'bg-white dark:bg-[#231839] text-slate-900 dark:text-[#f4f1fa] shadow-xs'
                     : 'text-slate-600 dark:text-[#9d93b8]'
                 }`}
               >
                 <Eye className="w-3.5 h-3.5" />
-                <span>Aperçu Parrain</span>
+                <span>Aperçu Blog</span>
               </button>
             </div>
 
@@ -679,33 +693,33 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
                 <button
                   type="button"
                   onClick={openCreateModal}
-                  className="min-h-[40px] px-3.5 py-2 text-xs font-semibold text-slate-800 dark:text-[#f4f1fa] bg-slate-100 dark:bg-[#171026] hover:bg-slate-200 dark:hover:bg-[#231839] border border-slate-200 dark:border-[#241a38] rounded-lg transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
+                  className="min-h-[40px] px-3.5 py-2 text-xs font-semibold text-slate-800 dark:text-[#f4f1fa] bg-slate-100 dark:bg-[#171026] hover:bg-slate-200 dark:hover:bg-[#231839] border border-slate-200 dark:border-[#241a38] rounded-xl transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
                 >
                   <FilePlus2 className="w-3.5 h-3.5 text-violet-600 dark:text-violet-400" />
-                  <span>Nouveau guide</span>
+                  <span>Nouvel article</span>
                 </button>
 
                 <button
                   type="button"
                   onClick={handleSave}
                   disabled={isSaving || isOverSizeLimit}
-                  className="min-h-[40px] px-4 py-2 text-xs font-semibold text-white bg-violet-600 hover:bg-violet-500 disabled:opacity-50 rounded-lg transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
+                  className="min-h-[40px] px-4 py-2 text-xs font-semibold text-white bg-violet-600 hover:bg-violet-500 disabled:opacity-50 rounded-xl transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
                 >
                   {isSaving ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
-                  <span>{isSaving ? 'Enregistrement...' : isDirty ? 'Enregistrer *' : 'Enregistrer & Publier'}</span>
+                  <span>{isSaving ? 'Publication...' : isDirty ? 'Publier les modifs *' : 'Enregistrer & Publier'}</span>
                 </button>
               </>
             )}
           </div>
         </div>
 
-        {/* Specialty Tabs + Doc Size */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-3 border-t border-slate-100 dark:border-[#1e1530]">
+        {/* Specialty Tabs + Weight */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-4 border-t border-slate-100 dark:border-[#1e1530]">
           <div className="flex flex-wrap items-center gap-2">
             {(
               [
-                { id: 'CHATTEUR' as VAType, label: 'Parcours VA Chatteur' },
-                { id: 'INSTAGRAM' as VAType, label: 'Parcours VA Instagram' },
+                { id: 'CHATTEUR' as VAType, label: 'Journal VA Chatteur' },
+                { id: 'INSTAGRAM' as VAType, label: 'Journal VA Instagram' },
               ]
             ).map(tab => {
               const active = activeVaType === tab.id;
@@ -715,7 +729,7 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
                   key={tab.id}
                   type="button"
                   onClick={() => handleSelectTrack(tab.id)}
-                  className={`min-h-[38px] px-3.5 py-1.5 text-xs font-semibold rounded-lg border transition-colors whitespace-nowrap shrink-0 flex items-center gap-2 cursor-pointer ${
+                  className={`min-h-[38px] px-3.5 py-1.5 text-xs font-semibold rounded-xl border transition-colors whitespace-nowrap shrink-0 flex items-center gap-2 cursor-pointer ${
                     active
                       ? 'bg-violet-600 text-white border-violet-600'
                       : 'bg-slate-50 dark:bg-[#171026] text-slate-700 dark:text-[#d8d0eb] border-slate-200 dark:border-[#241a38] hover:bg-slate-100 dark:hover:bg-[#231839]'
@@ -737,11 +751,11 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
           <div className="flex flex-wrap items-center gap-3 text-[11px] text-slate-500 dark:text-[#9d93b8]">
             {draft.updatedAt && (
               <span>
-                Dernière modif : <span className="font-mono tabular-nums">{formatDate(draft.updatedAt)}</span>
+                Modifié le <span className="font-mono tabular-nums">{formatDate(draft.updatedAt)}</span>
               </span>
             )}
             <span
-              className={`font-mono tabular-nums px-2 py-0.5 rounded border ${
+              className={`font-mono tabular-nums px-2 py-0.5 rounded-md border ${
                 isOverSizeLimit
                   ? 'bg-rose-50 dark:bg-rose-950/30 border-rose-200 dark:border-rose-500/30 text-rose-700 dark:text-rose-300'
                   : 'bg-slate-50 dark:bg-[#171026] border-slate-200 dark:border-[#241a38]'
@@ -752,11 +766,11 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
           </div>
         </div>
 
-        {/* Guide Library / Selector for the Active Specialty */}
-        <div className="pt-3 border-t border-slate-100 dark:border-[#1e1530] space-y-3">
+        {/* Visual Blog Cards Selector */}
+        <div className="pt-4 border-t border-slate-100 dark:border-[#1e1530] space-y-3">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
             <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-500 dark:text-[#9d93b8]">
-              Guides publiés dans ce parcours ({guidesByTrack[activeVaType].length})
+              Articles publiés dans ce journal ({guidesByTrack[activeVaType].length})
             </div>
             {guidesByTrack[activeVaType].length > 2 && (
               <div className="relative w-full sm:w-64">
@@ -765,53 +779,68 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
                   type="text"
                   value={guideSearch}
                   onChange={e => setGuideSearch(e.target.value)}
-                  placeholder="Filtrer les guides..."
-                  className="w-full min-h-[32px] pl-8 pr-3 py-1 text-xs border border-slate-200 dark:border-[#241a38] rounded-lg bg-slate-50 dark:bg-[#08050f] text-slate-900 dark:text-[#f4f1fa]"
+                  placeholder="Filtrer les articles..."
+                  className="w-full min-h-[34px] pl-8 pr-3 py-1 text-xs border border-slate-200 dark:border-[#241a38] rounded-lg bg-slate-50 dark:bg-[#08050f] text-slate-900 dark:text-[#f4f1fa]"
                 />
               </div>
             )}
           </div>
 
           {filteredTrackGuides.length === 0 ? (
-            <div className="p-4 rounded-lg border border-dashed border-slate-200 dark:border-[#241a38] text-xs text-slate-500 dark:text-[#9d93b8] text-center">
-              Aucun guide ne correspond à « {guideSearch} ».
+            <div className="p-6 rounded-xl border border-dashed border-slate-200 dark:border-[#241a38] text-xs text-slate-500 dark:text-[#9d93b8] text-center">
+              Aucun article ne correspond à « {guideSearch} ».
             </div>
           ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5">
               {filteredTrackGuides.map(g => {
                 const isSelected = g.id === draft.id;
-                const isPrimary = Boolean(g.isPrimary || g.id === 'CHATTEUR' || g.id === 'INSTAGRAM');
+                const thumbUrl = resolveGuideCoverUrl(g);
+                const mins = estimateReadingMinutes(g);
                 return (
                   <button
                     key={g.id}
                     type="button"
                     onClick={() => handleSelectGuide(g)}
-                    className={`text-left p-3 rounded-lg border transition-colors cursor-pointer flex flex-col justify-between gap-2 ${
+                    className={`group text-left rounded-xl border overflow-hidden transition-colors cursor-pointer flex flex-col ${
                       isSelected
-                        ? 'bg-violet-50/70 dark:bg-[#191129] border-violet-600 dark:border-violet-400'
-                        : 'bg-slate-50/70 dark:bg-[#150e23] border-slate-200 dark:border-[#241a38] hover:border-slate-300 dark:hover:border-[#392959]'
+                        ? 'bg-violet-50/60 dark:bg-[#1a112b] border-violet-600 dark:border-violet-400'
+                        : 'bg-slate-50/70 dark:bg-[#140d21] border-slate-200 dark:border-[#241a38] hover:border-slate-300 dark:hover:border-[#3c2b5e]'
                     }`}
                   >
-                    <div className="space-y-1 min-w-0">
-                      <div className="flex items-center justify-between gap-2 text-[11px]">
-                        <span className="font-semibold text-violet-700 dark:text-violet-300 truncate">
-                          {g.category || (isPrimary ? 'Guide principal' : 'Onboarding')}
-                        </span>
-                        <span className="font-mono tabular-nums text-slate-400 dark:text-[#7c7296] shrink-0">
+                    <div className="aspect-[16/9] w-full overflow-hidden bg-slate-200 dark:bg-[#08050f] border-b border-slate-200/70 dark:border-[#241a38]">
+                      <img
+                        src={thumbUrl}
+                        alt={g.title}
+                        referrerPolicy="no-referrer"
+                        className="w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-300"
+                      />
+                    </div>
+                    <div className="p-3.5 space-y-1.5 flex-1 flex flex-col justify-between">
+                      <div className="space-y-1">
+                        <div className="flex items-center justify-between gap-2 text-[11px] text-slate-500 dark:text-[#9d93b8]">
+                          <span className="font-semibold uppercase tracking-wider text-violet-700 dark:text-violet-300 truncate">
+                            {g.category || (g.isPrimary ? 'Guide principal' : 'Onboarding')}
+                          </span>
+                          <span className="font-mono tabular-nums shrink-0">{mins} min</span>
+                        </div>
+                        <div className="font-serif text-sm font-bold text-slate-900 dark:text-[#f4f1fa] line-clamp-2 leading-snug">
+                          {g.title}
+                        </div>
+                        <p className="text-[11px] text-slate-500 dark:text-[#9d93b8] line-clamp-2 leading-relaxed">
+                          {extractGuideExcerpt(g, 95)}
+                        </p>
+                      </div>
+
+                      <div className="pt-2 flex items-center justify-between text-[11px] text-slate-400 dark:text-[#7c7296]">
+                        <span className="font-mono tabular-nums">
                           {g.blocks.length} bloc{g.blocks.length > 1 ? 's' : ''}
                         </span>
+                        {isSelected && (
+                          <span className="font-semibold text-violet-600 dark:text-violet-300">
+                            En cours d&apos;édition
+                          </span>
+                        )}
                       </div>
-                      <div className="text-xs font-bold text-slate-900 dark:text-[#f4f1fa] line-clamp-1">
-                        {g.title}
-                      </div>
-                    </div>
-                    <div className="flex items-center justify-between text-[11px] text-slate-500 dark:text-[#9d93b8]">
-                      <span>{isPrimary ? (g.isDefault ? 'Modèle par défaut' : 'Guide principal') : 'Guide personnalisé'}</span>
-                      {isSelected && (
-                        <span className="font-semibold text-violet-600 dark:text-violet-300">
-                          En cours d&apos;édition
-                        </span>
-                      )}
                     </div>
                   </button>
                 );
@@ -825,7 +854,7 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
         <div className="p-3.5 bg-amber-50 dark:bg-[#1b1410] border border-amber-200 dark:border-amber-500/30 rounded-xl flex items-center gap-2.5 text-xs text-amber-900 dark:text-amber-200">
           <Lock className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
           <span>
-            Mode lecture seule : seuls les comptes <strong>Administrateur</strong> peuvent créer, modifier et supprimer les guides parrains.
+            Mode lecture seule : seuls les comptes <strong>Administrateur</strong> peuvent créer, modifier et supprimer les articles.
           </span>
         </div>
       )}
@@ -848,132 +877,112 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
       )}
 
       {mode === 'preview' ? (
-        <div className="space-y-2">
+        <div className="space-y-3">
           <div className="text-[11px] uppercase tracking-wider font-semibold text-slate-500 dark:text-[#9d93b8]">
-            Aperçu tel que vu par un parrain {draft.vaType === 'CHATTEUR' ? 'VA Chatteur' : 'VA Instagram'}
+            Aperçu lecteur tel que vu par un parrain {draft.vaType === 'CHATTEUR' ? 'VA Chatteur' : 'VA Instagram'}
           </div>
           <ParrainGuideRenderer guide={draft} />
         </div>
       ) : (
-        <div className="space-y-4">
-          {/* Header & Hero Image Editor */}
-          <div className="bg-white dark:bg-[#100b1a] border border-slate-200 dark:border-[#241a38] rounded-xl p-4 sm:p-5 space-y-4 text-xs">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-slate-100 dark:border-[#1e1530]">
-              <div className="font-bold text-sm text-slate-900 dark:text-[#f4f1fa]">
-                Paramètres du guide ({draft.vaType === 'CHATTEUR' ? 'VA Chatteur' : 'VA Instagram'})
+        <div className="max-w-5xl mx-auto space-y-6">
+          {/* Substack / Ghost-inspired Editorial Article Masthead Composer */}
+          <div className="bg-white dark:bg-[#100b1a] border border-slate-200 dark:border-[#241a38] rounded-2xl overflow-hidden">
+            {/* Editorial Metadata Strip */}
+            <div className="px-5 sm:px-8 py-4 border-b border-slate-100 dark:border-[#1e1530] flex flex-wrap items-center justify-between gap-3 bg-slate-50/70 dark:bg-[#140e22] text-xs">
+              <div className="flex flex-wrap items-center gap-2.5 text-slate-600 dark:text-[#b7aed0]">
+                <span className="font-semibold text-violet-700 dark:text-violet-300">
+                  {draft.vaType === 'CHATTEUR' ? 'VA Chatteur' : 'VA Instagram'}
+                </span>
+                <span aria-hidden="true">·</span>
+                <span className="inline-flex items-center gap-1 font-mono tabular-nums">
+                  <Clock className="w-3.5 h-3.5" />
+                  ~{draftMinutes} min de lecture
+                </span>
               </div>
 
-              {isAdmin && (!isPrimaryDraft || !draft.isDefault) && (
+              <div className="flex flex-wrap items-center gap-2">
                 <button
                   type="button"
-                  onClick={() => setConfirmDeleteGuide(draft)}
-                  className="min-h-[34px] px-3 py-1.5 text-xs font-semibold text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/25 hover:bg-rose-100 dark:hover:bg-rose-950/45 border border-rose-200 dark:border-rose-500/30 rounded-lg flex items-center gap-1.5 self-start sm:self-auto cursor-pointer transition-colors"
+                  onClick={() => setShowCoverStudio(prev => !prev)}
+                  className="min-h-[34px] px-3 py-1 bg-white dark:bg-[#1f1633] hover:bg-slate-100 dark:hover:bg-[#2a1e45] border border-slate-200 dark:border-[#2e224a] rounded-lg font-semibold text-slate-700 dark:text-[#e9e5f5] flex items-center gap-1.5 cursor-pointer"
                 >
-                  {isPrimaryDraft ? <RotateCcw className="w-3.5 h-3.5" /> : <Trash2 className="w-3.5 h-3.5" />}
-                  <span>{isPrimaryDraft ? 'Réinitialiser par défaut' : 'Supprimer ce guide'}</span>
+                  <ImageIcon className="w-3.5 h-3.5 text-violet-500" />
+                  <span>{showCoverStudio ? 'Masquer options couverture' : 'Changer la couverture'}</span>
                 </button>
-              )}
+
+                {isAdmin && (!isPrimaryDraft || !draft.isDefault) && (
+                  <button
+                    type="button"
+                    onClick={() => setConfirmDeleteGuide(draft)}
+                    className="min-h-[34px] px-3 py-1 text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/25 hover:bg-rose-100 dark:hover:bg-rose-950/45 border border-rose-200 dark:border-rose-500/30 rounded-lg font-semibold flex items-center gap-1.5 cursor-pointer transition-colors"
+                  >
+                    {isPrimaryDraft ? <RotateCcw className="w-3.5 h-3.5" /> : <Trash2 className="w-3.5 h-3.5" />}
+                    <span>{isPrimaryDraft ? 'Réinitialiser' : 'Supprimer'}</span>
+                  </button>
+                )}
+              </div>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-12 gap-3">
-              <div className="md:col-span-6">
-                <label className="block text-[11px] font-semibold text-slate-600 dark:text-[#9d93b8] mb-1">
-                  Titre principal *
-                </label>
-                <input
-                  type="text"
-                  disabled={!isAdmin}
-                  value={draft.title}
-                  onChange={e => updateDraft(prev => ({ ...prev, title: e.target.value }))}
-                  className="w-full min-h-[38px] px-3 py-2 border border-slate-200 dark:border-[#241a38] rounded-lg bg-slate-50 dark:bg-[#08050f] text-slate-900 dark:text-[#f4f1fa] disabled:opacity-70"
-                />
-              </div>
+            {/* Cover Gallery & URL Studio (Collapsible or triggered from header) */}
+            {showCoverStudio && (
+              <div className="px-5 sm:px-8 py-5 border-b border-slate-100 dark:border-[#1e1530] bg-slate-50/40 dark:bg-[#0d0817] space-y-4 text-xs">
+                <div className="flex items-center justify-between">
+                  <div className="font-semibold text-slate-800 dark:text-[#f4f1fa] flex items-center gap-1.5">
+                    <Sparkles className="w-3.5 h-3.5 text-violet-500" />
+                    <span>Galerie de couvertures PAWAKO</span>
+                  </div>
+                  {isAdmin && draft.heroImageUrl && (
+                    <button
+                      type="button"
+                      onClick={() => updateDraft(prev => ({ ...prev, heroImageUrl: null }))}
+                      className="text-[11px] font-semibold text-violet-600 dark:text-violet-300 hover:underline cursor-pointer"
+                    >
+                      Revenir à la couverture automatique
+                    </button>
+                  )}
+                </div>
 
-              <div className="md:col-span-3">
-                <label className="block text-[11px] font-semibold text-slate-600 dark:text-[#9d93b8] mb-1">
-                  Catégorie
-                </label>
-                <input
-                  type="text"
-                  disabled={!isAdmin}
-                  list="pawako-guide-categories"
-                  value={draft.category || ''}
-                  onChange={e => updateDraft(prev => ({ ...prev, category: e.target.value }))}
-                  placeholder="Ex: Onboarding"
-                  className="w-full min-h-[38px] px-3 py-2 border border-slate-200 dark:border-[#241a38] rounded-lg bg-slate-50 dark:bg-[#08050f] text-slate-900 dark:text-[#f4f1fa] disabled:opacity-70"
-                />
-                <datalist id="pawako-guide-categories">
-                  {CATEGORY_PRESETS.map(cat => (
-                    <option key={cat} value={cat} />
-                  ))}
-                </datalist>
-              </div>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                  {BUILTIN_BLOG_COVERS.map(preset => {
+                    const isActive = draft.heroImageUrl === preset.url;
+                    return (
+                      <button
+                        key={preset.id}
+                        type="button"
+                        disabled={!isAdmin}
+                        onClick={() => updateDraft(prev => ({ ...prev, heroImageUrl: preset.url }))}
+                        className={`text-left rounded-xl border overflow-hidden transition-all cursor-pointer disabled:opacity-60 ${
+                          isActive
+                            ? 'border-violet-600 ring-2 ring-violet-500/30'
+                            : 'border-slate-200 dark:border-[#241a38] hover:border-violet-400'
+                        }`}
+                      >
+                        <div className="aspect-[16/9] w-full overflow-hidden bg-slate-200 dark:bg-[#08050f]">
+                          <img src={preset.url} alt={preset.label} className="w-full h-full object-cover" />
+                        </div>
+                        <div className="p-2 bg-white dark:bg-[#140e22]">
+                          <div className="text-[11px] font-bold text-slate-900 dark:text-[#f4f1fa] truncate">
+                            {preset.label}
+                          </div>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
 
-              <div className="md:col-span-3">
-                <label className="block text-[11px] font-semibold text-slate-600 dark:text-[#9d93b8] mb-1">
-                  Parcours cible
-                </label>
-                <select
-                  disabled={!isAdmin || isPrimaryDraft}
-                  value={draft.vaType}
-                  onChange={e => updateDraft(prev => ({ ...prev, vaType: e.target.value as VAType }))}
-                  className="w-full min-h-[38px] px-3 py-2 border border-slate-200 dark:border-[#241a38] rounded-lg bg-slate-50 dark:bg-[#08050f] text-slate-900 dark:text-[#f4f1fa] disabled:opacity-70"
-                >
-                  <option value="CHATTEUR">VA Chatteur</option>
-                  <option value="INSTAGRAM">VA Instagram</option>
-                </select>
-              </div>
-
-              <div className="md:col-span-10">
-                <label className="block text-[11px] font-semibold text-slate-600 dark:text-[#9d93b8] mb-1">
-                  Sous-titre / Introduction courte
-                </label>
-                <textarea
-                  rows={2}
-                  disabled={!isAdmin}
-                  value={draft.subtitle}
-                  onChange={e => updateDraft(prev => ({ ...prev, subtitle: e.target.value }))}
-                  className="w-full p-2.5 border border-slate-200 dark:border-[#241a38] rounded-lg bg-slate-50 dark:bg-[#08050f] text-slate-900 dark:text-[#f4f1fa] disabled:opacity-70"
-                />
-              </div>
-
-              <div className="md:col-span-2">
-                <label className="block text-[11px] font-semibold text-slate-600 dark:text-[#9d93b8] mb-1">
-                  Ordre
-                </label>
-                <input
-                  type="number"
-                  min={0}
-                  max={999}
-                  disabled={!isAdmin || isPrimaryDraft}
-                  value={typeof draft.order === 'number' ? draft.order : 0}
-                  onChange={e =>
-                    updateDraft(prev => ({
-                      ...prev,
-                      order: Math.max(0, Math.min(999, parseInt(e.target.value || '0', 10) || 0)),
-                    }))
-                  }
-                  className="w-full min-h-[38px] px-3 py-2 font-mono tabular-nums border border-slate-200 dark:border-[#241a38] rounded-lg bg-slate-50 dark:bg-[#08050f] text-slate-900 dark:text-[#f4f1fa] disabled:opacity-70"
-                />
-              </div>
-
-              <div className="md:col-span-12">
-                <label className="block text-[11px] font-semibold text-slate-600 dark:text-[#9d93b8] mb-1">
-                  Image de bannière (Optionnel — URL https:// ou import depuis votre PC)
-                </label>
                 <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
                   <input
                     type="text"
                     disabled={!isAdmin}
                     value={draft.heroImageUrl || ''}
                     onChange={e => updateDraft(prev => ({ ...prev, heroImageUrl: e.target.value }))}
-                    placeholder="https://... ou importer une photo"
-                    className="flex-1 min-h-[38px] px-3 py-1.5 font-mono border border-slate-200 dark:border-[#241a38] rounded-lg bg-slate-50 dark:bg-[#08050f] text-slate-900 dark:text-[#f4f1fa] disabled:opacity-70"
+                    placeholder="Ou collez une URL https:// personnalisée..."
+                    className="flex-1 min-h-[38px] px-3 py-1.5 font-mono border border-slate-200 dark:border-[#241a38] rounded-lg bg-white dark:bg-[#08050f] text-slate-900 dark:text-[#f4f1fa] disabled:opacity-70"
                   />
                   {isAdmin && (
-                    <label className="min-h-[38px] px-3 py-1.5 bg-slate-100 dark:bg-[#171026] hover:bg-slate-200 dark:hover:bg-[#231839] border border-slate-200 dark:border-[#241a38] rounded-lg font-semibold flex items-center justify-center gap-1.5 cursor-pointer shrink-0">
+                    <label className="min-h-[38px] px-3.5 py-1.5 bg-white dark:bg-[#171026] hover:bg-slate-100 dark:hover:bg-[#231839] border border-slate-200 dark:border-[#241a38] rounded-lg font-semibold flex items-center justify-center gap-1.5 cursor-pointer shrink-0">
                       <Upload className="w-3.5 h-3.5 text-violet-500" />
-                      <span>{isUploadingHero ? 'Compression...' : 'Importer photo'}</span>
+                      <span>{isUploadingHero ? 'Compression...' : 'Importer depuis PC'}</span>
                       <input
                         type="file"
                         accept="image/*"
@@ -982,45 +991,125 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
                       />
                     </label>
                   )}
-                  {isAdmin && draft.heroImageUrl && (
-                    <button
-                      type="button"
-                      onClick={() => updateDraft(prev => ({ ...prev, heroImageUrl: null }))}
-                      className="min-h-[38px] px-3 py-1.5 text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-500/30 rounded-lg font-semibold cursor-pointer"
-                    >
-                      Retirer
-                    </button>
-                  )}
                 </div>
-                {draft.heroImageUrl && (
-                  <img
-                    src={draft.heroImageUrl}
-                    alt="Aperçu bannière"
-                    referrerPolicy="no-referrer"
-                    className="mt-2.5 max-h-36 rounded-lg border border-slate-200 dark:border-[#241a38] object-cover"
+              </div>
+            )}
+
+            {/* Direct Editorial Headline & Lead Composer */}
+            <div className="p-5 sm:p-8 space-y-5">
+              <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 text-xs">
+                <div className="sm:col-span-5">
+                  <label className="block text-[11px] font-semibold uppercase tracking-wider text-slate-400 dark:text-[#7c7296] mb-1">
+                    Rubrique / Catégorie
+                  </label>
+                  <input
+                    type="text"
+                    disabled={!isAdmin}
+                    list="pawako-guide-categories"
+                    value={draft.category || ''}
+                    onChange={e => updateDraft(prev => ({ ...prev, category: e.target.value }))}
+                    placeholder="Ex: Onboarding"
+                    className="w-full min-h-[36px] px-3 py-1.5 border border-slate-200 dark:border-[#241a38] rounded-lg bg-slate-50 dark:bg-[#08050f] text-slate-900 dark:text-[#f4f1fa] disabled:opacity-70"
                   />
+                  <datalist id="pawako-guide-categories">
+                    {CATEGORY_PRESETS.map(cat => (
+                      <option key={cat} value={cat} />
+                    ))}
+                  </datalist>
+                </div>
+
+                <div className="sm:col-span-4">
+                  <label className="block text-[11px] font-semibold uppercase tracking-wider text-slate-400 dark:text-[#7c7296] mb-1">
+                    Parcours cible
+                  </label>
+                  <select
+                    disabled={!isAdmin || isPrimaryDraft}
+                    value={draft.vaType}
+                    onChange={e => updateDraft(prev => ({ ...prev, vaType: e.target.value as VAType }))}
+                    className="w-full min-h-[36px] px-3 py-1.5 border border-slate-200 dark:border-[#241a38] rounded-lg bg-slate-50 dark:bg-[#08050f] text-slate-900 dark:text-[#f4f1fa] disabled:opacity-70"
+                  >
+                    <option value="CHATTEUR">VA Chatteur</option>
+                    <option value="INSTAGRAM">VA Instagram</option>
+                  </select>
+                </div>
+
+                <div className="sm:col-span-3">
+                  <label className="block text-[11px] font-semibold uppercase tracking-wider text-slate-400 dark:text-[#7c7296] mb-1">
+                    Ordre d&apos;affichage
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    max={999}
+                    disabled={!isAdmin || isPrimaryDraft}
+                    value={typeof draft.order === 'number' ? draft.order : 0}
+                    onChange={e =>
+                      updateDraft(prev => ({
+                        ...prev,
+                        order: Math.max(0, Math.min(999, parseInt(e.target.value || '0', 10) || 0)),
+                      }))
+                    }
+                    className="w-full min-h-[36px] px-3 py-1.5 font-mono tabular-nums border border-slate-200 dark:border-[#241a38] rounded-lg bg-slate-50 dark:bg-[#08050f] text-slate-900 dark:text-[#f4f1fa] disabled:opacity-70"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-2.5">
+                <input
+                  type="text"
+                  disabled={!isAdmin}
+                  value={draft.title}
+                  onChange={e => updateDraft(prev => ({ ...prev, title: e.target.value }))}
+                  placeholder="Titre de votre article..."
+                  aria-label="Titre principal de l'article"
+                  className="w-full font-serif text-2xl sm:text-3xl font-bold text-slate-950 dark:text-[#f8f6fc] bg-transparent border-b border-transparent focus:border-violet-500/50 pb-1 focus:outline-none placeholder:text-slate-300 dark:placeholder:text-[#4e3f6e] disabled:opacity-75"
+                />
+
+                <textarea
+                  rows={2}
+                  disabled={!isAdmin}
+                  value={draft.subtitle}
+                  onChange={e => updateDraft(prev => ({ ...prev, subtitle: e.target.value }))}
+                  placeholder="Ajoutez un chapeau / sous-titre d'accroche qui donne envie de lire l'article..."
+                  aria-label="Sous-titre ou introduction"
+                  className="w-full text-sm sm:text-base text-slate-600 dark:text-[#b7aed0] bg-transparent border-b border-slate-100 dark:border-[#1e1530] focus:border-violet-500/50 pb-2 focus:outline-none resize-none placeholder:text-slate-300 dark:placeholder:text-[#4e3f6e] disabled:opacity-75"
+                />
+              </div>
+
+              {/* Live Cover Hero Frame */}
+              <div className="relative aspect-[16/9] max-h-[320px] w-full rounded-2xl overflow-hidden bg-slate-100 dark:bg-[#08050f] border border-slate-200 dark:border-[#241a38]">
+                <img
+                  src={resolvedCover}
+                  alt={draft.title || 'Couverture'}
+                  referrerPolicy="no-referrer"
+                  className="w-full h-full object-cover"
+                />
+                {!draft.heroImageUrl && (
+                  <div className="absolute bottom-3 left-3 px-2.5 py-1 rounded-lg bg-black/70 text-[11px] text-white/90">
+                    Couverture éditoriale automatique
+                  </div>
                 )}
               </div>
             </div>
           </div>
 
-          {/* Blocks List */}
-          <div className="space-y-3">
+          {/* Chapters / Blocks Composer */}
+          <div className="space-y-4">
             {draft.blocks.map((block, index) => (
               <div
                 key={block.id}
-                className="bg-white dark:bg-[#100b1a] border border-slate-200 dark:border-[#241a38] rounded-xl p-4 sm:p-5 space-y-3 text-xs"
+                className="bg-white dark:bg-[#100b1a] border border-slate-200 dark:border-[#241a38] rounded-2xl p-5 sm:p-6 space-y-4 text-xs"
               >
-                <div className="flex items-center justify-between gap-2 pb-2.5 border-b border-slate-100 dark:border-[#1e1530]">
-                  <div className="flex items-center gap-2 font-bold text-slate-900 dark:text-[#f4f1fa]">
+                <div className="flex items-center justify-between gap-2 pb-3 border-b border-slate-100 dark:border-[#1e1530]">
+                  <div className="flex items-center gap-2.5">
                     <span className="font-mono tabular-nums text-[11px] text-slate-400 dark:text-[#7c7296]">
-                      #{index + 1}
+                      {String(index + 1).padStart(2, '0')}
                     </span>
                     <span className="text-[11px] uppercase tracking-wider text-violet-700 dark:text-violet-300 font-semibold">
-                      {block.type === 'TEXT' && 'Texte enrichi'}
-                      {block.type === 'CALLOUT' && 'Encadré'}
-                      {block.type === 'TABLE' && 'Tableau'}
-                      {block.type === 'IMAGE' && 'Photo'}
+                      {block.type === 'TEXT' && 'Chapitre éditorial'}
+                      {block.type === 'CALLOUT' && 'Encadré mis en avant'}
+                      {block.type === 'TABLE' && 'Tableau comparatif'}
+                      {block.type === 'IMAGE' && 'Illustration / Photo'}
                     </span>
                   </div>
 
@@ -1031,7 +1120,7 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
                         onClick={() => handleMoveBlock(index, -1)}
                         disabled={index === 0}
                         title="Monter"
-                        className="p-1.5 rounded hover:bg-slate-100 dark:hover:bg-[#171026] disabled:opacity-30 cursor-pointer"
+                        className="p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-[#171026] disabled:opacity-30 cursor-pointer"
                       >
                         <ArrowUp className="w-3.5 h-3.5" />
                       </button>
@@ -1040,15 +1129,15 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
                         onClick={() => handleMoveBlock(index, 1)}
                         disabled={index === draft.blocks.length - 1}
                         title="Descendre"
-                        className="p-1.5 rounded hover:bg-slate-100 dark:hover:bg-[#171026] disabled:opacity-30 cursor-pointer"
+                        className="p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-[#171026] disabled:opacity-30 cursor-pointer"
                       >
                         <ArrowDown className="w-3.5 h-3.5" />
                       </button>
                       <button
                         type="button"
                         onClick={() => handleDeleteBlock(block.id)}
-                        title="Supprimer ce bloc"
-                        className="p-1.5 rounded text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/30 cursor-pointer"
+                        title="Supprimer ce chapitre"
+                        className="p-1.5 rounded-lg text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/30 cursor-pointer"
                       >
                         <Trash2 className="w-3.5 h-3.5" />
                       </button>
@@ -1056,17 +1145,15 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
                   )}
                 </div>
 
-                {/* Common Title */}
+                {/* Section Title styled cleanly */}
                 <div>
-                  <label className="block text-[11px] font-semibold text-slate-600 dark:text-[#9d93b8] mb-1">
-                    Titre du bloc
-                  </label>
                   <input
                     type="text"
                     disabled={!isAdmin}
                     value={block.title || ''}
                     onChange={e => handleUpdateBlock(block.id, { title: e.target.value })}
-                    className="w-full min-h-[36px] px-3 py-1.5 border border-slate-200 dark:border-[#241a38] rounded-lg bg-slate-50 dark:bg-[#08050f] text-slate-900 dark:text-[#f4f1fa] disabled:opacity-70"
+                    placeholder="Titre du chapitre (apparaît dans le sommaire de l'article)..."
+                    className="w-full font-serif text-lg sm:text-xl font-bold text-slate-900 dark:text-[#f4f1fa] bg-transparent border-b border-slate-100 dark:border-[#1e1530] focus:border-violet-500/50 pb-1.5 focus:outline-none placeholder:text-slate-300 dark:placeholder:text-[#4e3f6e] disabled:opacity-70"
                   />
                 </div>
 
@@ -1075,7 +1162,7 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
                   <div className="space-y-3">
                     <div>
                       <label className="block text-[11px] font-semibold text-slate-600 dark:text-[#9d93b8] mb-1">
-                        Style d&apos;encadré
+                        Ambiance visuelle
                       </label>
                       <select
                         disabled={!isAdmin}
@@ -1087,86 +1174,74 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
                         }
                         className="min-h-[36px] px-3 py-1.5 border border-slate-200 dark:border-[#241a38] rounded-lg bg-slate-50 dark:bg-[#08050f] text-slate-900 dark:text-[#f4f1fa]"
                       >
-                        <option value="condition">Condition / Règle (Violet)</option>
-                        <option value="info">Information (Neutre)</option>
-                        <option value="warning">Avertissement (Ambre)</option>
-                        <option value="success">Validation / Astuce (Émeraude)</option>
+                        <option value="condition">Règle & Condition (Violet)</option>
+                        <option value="info">À noter (Neutre)</option>
+                        <option value="warning">Point de vigilance (Ambre)</option>
+                        <option value="success">Bonne pratique (Émeraude)</option>
                       </select>
                     </div>
                     <SimpleRichTextEditor
-                      label="Contenu enrichi de l'encadré"
                       rows={4}
                       disabled={!isAdmin}
                       value={block.body || ''}
                       onChange={nextBody => handleUpdateBlock(block.id, { body: nextBody })}
-                      placeholder="Rédigez les conditions ou points importants..."
+                      placeholder="Rédigez le message clé de cet encadré..."
                     />
                   </div>
                 )}
 
                 {block.type === 'TEXT' && (
                   <SimpleRichTextEditor
-                    label="Contenu texte enrichi"
                     rows={6}
                     disabled={!isAdmin}
                     value={block.body || ''}
                     onChange={nextBody => handleUpdateBlock(block.id, { body: nextBody })}
-                    placeholder="Utilisez la barre d'outils pour formater votre texte (titres, gras, listes, liens)..."
+                    placeholder="Écrivez naturellement votre article : sélectionnez du texte pour le mettre en gras, titre, citation ou lien..."
                   />
                 )}
 
                 {block.type === 'IMAGE' && (
                   <div className="space-y-3">
-                    <div>
-                      <label className="block text-[11px] font-semibold text-slate-600 dark:text-[#9d93b8] mb-1">
-                        URL https:// ou Photo importée depuis votre PC
-                      </label>
-                      <div className="flex flex-col sm:flex-row gap-2">
-                        <input
-                          type="text"
-                          disabled={!isAdmin}
-                          value={block.imageUrl || ''}
-                          onChange={e => handleUpdateBlock(block.id, { imageUrl: e.target.value })}
-                          placeholder="https://... ou importer une photo"
-                          className="flex-1 min-h-[36px] px-3 py-1.5 font-mono border border-slate-200 dark:border-[#241a38] rounded-lg bg-slate-50 dark:bg-[#08050f] text-slate-900 dark:text-[#f4f1fa]"
-                        />
-                        {isAdmin && (
-                          <label className="min-h-[36px] px-3 py-1.5 bg-slate-100 dark:bg-[#171026] hover:bg-slate-200 dark:hover:bg-[#231839] border border-slate-200 dark:border-[#241a38] rounded-lg font-semibold flex items-center justify-center gap-1.5 cursor-pointer shrink-0">
-                            <Upload className="w-3.5 h-3.5 text-violet-500" />
-                            <span>
-                              {uploadingBlockId === block.id ? 'Compression...' : 'Importer photo'}
-                            </span>
-                            <input
-                              type="file"
-                              accept="image/*"
-                              onChange={e => handleBlockImageUpload(block.id, e)}
-                              className="hidden"
-                            />
-                          </label>
-                        )}
-                      </div>
-                    </div>
-
-                    <div>
-                      <label className="block text-[11px] font-semibold text-slate-600 dark:text-[#9d93b8] mb-1">
-                        Légende (Optionnel)
-                      </label>
+                    <div className="flex flex-col sm:flex-row gap-2">
                       <input
                         type="text"
                         disabled={!isAdmin}
-                        value={block.caption || ''}
-                        onChange={e => handleUpdateBlock(block.id, { caption: e.target.value })}
-                        placeholder="Ex: Exemple de suivi hebdomadaire dans Discord"
-                        className="w-full min-h-[36px] px-3 py-1.5 border border-slate-200 dark:border-[#241a38] rounded-lg bg-slate-50 dark:bg-[#08050f] text-slate-900 dark:text-[#f4f1fa]"
+                        value={block.imageUrl || ''}
+                        onChange={e => handleUpdateBlock(block.id, { imageUrl: e.target.value })}
+                        placeholder="https://... ou importer une photo"
+                        className="flex-1 min-h-[36px] px-3 py-1.5 font-mono border border-slate-200 dark:border-[#241a38] rounded-lg bg-slate-50 dark:bg-[#08050f] text-slate-900 dark:text-[#f4f1fa]"
                       />
+                      {isAdmin && (
+                        <label className="min-h-[36px] px-3.5 py-1.5 bg-slate-100 dark:bg-[#171026] hover:bg-slate-200 dark:hover:bg-[#231839] border border-slate-200 dark:border-[#241a38] rounded-lg font-semibold flex items-center justify-center gap-1.5 cursor-pointer shrink-0">
+                          <Upload className="w-3.5 h-3.5 text-violet-500" />
+                          <span>
+                            {uploadingBlockId === block.id ? 'Compression...' : 'Importer photo'}
+                          </span>
+                          <input
+                            type="file"
+                            accept="image/*"
+                            onChange={e => handleBlockImageUpload(block.id, e)}
+                            className="hidden"
+                          />
+                        </label>
+                      )}
                     </div>
+
+                    <input
+                      type="text"
+                      disabled={!isAdmin}
+                      value={block.caption || ''}
+                      onChange={e => handleUpdateBlock(block.id, { caption: e.target.value })}
+                      placeholder="Légende éditoriale (ex: Capture du suivi hebdomadaire sur Discord)"
+                      className="w-full min-h-[36px] px-3 py-1.5 border border-slate-200 dark:border-[#241a38] rounded-lg bg-slate-50 dark:bg-[#08050f] text-slate-900 dark:text-[#f4f1fa]"
+                    />
 
                     {block.imageUrl && (
                       <img
                         src={block.imageUrl}
                         alt={block.caption || block.title || 'Aperçu'}
                         referrerPolicy="no-referrer"
-                        className="max-h-44 rounded-lg border border-slate-200 dark:border-[#241a38] object-contain bg-slate-50 dark:bg-[#08050f]"
+                        className="max-h-56 rounded-xl border border-slate-200 dark:border-[#241a38] object-contain bg-slate-50 dark:bg-[#08050f]"
                       />
                     )}
                   </div>
@@ -1174,7 +1249,7 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
 
                 {block.type === 'TABLE' && (
                   <div className="space-y-3">
-                    <div className="overflow-x-auto border border-slate-200 dark:border-[#241a38] rounded-lg">
+                    <div className="overflow-x-auto border border-slate-200 dark:border-[#241a38] rounded-xl">
                       <table className="w-full text-left text-xs">
                         <thead className="bg-slate-50 dark:bg-[#171026] border-b border-slate-200 dark:border-[#241a38]">
                           <tr>
@@ -1278,33 +1353,33 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
             ))}
           </div>
 
-          {/* Add Block Toolbar */}
+          {/* Add Section Toolbar */}
           {isAdmin && (
-            <div className="bg-white dark:bg-[#100b1a] border border-dashed border-slate-300 dark:border-[#2e224a] rounded-xl p-4 flex flex-wrap items-center justify-between gap-3 text-xs">
+            <div className="bg-white dark:bg-[#100b1a] border border-dashed border-slate-300 dark:border-[#2e224a] rounded-2xl p-4 sm:p-5 flex flex-wrap items-center justify-between gap-3 text-xs">
               <span className="font-semibold text-slate-600 dark:text-[#9d93b8]">
-                Ajouter un bloc au guide :
+                Enrichir l&apos;article avec un nouveau bloc :
               </span>
               <div className="flex flex-wrap items-center gap-2">
                 <button
                   type="button"
                   onClick={() => handleAddBlock('TEXT')}
-                  className="min-h-[36px] px-3 py-1.5 bg-slate-100 dark:bg-[#171026] hover:bg-slate-200 dark:hover:bg-[#231839] border border-slate-200 dark:border-[#241a38] rounded-lg font-semibold flex items-center gap-1.5 cursor-pointer"
+                  className="min-h-[36px] px-3 py-1.5 bg-slate-100 dark:bg-[#171026] hover:bg-slate-200 dark:hover:bg-[#231839] border border-slate-200 dark:border-[#241a38] rounded-xl font-semibold flex items-center gap-1.5 cursor-pointer"
                 >
                   <AlignLeft className="w-3.5 h-3.5 text-violet-500" />
-                  <span>+ Texte enrichi</span>
+                  <span>+ Chapitre texte</span>
                 </button>
                 <button
                   type="button"
                   onClick={() => handleAddBlock('CALLOUT')}
-                  className="min-h-[36px] px-3 py-1.5 bg-slate-100 dark:bg-[#171026] hover:bg-slate-200 dark:hover:bg-[#231839] border border-slate-200 dark:border-[#241a38] rounded-lg font-semibold flex items-center gap-1.5 cursor-pointer"
+                  className="min-h-[36px] px-3 py-1.5 bg-slate-100 dark:bg-[#171026] hover:bg-slate-200 dark:hover:bg-[#231839] border border-slate-200 dark:border-[#241a38] rounded-xl font-semibold flex items-center gap-1.5 cursor-pointer"
                 >
                   <MessageSquareWarning className="w-3.5 h-3.5 text-violet-500" />
-                  <span>+ Encadré Condition / Info</span>
+                  <span>+ Encadré clé</span>
                 </button>
                 <button
                   type="button"
                   onClick={() => handleAddBlock('TABLE')}
-                  className="min-h-[36px] px-3 py-1.5 bg-slate-100 dark:bg-[#171026] hover:bg-slate-200 dark:hover:bg-[#231839] border border-slate-200 dark:border-[#241a38] rounded-lg font-semibold flex items-center gap-1.5 cursor-pointer"
+                  className="min-h-[36px] px-3 py-1.5 bg-slate-100 dark:bg-[#171026] hover:bg-slate-200 dark:hover:bg-[#231839] border border-slate-200 dark:border-[#241a38] rounded-xl font-semibold flex items-center gap-1.5 cursor-pointer"
                 >
                   <TableIcon className="w-3.5 h-3.5 text-violet-500" />
                   <span>+ Tableau</span>
@@ -1312,7 +1387,7 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
                 <button
                   type="button"
                   onClick={() => handleAddBlock('IMAGE')}
-                  className="min-h-[36px] px-3 py-1.5 bg-slate-100 dark:bg-[#171026] hover:bg-slate-200 dark:hover:bg-[#231839] border border-slate-200 dark:border-[#241a38] rounded-lg font-semibold flex items-center gap-1.5 cursor-pointer"
+                  className="min-h-[36px] px-3 py-1.5 bg-slate-100 dark:bg-[#171026] hover:bg-slate-200 dark:hover:bg-[#231839] border border-slate-200 dark:border-[#241a38] rounded-xl font-semibold flex items-center gap-1.5 cursor-pointer"
                 >
                   <ImageIcon className="w-3.5 h-3.5 text-violet-500" />
                   <span>+ Photo</span>
@@ -1323,17 +1398,17 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
         </div>
       )}
 
-      {/* Modal: Créer un nouveau guide de parrainage */}
+      {/* Modal: Créer un nouvel article / guide */}
       {showCreateModal && (
         <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4">
           <form
             onSubmit={handleCreateGuide}
-            className="w-full max-w-lg bg-white dark:bg-[#100b1a] border border-slate-200 dark:border-[#241a38] rounded-xl p-5 sm:p-6 space-y-4 text-xs shadow-xl"
+            className="w-full max-w-lg bg-white dark:bg-[#100b1a] border border-slate-200 dark:border-[#241a38] rounded-2xl p-5 sm:p-6 space-y-4 text-xs shadow-xl"
           >
             <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-[#1e1530]">
-              <h3 className="text-sm font-bold text-slate-900 dark:text-[#f4f1fa] flex items-center gap-2">
+              <h3 className="font-serif text-base font-bold text-slate-900 dark:text-[#f4f1fa] flex items-center gap-2">
                 <FilePlus2 className="w-4 h-4 text-violet-500" />
-                <span>Créer un guide d&apos;onboarding parrain</span>
+                <span>Créer un nouvel article parrain</span>
               </h3>
               <button
                 type="button"
@@ -1353,7 +1428,7 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
             <div className="space-y-3">
               <div>
                 <label className="block text-[11px] font-semibold text-slate-600 dark:text-[#9d93b8] mb-1">
-                  Titre du guide *
+                  Titre de l&apos;article *
                 </label>
                 <input
                   type="text"
@@ -1382,7 +1457,7 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
 
                 <div>
                   <label className="block text-[11px] font-semibold text-slate-600 dark:text-[#9d93b8] mb-1">
-                    Catégorie
+                    Rubrique
                   </label>
                   <input
                     type="text"
@@ -1397,20 +1472,20 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
 
               <div>
                 <label className="block text-[11px] font-semibold text-slate-600 dark:text-[#9d93b8] mb-1">
-                  Introduction courte (Optionnel)
+                  Chapeau / Accroche (Optionnel)
                 </label>
                 <textarea
                   rows={2}
                   value={newSubtitle}
                   onChange={e => setNewSubtitle(e.target.value)}
-                  placeholder="Résumé affiché en haut du guide pour orienter les parrains..."
+                  placeholder="Résumé affiché sur la carte blog et sous le titre..."
                   className="w-full p-2.5 border border-slate-200 dark:border-[#241a38] rounded-lg bg-slate-50 dark:bg-[#08050f] text-slate-900 dark:text-[#f4f1fa]"
                 />
               </div>
 
               <div>
                 <label className="block text-[11px] font-semibold text-slate-600 dark:text-[#9d93b8] mb-1">
-                  Structure de départ
+                  Modèle de départ
                 </label>
                 <div className="grid grid-cols-3 gap-2">
                   {(
@@ -1451,7 +1526,7 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
                 className="min-h-[38px] px-4 py-1.5 bg-violet-600 hover:bg-violet-500 disabled:opacity-50 text-white font-semibold rounded-lg flex items-center gap-1.5 cursor-pointer"
               >
                 {isCreating ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
-                <span>{isCreating ? 'Création...' : 'Créer le guide'}</span>
+                <span>{isCreating ? 'Création...' : "Créer l'article"}</span>
               </button>
             </div>
           </form>
@@ -1461,17 +1536,17 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
       {/* Modal: Confirmer la suppression ou réinitialisation */}
       {confirmDeleteGuide && (
         <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="w-full max-w-md bg-white dark:bg-[#100b1a] border border-slate-200 dark:border-[#241a38] rounded-xl p-5 sm:p-6 space-y-4 text-xs shadow-xl">
+          <div className="w-full max-w-md bg-white dark:bg-[#100b1a] border border-slate-200 dark:border-[#241a38] rounded-2xl p-5 sm:p-6 space-y-4 text-xs shadow-xl">
             <div className="space-y-1.5">
-              <h3 className="text-sm font-bold text-slate-900 dark:text-[#f4f1fa]">
+              <h3 className="font-serif text-base font-bold text-slate-900 dark:text-[#f4f1fa]">
                 {confirmDeleteGuide.isPrimary
                   ? 'Réinitialiser le guide principal ?'
-                  : 'Supprimer ce guide de parrainage ?'}
+                  : 'Supprimer cet article ?'}
               </h3>
               <p className="text-slate-600 dark:text-[#b7aed0] leading-relaxed">
                 {confirmDeleteGuide.isPrimary
                   ? `Cette action supprime vos personnalisations sur « ${confirmDeleteGuide.title} » et restaure le modèle officiel par défaut.`
-                  : `Le guide « ${confirmDeleteGuide.title} » sera retiré immédiatement de l'accueil des parrains. Cette action est irréversible.`}
+                  : `L'article « ${confirmDeleteGuide.title} » sera retiré immédiatement du journal des parrains. Cette action est irréversible.`}
               </p>
             </div>
             <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100 dark:border-[#1e1530]">
@@ -1506,13 +1581,13 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
       {/* Modal: Modifications non enregistrées */}
       {pendingSwitchGuide && (
         <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="w-full max-w-md bg-white dark:bg-[#100b1a] border border-slate-200 dark:border-[#241a38] rounded-xl p-5 sm:p-6 space-y-4 text-xs shadow-xl">
+          <div className="w-full max-w-md bg-white dark:bg-[#100b1a] border border-slate-200 dark:border-[#241a38] rounded-2xl p-5 sm:p-6 space-y-4 text-xs shadow-xl">
             <div className="space-y-1.5">
-              <h3 className="text-sm font-bold text-slate-900 dark:text-[#f4f1fa]">
-                Modifications non enregistrées
+              <h3 className="font-serif text-base font-bold text-slate-900 dark:text-[#f4f1fa]">
+                Modifications non publiées
               </h3>
               <p className="text-slate-600 dark:text-[#b7aed0] leading-relaxed">
-                Vous avez modifié le guide actuel sans enregistrer. Voulez-vous abandonner ces modifications et ouvrir «{' '}
+                Vous avez modifié l&apos;article actuel sans enregistrer. Voulez-vous abandonner ces modifications et ouvrir «{' '}
                 <strong>{pendingSwitchGuide.title}</strong> » ?
               </p>
             </div>
@@ -1522,7 +1597,7 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
                 onClick={() => setPendingSwitchGuide(null)}
                 className="min-h-[38px] px-3.5 py-1.5 bg-slate-100 dark:bg-[#171026] text-slate-700 dark:text-[#d8d0eb] font-semibold rounded-lg cursor-pointer"
               >
-                Rester sur l&apos;éditeur
+                Rester sur le studio
               </button>
               <button
                 type="button"
