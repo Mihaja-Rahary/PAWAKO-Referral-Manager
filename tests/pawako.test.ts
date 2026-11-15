@@ -2423,6 +2423,19 @@ describe('PAWAKO Referral Manager — Tests Complets Isolés (Mockés)', () => {
       avatar: null,
     });
 
+    // 0. Admin lit tous les guides par défaut via GET /api/admin/parrain-guides
+    const listDefaultRes = await app.fetch(
+      new Request(`${WORKER_ORIGIN}/api/admin/parrain-guides`, {
+        headers: { Cookie: `pawako_session=${adminLogin.sessionCookie}`, Origin: FRONTEND_ORIGIN },
+      }),
+      env
+    );
+    assert.equal(listDefaultRes.status, 200);
+    const listDefaultJson = (await listDefaultRes.json()) as any;
+    assert.equal(listDefaultJson.guides.CHATTEUR.vaType, 'CHATTEUR');
+    assert.equal(listDefaultJson.guides.INSTAGRAM.vaType, 'INSTAGRAM');
+    assert.equal(listDefaultJson.guides.CHATTEUR.isDefault, true);
+
     // 1. Avant choix de spécialité, GET /api/parrain/guide retourne requiresSpecialtyChoice
     const preGuideRes = await app.fetch(
       new Request(`${WORKER_ORIGIN}/api/parrain/guide`, {
@@ -2549,8 +2562,21 @@ describe('PAWAKO Referral Manager — Tests Complets Isolés (Mockés)', () => {
     const repo = createRepo(env);
     const logs = await repo.getAuditLogs(20);
     assert.ok(logs.some(l => l.action === 'PARRAIN_GUIDE_UPDATED' && l.targetId === 'INSTAGRAM'));
+
+    // 7. Route inconnue sur Worker -> JSON 404 structuré avec en-têtes CORS
+    const notFoundRes = await app.fetch(
+      new Request(`${WORKER_ORIGIN}/api/non-existent-route`, {
+        headers: { Origin: FRONTEND_ORIGIN },
+      }),
+      env
+    );
+    assert.equal(notFoundRes.status, 404);
+    assert.equal(notFoundRes.headers.get('Access-Control-Allow-Origin'), FRONTEND_ORIGIN);
+    const notFoundJson = (await notFoundRes.json()) as any;
+    assert.equal(notFoundJson.code, 'ROUTE_NOT_FOUND');
   });
 });
+
 
 
 

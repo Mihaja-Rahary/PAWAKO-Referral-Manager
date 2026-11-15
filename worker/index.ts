@@ -2760,4 +2760,24 @@ app.get('/api/audit-logs', async c => {
   return c.json({ auditLogs });
 });
 
+app.notFound(c => {
+  const origin = c.req.header('Origin');
+  const corsHeaders: Record<string, string> = isOriginAllowedForEnv(origin, c.env)
+    ? {
+        'Access-Control-Allow-Origin': origin,
+        'Access-Control-Allow-Credentials': 'true',
+      }
+    : {};
+
+  return c.json(
+    {
+      error: `Route API introuvable sur le Worker Cloudflare (${c.req.method} ${c.req.path}).`,
+      code: 'ROUTE_NOT_FOUND',
+      path: c.req.path,
+    },
+    404,
+    corsHeaders
+  );
+});
+
 export default app;

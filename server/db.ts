@@ -19,7 +19,13 @@ import {
   DiscordServerType,
   PawakoRoleType,
   DiscordRoleMapping,
+  ParrainGuide,
+  ParrainGuideBlock,
 } from './types';
+import {
+  buildDefaultParrainGuide,
+  sanitizeAndBuildParrainGuide,
+} from './parrainGuideUtils';
 
 const DATA_DIR = path.resolve(process.cwd(), 'data');
 const DB_FILE = path.join(DATA_DIR, 'pawako_db.json');
@@ -194,6 +200,7 @@ class DatabaseService {
           discord_memberships: parsed.discord_memberships || [],
           recruitment_events: parsed.recruitment_events || [],
           audit_logs: parsed.audit_logs || [],
+          parrain_guides: parsed.parrain_guides || {},
           meta: parsed.meta || { initialAdminClaimed: false },
         };
       } catch (err) {
@@ -212,6 +219,7 @@ class DatabaseService {
       discord_memberships: [],
       recruitment_events: [],
       audit_logs: [],
+      parrain_guides: {},
       meta: { initialAdminClaimed: false },
     };
     this.saveDatabase(emptyDb);
@@ -242,6 +250,7 @@ class DatabaseService {
       discord_memberships: [],
       recruitment_events: [],
       audit_logs: [],
+      parrain_guides: {},
       meta: { initialAdminClaimed: false },
     };
     this.saveDatabase();
@@ -511,6 +520,7 @@ class DatabaseService {
     discordUserId: string;
     inviteCode?: string;
     notes?: string;
+    vaType?: VAType | null;
     actorUserId?: string;
     actorName?: string;
   }): Referrer {
@@ -525,6 +535,10 @@ class DatabaseService {
       params.inviteCode?.trim().toUpperCase() ||
       `PWK-${username.replace(/[^a-zA-Z0-9]/g, '').slice(0, 8).toUpperCase()}-${Math.floor(10 + Math.random() * 90)}`;
 
+    const now = new Date().toISOString();
+    const validVaType: VAType | null =
+      params.vaType === 'CHATTEUR' || params.vaType === 'INSTAGRAM' ? params.vaType : null;
+
     const newReferrer: Referrer = {
       id: `ref-${Date.now().toString(36)}-${Math.floor(100 + Math.random() * 900)}`,
       discordUserId: params.discordUserId,
@@ -534,8 +548,12 @@ class DatabaseService {
       inviteUrl: `https://discord.gg/pawako-recrutement?ref=${code}`,
       usesCount: 0,
       isActive: true,
-      createdAt: new Date().toISOString(),
+      createdAt: now,
       notes: params.notes,
+      vaType: validVaType,
+      vaTypeLockedAt: validVaType ? now : null,
+      vaTypeUpdatedByUserId: validVaType ? params.actorUserId || null : null,
+      vaTypeUpdatedByName: validVaType ? params.actorName || null : null,
     };
 
     this.data.referrers.push(newReferrer);
@@ -548,11 +566,168 @@ class DatabaseService {
         actorName: params.actorName || 'Système',
         targetType: 'REFERRER',
         targetId: newReferrer.id,
-        details: { code, discordUserId: params.discordUserId, displayName },
+        details: { code, discordUserId: params.discordUserId, displayName, vaType: validVaType },
       });
     }
 
     return newReferrer;
+  }
+
+  updateReferrer(
+    id: string,
+    patch: {
+      notes?: string;
+      discordDisplayName?: string;
+      discordUsername?: string;
+      vaType?: VAType | null;
+    },
+    actor: { id: string; displayName: string }
+  ): Referrer | null {
+    const ref = this.getReferrerById(id);
+    if (!ref) return null;
+
+    const now = new Date().toISOString();
+    const oldVaType = ref.vaType || null;
+    let nextVaType: VAType | null = oldVaType;
+    let nextVaTypeLockedAt = ref.vaTypeLockedAt || null;
+    let nextVaTypeUpdatedByUserId = ref.vaTypeUpdatedByUserId || null;
+    let nextVaTypeUpdatedByName = ref.vaTypeUpdatedByName || null;
+
+    if (patch.vaType !== undefined) {
+      if (patch.vaType !== null && patch.vaType !== 'CHATTEUR' && patch.vaType !== 'INSTAGRAM') {
+        throw new Error('Spécialité parrain invalide (CHATTEUR, INSTAGRAM ou null attendu).');
+      }
+      nextVaType = patch.vaType;
+      nextVaTypeLockedAt = patch.vaType ? now : null;
+      nextVaTypeUpdatedByUserId = actor.id;
+      nextVaTypeUpdatedByName = actor.displayName;
+    }
+
+    if (typeof patch.notes === 'string') ref.notes = patch.notes.trim();
+    if (typeof patch.discordDisplayName === 'string' && patch.discordDisplayName.trim()) {
+      ref.discordDisplayName = patch.discordDisplayName.trim();
+    }
+    if (typeof patch.discordUsername === 'string' && patch.discordUsername.trim()) {
+      ref.discordUsername = patch.discordUsername.trim();
+    }
+    ref.vaType = nextVaType;
+    ref.vaTypeLockedAt = nextVaTypeLockedAt;
+    ref.vaTypeUpdatedByUserId = nextVaTypeUpdatedByUserId;
+    ref.vaTypeUpdatedByName = nextVaTypeUpdatedByName;
+    ref.updatedAt = now;
+    this.saveDatabase();
+
+    if (patch.vaType !== undefined && oldVaType !== nextVaType) {
+      this.logAudit({
+        action: 'REFERRER_SPECIALTY_ADMIN_UPDATED',
+        actorUserId: actor.id,
+        actorName: actor.displayName,
+        targetType: 'REFERRER',
+        targetId: ref.id,
+        details: { oldVaType, newVaType: nextVaType },
+      });
+    }
+
+    return ref;
+  }
+
+  setParrainOwnSpecialty(discordUserId: string, vaType: VAType): Referrer {
+    if (vaType !== 'CHATTEUR' && vaType !== 'INSTAGRAM') {
+      throw new Error('Spécialité invalide. Choisissez CHATTEUR ou INSTAGRAM.');
+    }
+    const existing = this.getReferrerByDiscordUserId(discordUserId);
+    if (!existing || !existing.isActive) {
+      const err: any = new Error('Profil parrain introuvable ou inactif.');
+      err.status = 403;
+      throw err;
+    }
+    if (existing.vaType === 'CHATTEUR' || existing.vaType === 'INSTAGRAM') {
+      const err: any = new Error(
+        `Votre spécialité (${existing.vaType === 'CHATTEUR' ? 'VA Chatteur' : 'VA Instagram'}) est déjà verrouillée. Seul un Administrateur peut la modifier en cas d'erreur.`
+      );
+      err.status = 409;
+      throw err;
+    }
+
+    const now = new Date().toISOString();
+    existing.vaType = vaType;
+    existing.vaTypeLockedAt = now;
+    existing.vaTypeUpdatedByUserId = discordUserId;
+    existing.vaTypeUpdatedByName = existing.discordDisplayName;
+    existing.updatedAt = now;
+    this.saveDatabase();
+
+    this.logAudit({
+      action: 'REFERRER_SPECIALTY_LOCKED',
+      actorUserId: discordUserId,
+      actorName: existing.discordDisplayName,
+      targetType: 'REFERRER',
+      targetId: existing.id,
+      details: { vaType },
+    });
+
+    return existing;
+  }
+
+  getParrainGuide(vaType: VAType): ParrainGuide {
+    if (vaType !== 'CHATTEUR' && vaType !== 'INSTAGRAM') {
+      throw new Error('Spécialité invalide (CHATTEUR ou INSTAGRAM attendu).');
+    }
+    const stored = this.data.parrain_guides?.[vaType];
+    if (!stored) {
+      return buildDefaultParrainGuide(vaType);
+    }
+    return {
+      ...stored,
+      id: vaType,
+      vaType,
+      title: String(stored.title || '').trim() || buildDefaultParrainGuide(vaType).title,
+      subtitle: String(stored.subtitle || ''),
+      heroImageUrl: stored.heroImageUrl || null,
+      blocks: Array.isArray(stored.blocks) ? stored.blocks : [],
+      isDefault: false,
+    };
+  }
+
+  getAllParrainGuides(): Record<VAType, ParrainGuide> {
+    return {
+      CHATTEUR: this.getParrainGuide('CHATTEUR'),
+      INSTAGRAM: this.getParrainGuide('INSTAGRAM'),
+    };
+  }
+
+  saveParrainGuide(
+    vaType: VAType,
+    payload: {
+      title: string;
+      subtitle?: string;
+      heroImageUrl?: string | null;
+      blocks: ParrainGuideBlock[];
+    },
+    actor: { id: string; displayName: string }
+  ): ParrainGuide {
+    const { doc, byteLength } = sanitizeAndBuildParrainGuide(vaType, payload, actor);
+    if (!this.data.parrain_guides) {
+      this.data.parrain_guides = {};
+    }
+    this.data.parrain_guides[vaType] = doc;
+    this.saveDatabase();
+
+    this.logAudit({
+      action: 'PARRAIN_GUIDE_UPDATED',
+      actorUserId: actor.id,
+      actorName: actor.displayName,
+      targetType: 'PARRAIN_GUIDE',
+      targetId: vaType,
+      details: {
+        vaType,
+        title: doc.title,
+        blocksCount: doc.blocks.length,
+        sizeBytes: byteLength,
+      },
+    });
+
+    return { ...doc, isDefault: false };
   }
 
   incrementReferrerUsage(referrerId: string): void {
@@ -1205,7 +1380,15 @@ class DatabaseService {
     const acceptanceRate = total > 0 ? Math.round(((total - refuses) / total) * 100) : 0;
 
     const referrersStats = this.data.referrers.map(r => {
-      const myCandidates = candidates.filter(c => c.referrerId === r.id);
+      const linkedCandidates = candidates.filter(c => c.referrerId === r.id);
+      const refVaType: VAType | null =
+        r.vaType === 'CHATTEUR' || r.vaType === 'INSTAGRAM' ? r.vaType : null;
+      const myCandidates = refVaType
+        ? linkedCandidates.filter(c => c.vaType === refVaType)
+        : linkedCandidates;
+      const outOfSpecialtyCount = refVaType
+        ? linkedCandidates.filter(c => c.vaType !== refVaType).length
+        : 0;
       const myTotal = myCandidates.length;
       const myInProd = myCandidates.filter(c => c.operationalStatus === 'PRODUCTION').length;
       const myAccepted = myCandidates.filter(c => c.adminStatus === 'ACCEPTE').length;
@@ -1214,17 +1397,11 @@ class DatabaseService {
       const myAcceptRate = myTotal > 0 ? Math.round(((myTotal - myRefused) / myTotal) * 100) : 0;
 
       return {
-        id: r.id,
-        discordUserId: r.discordUserId,
-        discordUsername: r.discordUsername,
-        discordDisplayName: r.discordDisplayName,
-        inviteCode: r.inviteCode,
-        inviteUrl: r.inviteUrl,
-        usesCount: r.usesCount,
-        isActive: r.isActive,
-        createdAt: r.createdAt,
-        notes: r.notes,
+        ...r,
+        vaType: refVaType,
         totalFilleuls: myTotal,
+        outOfSpecialtyCount,
+        totalLinkedCount: linkedCandidates.length,
         enAttente: myCandidates.filter(c => c.adminStatus === 'EN_ATTENTE').length,
         acceptes: myAccepted,
         enFormation: myCandidates.filter(c => c.operationalStatus === 'FORMATION').length,
@@ -1235,10 +1412,10 @@ class DatabaseService {
         abandonnes: myCandidates.filter(c => c.adminStatus === 'ABANDONNE').length,
         conversionRate: myConversion,
         acceptanceRate: myAcceptRate,
-        chatteurCount: myCandidates.filter(c => c.vaType === 'CHATTEUR').length,
-        instagramCount: myCandidates.filter(c => c.vaType === 'INSTAGRAM').length,
+        chatteurCount: linkedCandidates.filter(c => c.vaType === 'CHATTEUR').length,
+        instagramCount: linkedCandidates.filter(c => c.vaType === 'INSTAGRAM').length,
       };
-    }).sort((a, b) => b.totalFilleuls - a.totalFilleuls || b.enProduction - a.enProduction);
+    }).sort((a, b) => (b.totalFilleuls || 0) - (a.totalFilleuls || 0) || (b.enProduction || 0) - (a.enProduction || 0));
 
     return {
       kpis: {

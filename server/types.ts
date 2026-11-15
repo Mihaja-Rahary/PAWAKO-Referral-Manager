@@ -365,6 +365,7 @@ export interface DatabaseSchema {
   discord_memberships: DiscordMembership[];
   recruitment_events: RecruitmentEvent[];
   audit_logs: AuditLog[];
+  parrain_guides?: Partial<Record<VAType, ParrainGuide>>;
   meta?: {
     initialAdminClaimed: boolean;
     initialAdminClaimedAt?: string;

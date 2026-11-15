@@ -117,25 +117,31 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
   const [isUploadingHero, setIsUploadingHero] = useState(false);
   const [uploadingBlockId, setUploadingBlockId] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [loadErrorStatus, setLoadErrorStatus] = useState<number | null>(null);
   const [feedback, setFeedback] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
+  const activeVaTypeRef = React.useRef<VAType>(activeVaType);
+  activeVaTypeRef.current = activeVaType;
 
   const loadGuides = useCallback(async () => {
     try {
       setIsLoading(true);
       setLoadError(null);
+      setLoadErrorStatus(null);
       const res = await api.getAdminParrainGuides();
       setGuides(res.guides);
-      setDraft(structuredClone(res.guides[activeVaType]));
+      const currentTrack = activeVaTypeRef.current;
+      setDraft(structuredClone(res.guides[currentTrack]));
     } catch (err: any) {
+      setLoadErrorStatus(typeof err?.status === 'number' ? err.status : null);
       setLoadError(err?.message || 'Impossible de charger les guides parrains.');
     } finally {
       setIsLoading(false);
     }
-  }, [activeVaType]);
+  }, []);
 
   useEffect(() => {
     loadGuides();
-  }, []);
+  }, [loadGuides]);
 
   const handleSelectTrack = (vaType: VAType) => {
     setActiveVaType(vaType);
@@ -352,9 +358,25 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
 
   if (loadError || !draft) {
     return (
-      <div className="bg-white dark:bg-[#100b1a] border border-rose-200 dark:border-rose-500/30 rounded-xl p-8 text-center space-y-3 text-xs">
+      <div className="bg-white dark:bg-[#100b1a] border border-rose-200 dark:border-rose-500/30 rounded-xl p-8 max-w-xl mx-auto text-center space-y-3 text-xs">
         <AlertCircle className="w-6 h-6 text-rose-500 mx-auto" />
-        <p className="text-rose-800 dark:text-rose-200">{loadError || 'Guides introuvables.'}</p>
+        <p className="text-rose-800 dark:text-rose-200 font-medium leading-relaxed">
+          {loadError || 'Guides introuvables.'}
+        </p>
+        {loadErrorStatus === 404 && (
+          <div className="p-3 rounded-lg bg-slate-50 dark:bg-[#171026] border border-slate-200 dark:border-[#2e224a] text-left text-[11px] text-slate-600 dark:text-[#b7aed0] space-y-1">
+            <div className="font-semibold text-slate-800 dark:text-[#f4f1fa]">
+              Action requise côté Cloudflare Worker :
+            </div>
+            <p>
+              Le frontend appelle une nouvelle route qui n&apos;est pas encore active sur votre Worker déployé. Exécutez{' '}
+              <code className="px-1.5 py-0.5 rounded bg-slate-200/80 dark:bg-[#241a38] font-mono">
+                npm run deploy:worker
+              </code>{' '}
+              puis cliquez sur Réessayer.
+            </p>
+          </div>
+        )}
         <button
           type="button"
           onClick={loadGuides}

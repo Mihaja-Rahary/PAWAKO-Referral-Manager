@@ -41,14 +41,22 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 
   if (!res.ok) {
     let errMsg = `Erreur HTTP ${res.status}`;
+    let errCode: string | undefined;
     try {
       const errJson = await res.json();
-      errMsg = errJson.error || errMsg;
+      if (errJson?.error) errMsg = errJson.error;
+      if (errJson?.code) errCode = errJson.code;
     } catch {
-      // ignore
+      // ignore non-JSON body (ex: plain text 404 from an outdated Worker)
+    }
+    if (res.status === 404 && (!errCode || errCode === 'ROUTE_NOT_FOUND') && errMsg === `Erreur HTTP 404`) {
+      const cleanPath = path.split('?')[0];
+      errMsg = `Route API introuvable (${cleanPath} — HTTP 404). Si le frontend pointe vers le Worker Cloudflare de production, redéployez le Worker avec "npm run deploy:worker".`;
+      errCode = 'ROUTE_NOT_FOUND';
     }
     const err: any = new Error(errMsg);
     err.status = res.status;
+    if (errCode) err.code = errCode;
     throw err;
   }
 

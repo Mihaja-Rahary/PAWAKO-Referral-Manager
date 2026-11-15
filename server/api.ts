@@ -233,9 +233,20 @@ apiRouter.get('/candidates', requireAuth, (req: Request, res: Response) => {
   } = req.query as Record<string, string>;
 
   let referrerFilter: string | undefined = undefined;
+  let parrainLockedVaType: VAType | null = null;
   if (isParrainOnly) {
     const referrerProfile = db.getReferrerByDiscordUserId(currentUser.id);
-    if (!referrerProfile) {
+    if (!referrerProfile || !referrerProfile.isActive) {
+      return res.json({ candidates: [], total: 0, page: 1, totalPages: 0 });
+    }
+    parrainLockedVaType =
+      referrerProfile.vaType === 'CHATTEUR' || referrerProfile.vaType === 'INSTAGRAM'
+        ? referrerProfile.vaType
+        : null;
+    if (
+      !parrainLockedVaType ||
+      (vaType && vaType !== 'ALL' && vaType !== parrainLockedVaType)
+    ) {
       return res.json({ candidates: [], total: 0, page: 1, totalPages: 0 });
     }
     referrerFilter = referrerProfile.id;
@@ -243,7 +254,7 @@ apiRouter.get('/candidates', requireAuth, (req: Request, res: Response) => {
 
   const allFiltered = db.getCandidates({
     search,
-    vaType: vaType as VAType | 'ALL',
+    vaType: isParrainOnly ? (parrainLockedVaType as VAType) : (vaType as VAType | 'ALL'),
     adminStatus: adminStatus as AdminStatus | 'ALL',
     operationalStatus: operationalStatus as OperationalStatus | 'ALL',
     status: status as CandidateStatus | 'ALL',
@@ -289,6 +300,9 @@ apiRouter.get('/candidates/:id', requireAuth, (req: Request, res: Response) => {
     const referrerProfile = db.getReferrerByDiscordUserId(currentUser.id);
     if (!referrerProfile || candidate.referrerId !== referrerProfile.id) {
       return res.status(403).json({ error: 'Accès non autorisé : vous ne pouvez consulter que vos propres filleuls.' });
+    }
+    if (!referrerProfile.vaType || candidate.vaType !== referrerProfile.vaType) {
+      return res.status(403).json({ error: 'Accès refusé. Ce candidat est hors de votre spécialité parrain.' });
     }
   }
 
@@ -482,9 +496,30 @@ apiRouter.get('/referrers', requireAuth, (req: Request, res: Response) => {
   });
 });
 
+apiRouter.get('/referrers/:id', requireResponsableOrAdmin, (req: Request, res: Response) => {
+  const overview = db.getOverviewStatistics();
+  const ref = overview.topParrains.find(r => r.id === req.params.id) || db.getReferrerById(req.params.id);
+  if (!ref) {
+    return res.status(404).json({ error: 'Parrain introuvable' });
+  }
+  const filleuls = db.getCandidates({ referrerId: ref.id });
+  res.json({
+    referrer: ref,
+    filleuls,
+    dependencies: {
+      referrerId: ref.id,
+      linkedCandidatesCount: filleuls.length,
+      attributionHistoryCount: 0,
+      canPhysicallyDelete: filleuls.length === 0,
+      blockingReason: filleuls.length > 0 ? `${filleuls.length} filleul(s) lié(s)` : null,
+    },
+    history: db.getAuditLogs(50).filter(l => l.targetId === ref.id),
+  });
+});
+
 apiRouter.post('/referrers', requireAdmin, (req: Request, res: Response) => {
   const currentUser: User = (req as any).user;
-  const { discordUserId, inviteCode, notes } = req.body;
+  const { discordUserId, inviteCode, notes, vaType } = req.body;
 
   if (!discordUserId) {
     return res.status(400).json({ error: 'Le Discord User ID est obligatoire.' });
@@ -494,6 +529,7 @@ apiRouter.post('/referrers', requireAdmin, (req: Request, res: Response) => {
     discordUserId,
     inviteCode,
     notes,
+    vaType,
     actorUserId: currentUser.id,
     actorName: currentUser.displayName,
   });
@@ -504,8 +540,24 @@ apiRouter.post('/referrers', requireAdmin, (req: Request, res: Response) => {
   });
 });
 
+apiRouter.patch('/referrers/:id', requireAdmin, (req: Request, res: Response) => {
+  const currentUser: User = (req as any).user;
+  try {
+    const updated = db.updateReferrer(req.params.id, req.body || {}, {
+      id: currentUser.id,
+      displayName: currentUser.displayName,
+    });
+    if (!updated) {
+      return res.status(404).json({ error: 'Parrain introuvable.' });
+    }
+    res.json({ success: true, referrer: updated });
+  } catch (err: any) {
+    res.status(400).json({ error: err?.message || 'Impossible de mettre à jour le parrain.' });
+  }
+});
+
 // ----------------------------------------------------
-// 4. PARRAIN PERSONAL PORTAL
+// 4. PARRAIN PERSONAL PORTAL & GUIDES
 // ----------------------------------------------------
 
 apiRouter.get('/parrain/dashboard', requireParrainOrAdmin, (req: Request, res: Response) => {
@@ -518,7 +570,12 @@ apiRouter.get('/parrain/dashboard', requireParrainOrAdmin, (req: Request, res: R
     });
   }
 
-  const myCandidates = db.getCandidates({ referrerId: referrer.id });
+  const lockedVaType: VAType | null =
+    referrer.vaType === 'CHATTEUR' || referrer.vaType === 'INSTAGRAM' ? referrer.vaType : null;
+
+  const myCandidates = lockedVaType
+    ? db.getCandidates({ referrerId: referrer.id, vaType: lockedVaType })
+    : [];
   const total = myCandidates.length;
 
   const enAttente = myCandidates.filter(c => c.adminStatus === 'EN_ATTENTE').length;
@@ -535,9 +592,15 @@ apiRouter.get('/parrain/dashboard', requireParrainOrAdmin, (req: Request, res: R
 
   // Liste positive stricte pour le tableau de bord du parrain
   const safeCandidates = myCandidates.map(c => toParrainCandidateView(c));
+  const safeReferrer = {
+    ...referrer,
+    notes: undefined,
+    outOfSpecialtyCount: undefined,
+    totalLinkedCount: undefined,
+  };
 
   res.json({
-    referrer,
+    referrer: safeReferrer,
     metrics: {
       totalFilleuls: total,
       enAttente,
@@ -553,6 +616,81 @@ apiRouter.get('/parrain/dashboard', requireParrainOrAdmin, (req: Request, res: R
     },
     candidates: safeCandidates,
   });
+});
+
+apiRouter.post('/parrain/specialty', requireParrainOrAdmin, (req: Request, res: Response) => {
+  const currentUser: User = (req as any).user;
+  const vaType = req.body?.vaType;
+  if (vaType !== 'CHATTEUR' && vaType !== 'INSTAGRAM') {
+    return res.status(400).json({ error: 'Spécialité invalide. Choisissez CHATTEUR ou INSTAGRAM.' });
+  }
+
+  try {
+    const updated = db.setParrainOwnSpecialty(currentUser.id, vaType);
+    res.json({
+      success: true,
+      referrer: { ...updated, notes: undefined },
+    });
+  } catch (err: any) {
+    const status = typeof err?.status === 'number' ? err.status : 400;
+    res.status(status).json({ error: err?.message || 'Impossible d enregistrer votre spécialité.' });
+  }
+});
+
+apiRouter.get('/parrain/guide', requireAuth, (req: Request, res: Response) => {
+  const currentUser: User = (req as any).user;
+  const queryVaType = req.query.vaType;
+  let targetVaType: VAType | null =
+    queryVaType === 'CHATTEUR' || queryVaType === 'INSTAGRAM' ? (queryVaType as VAType) : null;
+
+  if (currentUser.role === 'PARRAIN') {
+    const myRef = db.getReferrerByDiscordUserId(currentUser.id);
+    if (!myRef || !myRef.isActive) {
+      return res.status(403).json({ error: 'Votre profil parrain est inactif, suspendu ou archivé.' });
+    }
+    if (myRef.vaType === 'CHATTEUR' || myRef.vaType === 'INSTAGRAM') {
+      targetVaType = myRef.vaType;
+    } else if (!targetVaType) {
+      return res.json({ guide: null, requiresSpecialtyChoice: true });
+    }
+  } else if (!targetVaType) {
+    const myRef = db.getReferrerByDiscordUserId(currentUser.id);
+    targetVaType =
+      myRef?.vaType === 'CHATTEUR' || myRef?.vaType === 'INSTAGRAM' ? myRef.vaType : 'CHATTEUR';
+  }
+
+  const guide = db.getParrainGuide(targetVaType);
+  res.json({ guide });
+});
+
+apiRouter.get('/admin/parrain-guides', requireResponsableOrAdmin, (_req: Request, res: Response) => {
+  const guides = db.getAllParrainGuides();
+  res.json({ guides });
+});
+
+apiRouter.put('/admin/parrain-guides/:vaType', requireAdmin, (req: Request, res: Response) => {
+  const currentUser: User = (req as any).user;
+  const rawVaType = (req.params.vaType || '').toUpperCase();
+  if (rawVaType !== 'CHATTEUR' && rawVaType !== 'INSTAGRAM') {
+    return res.status(400).json({ error: 'Spécialité invalide (CHATTEUR ou INSTAGRAM attendu).' });
+  }
+
+  const body = req.body || {};
+  try {
+    const guide = db.saveParrainGuide(
+      rawVaType as VAType,
+      {
+        title: typeof body.title === 'string' ? body.title : '',
+        subtitle: typeof body.subtitle === 'string' ? body.subtitle : '',
+        heroImageUrl: typeof body.heroImageUrl === 'string' ? body.heroImageUrl : null,
+        blocks: Array.isArray(body.blocks) ? body.blocks : [],
+      },
+      { id: currentUser.id, displayName: currentUser.displayName }
+    );
+    res.json({ success: true, guide });
+  } catch (err: any) {
+    res.status(400).json({ error: err?.message || 'Impossible de enregistrer le guide parrain.' });
+  }
 });
 
 // ----------------------------------------------------
@@ -756,4 +894,12 @@ apiRouter.post('/admin/firestore/migrate', requireAdmin, async (req: Request, re
     console.error('Firestore Migration Error:', err);
     res.status(500).json({ error: err.message || 'Erreur lors de la migration vers Firestore' });
   }
+});
+
+// Fallback JSON 404 pour toute route API inconnue (évite de renvoyer index.html)
+apiRouter.use((req: Request, res: Response) => {
+  res.status(404).json({
+    error: `Route API introuvable (${req.method} ${req.originalUrl}).`,
+    code: 'ROUTE_NOT_FOUND',
+  });
 });
