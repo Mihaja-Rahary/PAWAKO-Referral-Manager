@@ -13,12 +13,14 @@ import {
   LogOut,
   Radio,
   X,
+  BookOpen,
 } from 'lucide-react';
 
 export type NavigationTab =
   | 'dashboard'
   | 'candidates'
   | 'referrers'
+  | 'parrain_guides'
   | 'parrain_portal'
   | 'discord_sync'
   | 'users'
@@ -83,6 +85,12 @@ export const Sidebar: React.FC<Props> = ({
       id: 'referrers' as NavigationTab,
       label: 'Parrains',
       icon: Award,
+      roles: ['ADMINISTRATEUR', 'RESPONSABLE'],
+    },
+    {
+      id: 'parrain_guides' as NavigationTab,
+      label: 'Guides Parrains',
+      icon: BookOpen,
       roles: ['ADMINISTRATEUR', 'RESPONSABLE'],
     },
     {

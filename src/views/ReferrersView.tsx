@@ -6,6 +6,7 @@ import {
   ReferrerDependencySummary,
   ReferrerStatus,
   UserRole,
+  VAType,
 } from '../types';
 import { api } from '../api';
 import {
@@ -100,6 +101,7 @@ export const ReferrersView: React.FC<Props> = ({
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [discordUserId, setDiscordUserId] = useState('');
   const [customCode, setCustomCode] = useState('');
+  const [newVaType, setNewVaType] = useState<VAType | ''>('');
   const [notes, setNotes] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -117,6 +119,7 @@ export const ReferrersView: React.FC<Props> = ({
 
   const [editNotes, setEditNotes] = useState('');
   const [editDisplayName, setEditDisplayName] = useState('');
+  const [editVaType, setEditVaType] = useState<VAType | ''>('');
   const [manualInviteCode, setManualInviteCode] = useState('');
   const [actionReason, setActionReason] = useState('');
   const [pendingAction, setPendingAction] = useState<
@@ -173,6 +176,7 @@ export const ReferrersView: React.FC<Props> = ({
       setDetailData(res);
       setEditNotes(res.referrer.notes || '');
       setEditDisplayName(res.referrer.discordDisplayName || '');
+      setEditVaType(res.referrer.vaType || '');
     } catch (err: any) {
       setDetailError(err?.message || 'Impossible de charger les détails du parrain.');
     } finally {
@@ -288,10 +292,12 @@ export const ReferrersView: React.FC<Props> = ({
         discordUserId: discordUserId.trim(),
         inviteCode: customCode.trim() || undefined,
         notes: notes.trim() || undefined,
+        vaType: newVaType || null,
       });
       setIsModalOpen(false);
       setDiscordUserId('');
       setCustomCode('');
+      setNewVaType('');
       setNotes('');
       await fetchReferrers();
       if (onRefreshAll) onRefreshAll();
@@ -311,10 +317,11 @@ export const ReferrersView: React.FC<Props> = ({
       await api.updateReferrer(selectedReferrerId, {
         notes: editNotes,
         discordDisplayName: editDisplayName.trim() || undefined,
+        vaType: editVaType || null,
       });
       await Promise.all([loadReferrerDetails(selectedReferrerId), fetchReferrers()]);
       if (onRefreshAll) onRefreshAll();
-      setActionFeedback({ type: 'ok', text: 'Informations du parrain enregistrées.' });
+      setActionFeedback({ type: 'ok', text: 'Informations et spécialité du parrain enregistrées.' });
     } catch (err: any) {
       setActionFeedback({ type: 'err', text: err?.message || 'Erreur lors de la mise à jour.' });
     } finally {
@@ -630,6 +637,20 @@ export const ReferrersView: React.FC<Props> = ({
                     </span>
                   </div>
 
+                  {/* Specialty Line */}
+                  <div className="flex items-center justify-between gap-2 text-[11px] bg-slate-50/80 dark:bg-[#171026] px-2.5 py-1.5 rounded-lg border border-slate-100 dark:border-[#241a38]">
+                    <span className="text-slate-500 dark:text-[#9d93b8]">Spécialité :</span>
+                    <span
+                      className={`font-semibold ${
+                        ref.vaType
+                          ? 'text-violet-700 dark:text-violet-300'
+                          : 'text-amber-700 dark:text-amber-300'
+                      }`}
+                    >
+                      {ref.vaType ? getVaTypeLabel(ref.vaType) : 'Non choisie'}
+                    </span>
+                  </div>
+
                   {ref.notes && (
                     <p className="text-xs text-slate-500 dark:text-[#9d93b8] italic bg-slate-50 dark:bg-[#171026] p-2 rounded border border-slate-100 dark:border-[#241a38] line-clamp-2">
                       {ref.notes}
@@ -686,6 +707,14 @@ export const ReferrersView: React.FC<Props> = ({
                         {(ref.refuses || 0) + (ref.abandonnes || 0)}
                       </span>
                     </div>
+                    {(ref.outOfSpecialtyCount || 0) > 0 && (
+                      <div className="flex justify-between text-amber-700 dark:text-amber-300">
+                        <span>Hors spécialité (masqués)</span>
+                        <span className="font-semibold font-mono tabular-nums">
+                          {ref.outOfSpecialtyCount}
+                        </span>
+                      </div>
+                    )}
                     <div className="flex justify-between text-[10px] pt-1 text-slate-400 dark:text-[#7c7296]">
                       <span>Dernière activité</span>
                       <span className="font-mono">{formatDate(ref.lastActivityAt || ref.createdAt)}</span>
@@ -842,6 +871,21 @@ export const ReferrersView: React.FC<Props> = ({
                 <p className="text-[11px] text-slate-500 dark:text-[#9d93b8] mt-1">
                   Aucun code factice n'est fabriqué : laissez vide pour créer une vraie invitation sur le serveur Recrutement, ou saisissez un code discord.gg existant.
                 </p>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 dark:text-[#d8d0eb] mb-1">
+                  Spécialité exclusive (Optionnel)
+                </label>
+                <select
+                  value={newVaType}
+                  onChange={e => setNewVaType(e.target.value as VAType | '')}
+                  className="w-full text-xs p-2.5 border border-slate-200 dark:border-[#241a38] rounded-lg focus:outline-none focus:ring-2 focus:ring-violet-500/20 focus:border-violet-500 text-slate-900 dark:text-[#f4f1fa] bg-white dark:bg-[#08050f]"
+                >
+                  <option value="">Laisser le parrain choisir au 1er accès</option>
+                  <option value="CHATTEUR">VA Chatteur</option>
+                  <option value="INSTAGRAM">VA Instagram</option>
+                </select>
               </div>
 
               <div>
@@ -1106,6 +1150,29 @@ export const ReferrersView: React.FC<Props> = ({
                       </div>
                       <div>
                         <label className="block text-[11px] font-semibold text-slate-600 dark:text-[#9d93b8] mb-1">
+                          Spécialité exclusive du parrain (verrouillée côté parrain)
+                        </label>
+                        <select
+                          value={editVaType}
+                          onChange={e => setEditVaType(e.target.value as VAType | '')}
+                          className="w-full min-h-[38px] px-3 py-1.5 text-xs border border-slate-200 dark:border-[#241a38] rounded-lg bg-slate-50 dark:bg-[#171026] text-slate-900 dark:text-[#f4f1fa]"
+                        >
+                          <option value="">Non définie (déverrouiller / laisser le parrain choisir)</option>
+                          <option value="CHATTEUR">VA Chatteur</option>
+                          <option value="INSTAGRAM">VA Instagram</option>
+                        </select>
+                        {detailData.referrer.vaTypeLockedAt && (
+                          <p className="text-[10px] text-slate-500 dark:text-[#9d93b8] mt-1">
+                            Verrouillée le {formatDate(detailData.referrer.vaTypeLockedAt)}
+                            {detailData.referrer.vaTypeUpdatedByName
+                              ? ` par ${detailData.referrer.vaTypeUpdatedByName}`
+                              : ''}
+                            .
+                          </p>
+                        )}
+                      </div>
+                      <div>
+                        <label className="block text-[11px] font-semibold text-slate-600 dark:text-[#9d93b8] mb-1">
                           Notes administratives (invisibles pour le parrain)
                         </label>
                         <textarea
@@ -1331,6 +1398,9 @@ export const ReferrersView: React.FC<Props> = ({
                     <div className="border border-slate-200 dark:border-[#241a38] rounded-xl divide-y divide-slate-100 dark:divide-[#1e1530] overflow-hidden">
                       {detailData.filleuls.slice(0, 15).map(c => {
                         const badge = getStatusBadgeClasses(c.status);
+                        const isOutOfSpecialty =
+                          Boolean(detailData.referrer.vaType) &&
+                          c.vaType !== detailData.referrer.vaType;
                         return (
                           <button
                             key={c.id}
@@ -1350,6 +1420,11 @@ export const ReferrersView: React.FC<Props> = ({
                               <div className="text-[10px] text-slate-400 dark:text-[#7c7296]">
                                 @{c.username} · {getVaTypeLabel(c.vaType)}
                               </div>
+                              {isOutOfSpecialty && (
+                                <div className="text-[10px] font-semibold text-amber-700 dark:text-amber-300 mt-0.5">
+                                  Hors spécialité parrain (non affiché / non rémunéré)
+                                </div>
+                              )}
                             </div>
                             <span className={`inline-flex items-center gap-1 text-[11px] font-semibold shrink-0 ${badge.text}`}>
                               <span className={`w-1.5 h-1.5 rounded-full ${badge.dot}`} />

@@ -97,7 +97,15 @@ export interface Referrer {
   restoredAt?: string | null;
   restoredByUserId?: string | null;
   notes?: string;
+  // Spécialité exclusive du parrain (VA Chatteur OU VA Instagram, verrouillée après choix)
+  vaType?: VAType | null;
+  vaTypeLockedAt?: string | null;
+  vaTypeUpdatedByUserId?: string | null;
+  vaTypeUpdatedByName?: string | null;
+  // Champs statistiques calculés côté repository (uniquement filleuls dans la spécialité)
   totalFilleuls?: number;
+  outOfSpecialtyCount?: number;
+  totalLinkedCount?: number;
   enAttente?: number;
   acceptes?: number;
   enFormation?: number;
@@ -110,6 +118,35 @@ export interface Referrer {
   acceptanceRate?: number;
   chatteurCount?: number;
   instagramCount?: number;
+}
+
+export type ParrainGuideBlockType = 'TEXT' | 'TABLE' | 'IMAGE' | 'CALLOUT';
+
+export type ParrainGuideCalloutTone = 'info' | 'condition' | 'warning' | 'success';
+
+export interface ParrainGuideBlock {
+  id: string;
+  type: ParrainGuideBlockType;
+  title?: string;
+  body?: string;
+  tone?: ParrainGuideCalloutTone;
+  headers?: string[];
+  rows?: string[][];
+  imageUrl?: string;
+  caption?: string;
+}
+
+export interface ParrainGuide {
+  id: VAType;
+  vaType: VAType;
+  title: string;
+  subtitle: string;
+  heroImageUrl?: string | null;
+  blocks: ParrainGuideBlock[];
+  updatedAt: string;
+  updatedByUserId: string;
+  updatedByName: string;
+  isDefault?: boolean;
 }
 
 export interface ReferrerDependencySummary {
@@ -275,7 +312,7 @@ export interface AuditLog {
   action: string;
   actorUserId: string;
   actorName: string;
-  targetType: 'CANDIDATE' | 'REFERRER' | 'USER' | 'SERVER' | 'DISCORD' | 'ROLE_MAPPING';
+  targetType: 'CANDIDATE' | 'REFERRER' | 'USER' | 'SERVER' | 'DISCORD' | 'ROLE_MAPPING' | 'PARRAIN_GUIDE';
   targetId: string;
   details: Record<string, any>;
   timestamp: string;

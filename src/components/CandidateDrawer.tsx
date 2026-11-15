@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Candidate, StatusHistoryEntry, ReferralAttributionHistoryEntry, UserRole, VAType } from '../types';
+import { Candidate, Referrer, StatusHistoryEntry, ReferralAttributionHistoryEntry, UserRole, VAType } from '../types';
 import { api } from '../api';
 import {
   getStatusBadgeClasses,
@@ -29,6 +29,7 @@ interface Props {
   candidateId: string | null;
   onClose: () => void;
   currentUserRole: UserRole;
+  referrers?: Referrer[];
   onOpenStatusModal: (candidate: Candidate) => void;
   onOpenReassignModal: (candidate: Candidate) => void;
   onCandidateUpdated: () => void;
@@ -39,6 +40,7 @@ export const CandidateDrawer: React.FC<Props> = ({
   candidateId,
   onClose,
   currentUserRole,
+  referrers = [],
   onOpenStatusModal,
   onOpenReassignModal,
   onCandidateUpdated,
@@ -159,6 +161,18 @@ export const CandidateDrawer: React.FC<Props> = ({
 
   const badge = candidate ? getStatusBadgeClasses(candidate.status) : null;
   const attrInfo = candidate ? getAttributionLabel(candidate.attributionStatus) : null;
+  const matchedReferrer = candidate
+    ? referrers.find(
+        r =>
+          (candidate.referrerId && r.id === candidate.referrerId) ||
+          (candidate.referrerDiscordUserId && r.discordUserId === candidate.referrerDiscordUserId)
+      )
+    : undefined;
+  const isOutOfReferrerSpecialty =
+    !isParrainOnly &&
+    Boolean(candidate) &&
+    Boolean(matchedReferrer?.vaType) &&
+    matchedReferrer!.vaType !== candidate!.vaType;
 
   return (
     <div className="fixed inset-0 z-40 overflow-hidden bg-slate-900/40 dark:bg-black/80 backdrop-blur-xs flex justify-end">
@@ -408,8 +422,27 @@ export const CandidateDrawer: React.FC<Props> = ({
                 <div className={`text-[11px] ${attrInfo?.text}`}>
                   {attrInfo?.label}
                 </div>
+                {isOutOfReferrerSpecialty && (
+                  <div className="text-[11px] font-semibold text-amber-700 dark:text-amber-300 pt-0.5">
+                    Hors spécialité parrain (non affiché / non rémunéré)
+                  </div>
+                )}
               </div>
             </div>
+
+            {isOutOfReferrerSpecialty && matchedReferrer?.vaType && (
+              <div className="p-3 bg-amber-50 dark:bg-[#1b1410] border border-amber-200 dark:border-amber-500/35 rounded-lg text-xs text-amber-900 dark:text-amber-200 flex items-start gap-2.5">
+                <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+                <div>
+                  <div className="font-semibold text-amber-950 dark:text-amber-100">
+                    Hors spécialité parrain (non affiché / non rémunéré)
+                  </div>
+                  <div className="mt-0.5 text-amber-800 dark:text-amber-300 leading-relaxed">
+                    Ce candidat est sur le parcours <strong>{getVaTypeLabel(candidate.vaType)}</strong> alors que son parrain est spécialisé <strong>{getVaTypeLabel(matchedReferrer.vaType)}</strong>. Il reste visible côté Administration mais est masqué pour ce parrain.
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* Warning if attribution is uncertain (Admin & Responsable only) */}
             {!isParrainOnly && candidate.attributionStatus === 'UNCERTAIN' && (

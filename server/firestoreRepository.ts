@@ -42,7 +42,126 @@ import {
   VAType,
   DiscordServerType,
   PawakoRoleType,
+  ParrainGuide,
+  ParrainGuideBlock,
+  ParrainGuideBlockType,
+  ParrainGuideCalloutTone,
 } from './types';
+
+function validateSafeImageUrl(rawUrl: string): string {
+  const trimmed = (rawUrl || '').trim();
+  if (!trimmed) return '';
+  if (/^https?:\/\//i.test(trimmed)) {
+    return trimmed;
+  }
+  if (/^data:image\/(png|jpeg|jpg|webp|gif);base64,[a-zA-Z0-9+/=]+$/i.test(trimmed)) {
+    return trimmed;
+  }
+  throw new Error(
+    "Format d'image invalide : utilisez un lien https:// ou une photo importée (PNG, JPEG, WebP)."
+  );
+}
+
+export function buildDefaultParrainGuide(vaType: VAType): ParrainGuide {
+  const now = new Date().toISOString();
+  if (vaType === 'CHATTEUR') {
+    return {
+      id: 'CHATTEUR',
+      vaType: 'CHATTEUR',
+      title: 'Guide Officiel Parrain — Pôle VA Chatteur',
+      subtitle:
+        'Votre rôle d’accompagnement, les conditions de suivi et le barème de rémunération pour vos filleuls VA Chatteurs.',
+      heroImageUrl: null,
+      blocks: [
+        {
+          id: 'chatteur-role',
+          type: 'TEXT',
+          title: 'Votre rôle en tant que Parrain VA Chatteur',
+          body:
+            "En choisissant la spécialité VA Chatteur, vous mettez votre expertise du terrain au service des nouveaux talents recrutés via votre lien.\n\n• **Expertise ciblée** : vous parrainez uniquement des candidats orientés vers l'activité VA Chatting.\n• **Obligation de suivi** : vous devez accompagner vos filleuls depuis leur arrivée sur le serveur Recrutement jusqu'à leur passage en Formation, Simulation et Production.\n• **Réponse aux blocages** : votre disponibilité augmente directement le taux de validation et de rétention de vos filleuls.",
+        },
+        {
+          id: 'chatteur-condition',
+          type: 'CALLOUT',
+          tone: 'condition',
+          title: 'Condition stricte de rémunération & suivi',
+          body:
+            "La rémunération du parrainage dépend directement des **résultats réels** et du passage effectif de vos filleuls en **Production active VA Chatteur**. Un candidat qui bascule vers VA Instagram n'est ni affiché dans votre espace ni pris en compte dans votre rémunération.",
+        },
+        {
+          id: 'chatteur-remuneration',
+          type: 'TABLE',
+          title: 'Parcours & Paliers de suivi VA Chatteur',
+          headers: ['Étape du filleul', 'Votre action attendue', 'Impact parrainage'],
+          rows: [
+            ['1. Recrutement / Accepté', 'Accueillir le candidat et vérifier sa disponibilité', 'Dossier activé'],
+            ['2. Formation & Simulation', 'Partager les bonnes pratiques, relancer avant les tests', 'Prépare la validation'],
+            ['3. Validé → Production', 'Suivre les premiers jours en production active', 'Éligible à la rémunération selon résultats'],
+          ],
+        },
+        {
+          id: 'chatteur-practices',
+          type: 'TEXT',
+          title: 'Bonnes pratiques recommandées',
+          body:
+            '• Présentez clairement les horaires, l’engagement attendu et la rigueur demandée avant même que le candidat ne clique sur votre lien.\n• Prenez des nouvelles à chaque étape clé (entrée en formation, passage en simulation, mise en production).\n• Signalez rapidement à un Responsable si un filleul rencontre une difficulté technique ou de planning.',
+        },
+      ],
+      updatedAt: now,
+      updatedByUserId: 'SYSTEM',
+      updatedByName: 'PAWAKO Administration',
+      isDefault: true,
+    };
+  }
+
+  return {
+    id: 'INSTAGRAM',
+    vaType: 'INSTAGRAM',
+    title: 'Guide Officiel Parrain — Pôle VA Instagram',
+    subtitle:
+      'Votre rôle d’accompagnement, les conditions d’éligibilité et les standards de suivi pour vos filleuls VA Instagram.',
+    heroImageUrl: null,
+    blocks: [
+      {
+        id: 'insta-role',
+        type: 'TEXT',
+        title: 'Votre rôle en tant que Parrain VA Instagram',
+        body:
+          "En choisissant la spécialité VA Instagram, vous accompagnez des profils dédiés à la gestion et à la croissance sur Instagram.\n\n• **Expertise ciblée** : vous transmettez les méthodes spécifiques Instagram (régularité, respect des consignes comptes, réactivité).\n• **Obligation de suivi** : vous êtes responsable de guider vos filleuls pour qu'ils obtiennent des résultats concrets dès leur intégration.\n• **Qualité avant volume** : privilégiez des candidats sérieux, fiables et prêts à appliquer les process PAWAKO.",
+      },
+      {
+        id: 'insta-condition',
+        type: 'CALLOUT',
+        tone: 'condition',
+        title: 'Condition stricte de rémunération & suivi',
+        body:
+          "La rémunération du parrainage repose sur les **résultats obtenus par vos filleuls en Production VA Instagram**. Si un candidat recruté via votre lien change d'orientation vers VA Chatteur, il devient automatiquement hors spécialité : il n'est plus affiché dans votre espace ni rémunéré.",
+      },
+      {
+        id: 'insta-remuneration',
+        type: 'TABLE',
+        title: 'Parcours & Engagements VA Instagram',
+        headers: ['Étape du filleul', 'Votre action attendue', 'Impact parrainage'],
+        rows: [
+          ['1. Recrutement', 'Brief initial sur les attentes du pôle Instagram', 'Dossier enregistré'],
+          ['2. Accepté', 'Vérifier l’équipement et l’application des consignes', 'Accès rapide à la production'],
+          ['3. Production VA Instagram', 'Suivi de la régularité et des performances', 'Éligible à la rémunération selon résultats'],
+        ],
+      },
+      {
+        id: 'insta-practices',
+        type: 'TEXT',
+        title: 'Bonnes pratiques recommandées',
+        body:
+          '• Expliquez dès le premier contact les critères de sélection du pôle Instagram.\n• Accompagnez la prise en main des outils durant la première semaine en production.\n• Maintenez un suivi régulier pour garantir la performance durable de vos filleuls.',
+      },
+    ],
+    updatedAt: now,
+    updatedByUserId: 'SYSTEM',
+    updatedByName: 'PAWAKO Administration',
+    isDefault: true,
+  };
+}
 
 export const OFFICIAL_DISCORD_SERVERS: DiscordServerInfo[] = [
   {
@@ -152,6 +271,9 @@ function normalizeReferrerDocument(raw: Referrer): Referrer {
   const cleanUsername = String(raw.discordUsername || (cleanDiscordUserId ? `user_${cleanDiscordUserId.slice(-4)}` : 'parrain'));
   const cleanDisplayName = String(raw.discordDisplayName || cleanUsername || 'Parrain');
 
+  const normalizedVaType: VAType | null =
+    raw.vaType === 'CHATTEUR' || raw.vaType === 'INSTAGRAM' ? raw.vaType : null;
+
   return {
     ...stripFirestoreMeta(raw),
     id: String(raw.id || (cleanDiscordUserId ? `ref-${cleanDiscordUserId}` : '')),
@@ -164,6 +286,10 @@ function normalizeReferrerDocument(raw: Referrer): Referrer {
     inviteUrl,
     inviteStatus,
     inviteError,
+    vaType: normalizedVaType,
+    vaTypeLockedAt: raw.vaTypeLockedAt || null,
+    vaTypeUpdatedByUserId: raw.vaTypeUpdatedByUserId || null,
+    vaTypeUpdatedByName: raw.vaTypeUpdatedByName || null,
   };
 }
 
@@ -1184,20 +1310,30 @@ export class FirestoreRepository {
 
   private enrichReferrerWithCandidates(ref: Referrer, allCandidates: Candidate[]): Referrer {
     const normalized = normalizeReferrerDocument(ref);
-    const filleuls = allCandidates.filter(
+    const linkedFilleuls = allCandidates.filter(
       c => c.referrerId === normalized.id || c.referrerDiscordUserId === normalized.discordUserId
     );
-    const totalFilleuls = filleuls.length;
-    const enAttente = filleuls.filter(c => c.adminStatus === 'EN_ATTENTE').length;
-    const acceptes = filleuls.filter(c => c.adminStatus === 'ACCEPTE').length;
-    const enFormation = filleuls.filter(c => c.operationalStatus === 'FORMATION').length;
-    const enSimulation = filleuls.filter(c => c.operationalStatus === 'SIMULATION').length;
-    const valides = filleuls.filter(c => c.operationalStatus === 'VALIDE').length;
-    const enProduction = filleuls.filter(c => c.operationalStatus === 'PRODUCTION').length;
-    const refuses = filleuls.filter(c => c.adminStatus === 'REFUSE').length;
-    const abandonnes = filleuls.filter(c => c.adminStatus === 'ABANDONNE').length;
-    const chatteurCount = filleuls.filter(c => c.vaType === 'CHATTEUR').length;
-    const instagramCount = filleuls.filter(c => c.vaType === 'INSTAGRAM').length;
+
+    const hasSpecialty = normalized.vaType === 'CHATTEUR' || normalized.vaType === 'INSTAGRAM';
+    const eligibleFilleuls = hasSpecialty
+      ? linkedFilleuls.filter(c => c.vaType === normalized.vaType)
+      : [];
+    const outOfSpecialtyCount = hasSpecialty
+      ? linkedFilleuls.length - eligibleFilleuls.length
+      : 0;
+    const totalLinkedCount = linkedFilleuls.length;
+
+    const totalFilleuls = eligibleFilleuls.length;
+    const enAttente = eligibleFilleuls.filter(c => c.adminStatus === 'EN_ATTENTE').length;
+    const acceptes = eligibleFilleuls.filter(c => c.adminStatus === 'ACCEPTE').length;
+    const enFormation = eligibleFilleuls.filter(c => c.operationalStatus === 'FORMATION').length;
+    const enSimulation = eligibleFilleuls.filter(c => c.operationalStatus === 'SIMULATION').length;
+    const valides = eligibleFilleuls.filter(c => c.operationalStatus === 'VALIDE').length;
+    const enProduction = eligibleFilleuls.filter(c => c.operationalStatus === 'PRODUCTION').length;
+    const refuses = eligibleFilleuls.filter(c => c.adminStatus === 'REFUSE').length;
+    const abandonnes = eligibleFilleuls.filter(c => c.adminStatus === 'ABANDONNE').length;
+    const chatteurCount = eligibleFilleuls.filter(c => c.vaType === 'CHATTEUR').length;
+    const instagramCount = eligibleFilleuls.filter(c => c.vaType === 'INSTAGRAM').length;
     const conversionRate = totalFilleuls > 0 ? Math.round((enProduction / totalFilleuls) * 100) : 0;
     const acceptanceRate = totalFilleuls > 0 ? Math.round(((totalFilleuls - refuses) / totalFilleuls) * 100) : 0;
 
@@ -1205,6 +1341,8 @@ export class FirestoreRepository {
       ...normalized,
       usesCount: totalFilleuls,
       totalFilleuls,
+      outOfSpecialtyCount,
+      totalLinkedCount,
       enAttente,
       acceptes,
       enFormation,
@@ -1292,6 +1430,7 @@ export class FirestoreRepository {
     discordUserId: string;
     inviteCode?: string;
     notes?: string;
+    vaType?: VAType | null;
     actorUserId?: string;
     actorName?: string;
     discordBotConfig?: DiscordBotConfig;
@@ -1432,6 +1571,9 @@ export class FirestoreRepository {
       }
     }
 
+    const validInitialVaType: VAType | null =
+      params.vaType === 'CHATTEUR' || params.vaType === 'INSTAGRAM' ? params.vaType : null;
+
     const newReferrer: Referrer = {
       id,
       discordUserId: cleanDiscordId,
@@ -1451,6 +1593,10 @@ export class FirestoreRepository {
       updatedAt: now,
       lastActivityAt: now,
       notes: params.notes?.trim() || '',
+      vaType: validInitialVaType,
+      vaTypeLockedAt: validInitialVaType ? now : null,
+      vaTypeUpdatedByUserId: validInitialVaType ? params.actorUserId || null : null,
+      vaTypeUpdatedByName: validInitialVaType ? params.actorName || null : null,
     };
 
     try {
@@ -1593,7 +1739,7 @@ export class FirestoreRepository {
 
   async updateReferrer(
     id: string,
-    patch: { notes?: string; discordDisplayName?: string; discordUsername?: string },
+    patch: { notes?: string; discordDisplayName?: string; discordUsername?: string; vaType?: VAType | null },
     actor: { id: string; displayName: string }
   ): Promise<Referrer | null> {
     const raw = await this.client.getDocument<Referrer>('pawako_referrers', id);
@@ -1624,6 +1770,19 @@ export class FirestoreRepository {
       if (nextUsername !== raw.discordUsername) {
         changes.discordUsername = { from: raw.discordUsername, to: nextUsername };
         updated.discordUsername = nextUsername;
+      }
+    }
+    if (patch.vaType !== undefined) {
+      const currentVaType: VAType | null =
+        raw.vaType === 'CHATTEUR' || raw.vaType === 'INSTAGRAM' ? raw.vaType : null;
+      const nextVaType: VAType | null =
+        patch.vaType === 'CHATTEUR' || patch.vaType === 'INSTAGRAM' ? patch.vaType : null;
+      if (nextVaType !== currentVaType) {
+        changes.vaType = { from: currentVaType, to: nextVaType };
+        updated.vaType = nextVaType;
+        updated.vaTypeLockedAt = nextVaType ? now : null;
+        updated.vaTypeUpdatedByUserId = actor.id;
+        updated.vaTypeUpdatedByName = actor.displayName;
       }
     }
 
@@ -1658,7 +1817,7 @@ export class FirestoreRepository {
     }
 
     await this.logAudit({
-      action: 'REFERRER_UPDATED',
+      action: changes.vaType ? 'REFERRER_SPECIALTY_UPDATED' : 'REFERRER_UPDATED',
       actorUserId: actor.id,
       actorName: actor.displayName,
       targetType: 'REFERRER',
@@ -1666,6 +1825,67 @@ export class FirestoreRepository {
       details: { changes },
     });
 
+    return this.enrichReferrerWithCandidates(updated, candidates);
+  }
+
+  async setParrainOwnSpecialty(discordUserId: string, vaType: VAType): Promise<Referrer> {
+    if (vaType !== 'CHATTEUR' && vaType !== 'INSTAGRAM') {
+      throw new Error('Spécialité invalide (CHATTEUR ou INSTAGRAM requis).');
+    }
+
+    const existing = await this.getReferrerByDiscordUserId(discordUserId);
+    if (!existing) {
+      const err: any = new Error(`Aucun profil parrain trouvé pour le Discord ID : ${discordUserId}`);
+      err.status = 404;
+      throw err;
+    }
+
+    if (getEffectiveReferrerStatus(existing) !== 'ACTIVE') {
+      const err: any = new Error('Votre profil parrain est actuellement suspendu ou archivé.');
+      err.status = 403;
+      throw err;
+    }
+
+    const raw = await this.client.getDocument<Referrer>('pawako_referrers', existing.id);
+    if (!raw) {
+      const err: any = new Error('Profil parrain introuvable.');
+      err.status = 404;
+      throw err;
+    }
+
+    if (raw.vaType === 'CHATTEUR' || raw.vaType === 'INSTAGRAM') {
+      const label = raw.vaType === 'CHATTEUR' ? 'VA Chatteur' : 'VA Instagram';
+      const err: any = new Error(
+        `Votre spécialité (${label}) est déjà verrouillée. Seul un Administrateur peut la modifier en cas d'erreur.`
+      );
+      err.status = 409;
+      throw err;
+    }
+
+    const now = new Date().toISOString();
+    const updated: Referrer = {
+      ...stripFirestoreMeta(raw),
+      vaType,
+      vaTypeLockedAt: now,
+      vaTypeUpdatedByUserId: discordUserId,
+      vaTypeUpdatedByName: existing.discordDisplayName,
+      updatedAt: now,
+    };
+
+    await this.client.setDocument('pawako_referrers', existing.id, updated, {
+      precondition: raw._updateTime ? { updateTime: raw._updateTime } : undefined,
+    });
+
+    await this.logAudit({
+      action: 'REFERRER_SPECIALTY_SELECTED',
+      actorUserId: discordUserId,
+      actorName: existing.discordDisplayName || existing.discordUsername,
+      targetType: 'REFERRER',
+      targetId: existing.id,
+      details: { vaType, lockedAt: now },
+    });
+
+    const candidates = await this.client.listDocuments<Candidate>('pawako_candidates');
     return this.enrichReferrerWithCandidates(updated, candidates);
   }
 
@@ -4188,9 +4408,17 @@ export class FirestoreRepository {
       throw err;
     }
 
-    const myCandidates = allCandidates.filter(
-      c => c.referrerId === rawReferrer.id || c.referrerDiscordUserId === discordUserId
-    );
+    const referrerVaType: VAType | null =
+      rawReferrer.vaType === 'CHATTEUR' || rawReferrer.vaType === 'INSTAGRAM' ? rawReferrer.vaType : null;
+
+    // Isolation stricte : un parrain ne voit QUE les filleuls de sa spécialité choisie
+    const myCandidates = referrerVaType
+      ? allCandidates.filter(
+          c =>
+            (c.referrerId === rawReferrer.id || c.referrerDiscordUserId === discordUserId) &&
+            c.vaType === referrerVaType
+        )
+      : [];
     myCandidates.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
 
     // Suppression stricte des données confidentielles (refusalReason, décisionnaires, incertitudes internes)
@@ -4203,6 +4431,10 @@ export class FirestoreRepository {
     }));
 
     const enrichedReferrer = this.enrichReferrerWithCandidates(rawReferrer, myCandidates);
+    // Ne jamais exposer le nombre de filleuls hors spécialité au portail parrain
+    enrichedReferrer.outOfSpecialtyCount = undefined;
+    enrichedReferrer.totalLinkedCount = undefined;
+
     const totalFilleuls = sanitizedCandidates.length;
     const enAttente = sanitizedCandidates.filter(c => c.adminStatus === 'EN_ATTENTE').length;
     const acceptes = sanitizedCandidates.filter(c => c.adminStatus === 'ACCEPTE').length;
@@ -4230,5 +4462,191 @@ export class FirestoreRepository {
       },
       candidates: sanitizedCandidates,
     };
+  }
+
+  // --- GUIDES D'ACCUEIL PARRAIN (ÉDITEUR ADMIN) ---
+
+  async getParrainGuide(vaType: VAType): Promise<ParrainGuide> {
+    if (vaType !== 'CHATTEUR' && vaType !== 'INSTAGRAM') {
+      throw new Error('Spécialité invalide (CHATTEUR ou INSTAGRAM attendu).');
+    }
+
+    const doc = await this.client.getDocument<ParrainGuide>('pawako_parrain_guides', vaType);
+    if (!doc) {
+      return buildDefaultParrainGuide(vaType);
+    }
+
+    const cleaned = stripFirestoreMeta(doc);
+    return {
+      ...cleaned,
+      id: vaType,
+      vaType,
+      title: String(cleaned.title || '').trim() || buildDefaultParrainGuide(vaType).title,
+      subtitle: String(cleaned.subtitle || ''),
+      heroImageUrl: cleaned.heroImageUrl || null,
+      blocks: Array.isArray(cleaned.blocks) ? cleaned.blocks : [],
+      isDefault: false,
+    };
+  }
+
+  async getAllParrainGuides(): Promise<Record<VAType, ParrainGuide>> {
+    const [chatteur, instagram] = await Promise.all([
+      this.getParrainGuide('CHATTEUR'),
+      this.getParrainGuide('INSTAGRAM'),
+    ]);
+    return {
+      CHATTEUR: chatteur,
+      INSTAGRAM: instagram,
+    };
+  }
+
+  async saveParrainGuide(
+    vaType: VAType,
+    payload: {
+      title: string;
+      subtitle?: string;
+      heroImageUrl?: string | null;
+      blocks: ParrainGuideBlock[];
+    },
+    actor: { id: string; displayName: string }
+  ): Promise<ParrainGuide> {
+    if (vaType !== 'CHATTEUR' && vaType !== 'INSTAGRAM') {
+      throw new Error('Spécialité invalide (CHATTEUR ou INSTAGRAM attendu).');
+    }
+
+    const cleanTitle = typeof payload.title === 'string' ? payload.title.trim() : '';
+    if (!cleanTitle) {
+      throw new Error('Le titre du guide est obligatoire.');
+    }
+    if (cleanTitle.length > 200) {
+      throw new Error('Le titre du guide ne doit pas dépasser 200 caractères.');
+    }
+
+    const cleanSubtitle = typeof payload.subtitle === 'string' ? payload.subtitle.trim().slice(0, 500) : '';
+    const cleanHeroImageUrl =
+      typeof payload.heroImageUrl === 'string' && payload.heroImageUrl.trim()
+        ? validateSafeImageUrl(payload.heroImageUrl)
+        : null;
+
+    if (!Array.isArray(payload.blocks)) {
+      throw new Error('Le format des blocs de contenu est invalide.');
+    }
+    if (payload.blocks.length > 50) {
+      throw new Error('Un guide ne peut pas contenir plus de 50 blocs.');
+    }
+
+    const sanitizedBlocks: ParrainGuideBlock[] = payload.blocks.map((rawBlock, idx) => {
+      const bType: ParrainGuideBlockType =
+        rawBlock?.type === 'TEXT' ||
+        rawBlock?.type === 'TABLE' ||
+        rawBlock?.type === 'IMAGE' ||
+        rawBlock?.type === 'CALLOUT'
+          ? rawBlock.type
+          : 'TEXT';
+
+      const id =
+        typeof rawBlock?.id === 'string' && rawBlock.id.trim()
+          ? rawBlock.id.trim().slice(0, 64)
+          : `block-${idx + 1}-${Date.now()}`;
+
+      const title = typeof rawBlock?.title === 'string' ? rawBlock.title.trim().slice(0, 200) : '';
+
+      if (bType === 'TABLE') {
+        const rawHeaders = Array.isArray(rawBlock?.headers) ? rawBlock.headers : [];
+        const colCount = Math.max(1, Math.min(10, rawHeaders.length || 2));
+        const headers = Array.from({ length: colCount }, (_, colIdx) =>
+          typeof rawHeaders[colIdx] === 'string' ? rawHeaders[colIdx].trim().slice(0, 120) : `Colonne ${colIdx + 1}`
+        );
+        const rawRows = Array.isArray(rawBlock?.rows) ? rawBlock.rows : [];
+        const rows = rawRows.slice(0, 50).map(r =>
+          Array.from({ length: colCount }, (_, colIdx) =>
+            Array.isArray(r) && typeof r[colIdx] === 'string' ? r[colIdx].trim().slice(0, 500) : ''
+          )
+        );
+        return {
+          id,
+          type: 'TABLE',
+          title,
+          headers,
+          rows,
+        };
+      }
+
+      if (bType === 'IMAGE') {
+        const imageUrl = validateSafeImageUrl(typeof rawBlock?.imageUrl === 'string' ? rawBlock.imageUrl : '');
+        const caption = typeof rawBlock?.caption === 'string' ? rawBlock.caption.trim().slice(0, 300) : '';
+        return {
+          id,
+          type: 'IMAGE',
+          title,
+          imageUrl,
+          caption,
+        };
+      }
+
+      if (bType === 'CALLOUT') {
+        const tone: ParrainGuideCalloutTone =
+          rawBlock?.tone === 'info' ||
+          rawBlock?.tone === 'condition' ||
+          rawBlock?.tone === 'warning' ||
+          rawBlock?.tone === 'success'
+            ? rawBlock.tone
+            : 'info';
+        const body = typeof rawBlock?.body === 'string' ? rawBlock.body.trim().slice(0, 5000) : '';
+        return {
+          id,
+          type: 'CALLOUT',
+          title,
+          tone,
+          body,
+        };
+      }
+
+      const body = typeof rawBlock?.body === 'string' ? rawBlock.body.trim().slice(0, 10000) : '';
+      return {
+        id,
+        type: 'TEXT',
+        title,
+        body,
+      };
+    });
+
+    const now = new Date().toISOString();
+    const docToSave: ParrainGuide = {
+      id: vaType,
+      vaType,
+      title: cleanTitle,
+      subtitle: cleanSubtitle,
+      heroImageUrl: cleanHeroImageUrl,
+      blocks: sanitizedBlocks,
+      updatedAt: now,
+      updatedByUserId: actor.id,
+      updatedByName: actor.displayName,
+    };
+
+    const byteLength = new TextEncoder().encode(JSON.stringify(docToSave)).length;
+    if (byteLength > 800_000) {
+      throw new Error(
+        'Le contenu (images incluses) dépasse la limite de 800 Ko autorisée par Firestore. Compressez vos photos ou utilisez des URL https://.'
+      );
+    }
+
+    await this.client.setDocument('pawako_parrain_guides', vaType, docToSave);
+
+    await this.logAudit({
+      action: 'PARRAIN_GUIDE_UPDATED',
+      actorUserId: actor.id,
+      actorName: actor.displayName,
+      targetType: 'PARRAIN_GUIDE',
+      targetId: vaType,
+      details: {
+        vaType,
+        title: cleanTitle,
+        blocksCount: sanitizedBlocks.length,
+        sizeBytes: byteLength,
+      },
+    });
+
+    return { ...docToSave, isDefault: false };
   }
 }

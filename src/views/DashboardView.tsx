@@ -1,5 +1,6 @@
 import React from 'react';
 import { OverviewStatistics } from '../types';
+import { getVaTypeLabel } from '../utils/statusUtils';
 import {
   ArrowRight,
   Server,
@@ -720,7 +721,8 @@ export const DashboardView: React.FC<Props> = ({
                           {parrain.discordDisplayName || parrain.discordUsername}
                         </div>
                         <div className="text-[11px] text-slate-400 dark:text-[#7c7296] truncate">
-                          @{parrain.discordUsername} · <span className="font-mono">{parrain.discordUserId}</span>
+                          @{parrain.discordUsername}
+                          {parrain.vaType ? ` · ${getVaTypeLabel(parrain.vaType)}` : ''}
                         </div>
                       </div>
                     </div>
@@ -823,8 +825,15 @@ export const DashboardView: React.FC<Props> = ({
                             <div className="font-semibold text-slate-900 dark:text-[#f4f1fa] truncate max-w-[180px]">
                               {parrain.discordDisplayName || parrain.discordUsername}
                             </div>
-                            <div className="text-[11px] text-slate-400 dark:text-[#7c7296] truncate max-w-[200px]">
-                              @{parrain.discordUsername} · <span className="font-mono">{parrain.discordUserId}</span>
+                            <div className="text-[11px] text-slate-400 dark:text-[#7c7296] truncate max-w-[220px]">
+                              @{parrain.discordUsername}
+                              {parrain.vaType ? (
+                                <span className="text-violet-600 dark:text-violet-300 font-medium">
+                                  {' '}· {getVaTypeLabel(parrain.vaType)}
+                                </span>
+                              ) : (
+                                ' · Spécialité non choisie'
+                              )}
                             </div>
                           </div>
                         </div>

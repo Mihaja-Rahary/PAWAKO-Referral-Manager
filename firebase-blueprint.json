@@ -117,6 +117,15 @@
           "type": "boolean",
           "description": "Statut actif ou désactivé"
         },
+        "vaType": {
+          "type": "string",
+          "enum": ["CHATTEUR", "INSTAGRAM"],
+          "description": "Spécialité exclusive choisie par le parrain"
+        },
+        "vaTypeLockedAt": {
+          "type": "string",
+          "description": "Horodatage du verrouillage de la spécialité"
+        },
         "createdAt": {
           "type": "string",
           "description": "Date de création du lien"
@@ -274,6 +283,29 @@
         }
       },
       "required": ["id", "action", "actorUserId", "actorName", "timestamp"]
+    },
+    "ParrainGuide": {
+      "title": "ParrainGuide",
+      "description": "Contenu éditorial (Accueil Parrain) par spécialité VA Chatteur ou VA Instagram.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "enum": ["CHATTEUR", "INSTAGRAM"]
+        },
+        "vaType": {
+          "type": "string",
+          "enum": ["CHATTEUR", "INSTAGRAM"]
+        },
+        "title": { "type": "string" },
+        "subtitle": { "type": "string" },
+        "heroImageUrl": { "type": "string" },
+        "blocks": { "type": "array" },
+        "updatedAt": { "type": "string" },
+        "updatedByUserId": { "type": "string" },
+        "updatedByName": { "type": "string" }
+      },
+      "required": ["id", "vaType", "title", "blocks", "updatedAt"]
     }
   },
   "firestore": {
@@ -300,6 +332,10 @@
     "/pawako_audit_logs/{logId}": {
       "schema": { "$ref": "#/entities/AuditLog" },
       "description": "Journal d'audit inaltérable pour la Direction."
+    },
+    "/pawako_parrain_guides/{guideId}": {
+      "schema": { "$ref": "#/entities/ParrainGuide" },
+      "description": "Guides d'accueil et consignes des parrains par spécialité."
     }
   }
 }

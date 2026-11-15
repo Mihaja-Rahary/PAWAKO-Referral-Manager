@@ -1305,6 +1305,21 @@ describe('PAWAKO Referral Manager — Tests Complets Isolés (Mockés)', () => {
       originServer: 'RECRUTEMENT',
     });
 
+    // Parrain 1 choisit sa spécialité exclusive CHATTEUR avant de consulter son dashboard
+    const chooseSpecRes = await app.fetch(
+      new Request(`${WORKER_ORIGIN}/api/parrain/specialty`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: `pawako_session=${parrain1Login.sessionCookie}`,
+          Origin: FRONTEND_ORIGIN,
+        },
+        body: JSON.stringify({ vaType: 'CHATTEUR' }),
+      }),
+      env
+    );
+    assert.equal(chooseSpecRes.status, 200);
+
     // Parrain 1 consulte son dashboard : ne voit pas refusalReason ni notes ni decisionByName ni c2
     const p1DashRes = await app.fetch(
       new Request(`${WORKER_ORIGIN}/api/parrain/dashboard`, {
@@ -1450,6 +1465,21 @@ describe('PAWAKO Referral Manager — Tests Complets Isolés (Mockés)', () => {
       actorSource: 'MANUAL_ADMIN',
     });
 
+    // Parrain active sa spécialité CHATTEUR (cProd et cValide sont CHATTEUR ; les 2 INSTAGRAM seront comptés hors spécialité côté Admin)
+    const setSpecRes = await app.fetch(
+      new Request(`${WORKER_ORIGIN}/api/parrain/specialty`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: `pawako_session=${p1Login.sessionCookie}`,
+          Origin: FRONTEND_ORIGIN,
+        },
+        body: JSON.stringify({ vaType: 'CHATTEUR' }),
+      }),
+      env
+    );
+    assert.equal(setSpecRes.status, 200);
+
     const overview = await repo.getOverviewStats(GUILD_IDS);
     const refsStats = await repo.getReferrersWithStats();
     const pDashRes = await app.fetch(
@@ -1460,7 +1490,7 @@ describe('PAWAKO Referral Manager — Tests Complets Isolés (Mockés)', () => {
     );
     const pDash = (await pDashRes.json()) as any;
 
-    // Vérifier la cohérence exacte
+    // Vérifier la cohérence exacte (Administration voit les 4 candidats globaux, le parrain voit uniquement ses 2 CHATTEUR)
     assert.equal(overview.kpis.totalCandidats, 4);
     assert.equal(overview.kpis.totalProductionGlobale, 1);
     assert.equal(overview.kpis.enAttente, 1);
@@ -1473,12 +1503,15 @@ describe('PAWAKO Referral Manager — Tests Complets Isolés (Mockés)', () => {
 
     const activeRow = refsStats.find(r => r.id === refActive!.id)!;
     assert.equal(activeRow.totalFilleuls, pDash.metrics.totalFilleuls);
+    assert.equal(activeRow.totalFilleuls, 2);
+    assert.equal(activeRow.outOfSpecialtyCount, 2);
+    assert.equal(activeRow.totalLinkedCount, 4);
     assert.equal(activeRow.enProduction, pDash.metrics.enProduction);
     assert.equal(activeRow.valides, pDash.metrics.valides);
     assert.equal(pDash.metrics.valides, 1);
-    assert.equal(pDash.metrics.enAttente, 1);
-    assert.equal(pDash.metrics.refuses, 1);
-    assert.equal(pDash.metrics.conversionRate, 25);
+    assert.equal(pDash.metrics.enProduction, 1);
+    assert.equal(pDash.metrics.conversionRate, 50);
+    assert.equal(pDash.referrer.outOfSpecialtyCount, undefined);
   });
 
   // =========================================================================
@@ -2223,7 +2256,302 @@ describe('PAWAKO Referral Manager — Tests Complets Isolés (Mockés)', () => {
     assert.equal(messyJson.ok, true);
     assert.equal(messyJson.bot.username, 'pawako_bot');
   });
+
+  it('7.7 Spécialité exclusive parrain : verrouillage 409, cloisonnement strict Chatteur/Instagram et override Admin', async () => {
+    const adminLogin = await loginViaWorkerOAuth(mock, env, 'admin', {
+      id: env.INITIAL_ADMIN_DISCORD_ID!,
+      username: 'super_admin',
+      global_name: 'Super Admin',
+      avatar: null,
+    });
+    const parrainLogin = await loginViaWorkerOAuth(mock, env, 'parrain', {
+      id: '200000000000000780',
+      username: 'parrain_insta_only',
+      global_name: 'Parrain Insta',
+      avatar: null,
+    });
+
+    const repo = createRepo(env);
+    const ref = await repo.getReferrerByDiscordUserId('200000000000000780');
+    assert.ok(ref);
+    assert.equal(ref!.vaType ?? null, null);
+
+    // 1. Avant le choix : /api/parrain/dashboard renvoie 0 candidats et /api/candidates renvoie vide
+    const candInsta = await repo.createCandidate({
+      discordUserId: '300000000000000781',
+      username: 'insta_filleul',
+      displayName: 'Insta Filleul',
+      vaType: 'INSTAGRAM',
+      inviteCodeUsed: ref!.inviteCode,
+      originServer: 'RECRUTEMENT',
+    });
+    const candChatteur = await repo.createCandidate({
+      discordUserId: '300000000000000782',
+      username: 'chat_bascule',
+      displayName: 'Chat Bascule',
+      vaType: 'CHATTEUR',
+      inviteCodeUsed: ref!.inviteCode,
+      originServer: 'RECRUTEMENT',
+    });
+
+    const preDashRes = await app.fetch(
+      new Request(`${WORKER_ORIGIN}/api/parrain/dashboard`, {
+        headers: { Cookie: `pawako_session=${parrainLogin.sessionCookie}`, Origin: FRONTEND_ORIGIN },
+      }),
+      env
+    );
+    assert.equal(preDashRes.status, 200);
+    const preDash = (await preDashRes.json()) as any;
+    assert.equal(preDash.candidates.length, 0);
+
+    // 2. Parrain sélectionne INSTAGRAM -> verrouillé immédiatement
+    const selectRes = await app.fetch(
+      new Request(`${WORKER_ORIGIN}/api/parrain/specialty`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: `pawako_session=${parrainLogin.sessionCookie}`,
+          Origin: FRONTEND_ORIGIN,
+        },
+        body: JSON.stringify({ vaType: 'INSTAGRAM' }),
+      }),
+      env
+    );
+    assert.equal(selectRes.status, 200);
+    const selectJson = (await selectRes.json()) as any;
+    assert.equal(selectJson.referrer.vaType, 'INSTAGRAM');
+    assert.ok(selectJson.referrer.vaTypeLockedAt);
+
+    // 3. Tentative de modification par le parrain -> 409 verrouillé
+    const changeAttemptRes = await app.fetch(
+      new Request(`${WORKER_ORIGIN}/api/parrain/specialty`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: `pawako_session=${parrainLogin.sessionCookie}`,
+          Origin: FRONTEND_ORIGIN,
+        },
+        body: JSON.stringify({ vaType: 'CHATTEUR' }),
+      }),
+      env
+    );
+    assert.equal(changeAttemptRes.status, 409);
+
+    // 4. Cloisonnement strict : dashboard + /api/candidates?vaType=CHATTEUR + /api/candidates/:id
+    const postDashRes = await app.fetch(
+      new Request(`${WORKER_ORIGIN}/api/parrain/dashboard`, {
+        headers: { Cookie: `pawako_session=${parrainLogin.sessionCookie}`, Origin: FRONTEND_ORIGIN },
+      }),
+      env
+    );
+    const postDash = (await postDashRes.json()) as any;
+    assert.equal(postDash.candidates.length, 1);
+    assert.equal(postDash.candidates[0].id, candInsta.id);
+    assert.equal(postDash.metrics.totalFilleuls, 1);
+
+    // Même en forçant ?vaType=CHATTEUR dans la requête, /api/candidates reste bloqué sur INSTAGRAM
+    const forcedQueryRes = await app.fetch(
+      new Request(`${WORKER_ORIGIN}/api/candidates?vaType=CHATTEUR`, {
+        headers: { Cookie: `pawako_session=${parrainLogin.sessionCookie}`, Origin: FRONTEND_ORIGIN },
+      }),
+      env
+    );
+    assert.equal(forcedQueryRes.status, 200);
+    const forcedQueryJson = (await forcedQueryRes.json()) as any;
+    assert.equal(forcedQueryJson.candidates.length, 0);
+
+    // Accès direct à un filleul lié qui a basculé en CHATTEUR -> 403
+    const directOutTrackRes = await app.fetch(
+      new Request(`${WORKER_ORIGIN}/api/candidates/${candChatteur.id}`, {
+        headers: { Cookie: `pawako_session=${parrainLogin.sessionCookie}`, Origin: FRONTEND_ORIGIN },
+      }),
+      env
+    );
+    assert.equal(directOutTrackRes.status, 403);
+
+    // Côté Admin : les 2 filleuls sont visibles dans getReferrerDetails + outOfSpecialtyCount === 1
+    const adminRefDetailRes = await app.fetch(
+      new Request(`${WORKER_ORIGIN}/api/referrers/${ref!.id}`, {
+        headers: { Cookie: `pawako_session=${adminLogin.sessionCookie}`, Origin: FRONTEND_ORIGIN },
+      }),
+      env
+    );
+    assert.equal(adminRefDetailRes.status, 200);
+    const adminRefDetail = (await adminRefDetailRes.json()) as any;
+    assert.equal(adminRefDetail.filleuls.length, 2);
+    assert.equal(adminRefDetail.referrer.outOfSpecialtyCount, 1);
+
+    // 5. Seul un Administrateur peut corriger la spécialité via PATCH /api/referrers/:id
+    const adminPatchRes = await app.fetch(
+      new Request(`${WORKER_ORIGIN}/api/referrers/${ref!.id}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: `pawako_session=${adminLogin.sessionCookie}`,
+          Origin: FRONTEND_ORIGIN,
+        },
+        body: JSON.stringify({ vaType: 'CHATTEUR' }),
+      }),
+      env
+    );
+    assert.equal(adminPatchRes.status, 200);
+    const adminPatched = (await adminPatchRes.json()) as any;
+    assert.equal(adminPatched.referrer.vaType, 'CHATTEUR');
+
+    const switchedDashRes = await app.fetch(
+      new Request(`${WORKER_ORIGIN}/api/parrain/dashboard`, {
+        headers: { Cookie: `pawako_session=${parrainLogin.sessionCookie}`, Origin: FRONTEND_ORIGIN },
+      }),
+      env
+    );
+    const switchedDash = (await switchedDashRes.json()) as any;
+    assert.equal(switchedDash.candidates.length, 1);
+    assert.equal(switchedDash.candidates[0].id, candChatteur.id);
+  });
+
+  it('7.8 Guides Accueil Parrains : lecture par spécialité, édition Admin (texte, tableau, photo), RBAC et sécurité', async () => {
+    const adminLogin = await loginViaWorkerOAuth(mock, env, 'admin', {
+      id: env.INITIAL_ADMIN_DISCORD_ID!,
+      username: 'super_admin',
+      global_name: 'Super Admin',
+      avatar: null,
+    });
+    const parrainLogin = await loginViaWorkerOAuth(mock, env, 'parrain', {
+      id: '200000000000000790',
+      username: 'parrain_guide_test',
+      global_name: 'Parrain Guide',
+      avatar: null,
+    });
+
+    // 1. Avant choix de spécialité, GET /api/parrain/guide retourne requiresSpecialtyChoice
+    const preGuideRes = await app.fetch(
+      new Request(`${WORKER_ORIGIN}/api/parrain/guide`, {
+        headers: { Cookie: `pawako_session=${parrainLogin.sessionCookie}`, Origin: FRONTEND_ORIGIN },
+      }),
+      env
+    );
+    assert.equal(preGuideRes.status, 200);
+    const preGuide = (await preGuideRes.json()) as any;
+    assert.equal(preGuide.requiresSpecialtyChoice, true);
+
+    // Parrain choisit INSTAGRAM
+    await app.fetch(
+      new Request(`${WORKER_ORIGIN}/api/parrain/specialty`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: `pawako_session=${parrainLogin.sessionCookie}`,
+          Origin: FRONTEND_ORIGIN,
+        },
+        body: JSON.stringify({ vaType: 'INSTAGRAM' }),
+      }),
+      env
+    );
+
+    // 2. Parrain ne peut pas éditer les guides Admin -> 403
+    const forbiddenPutRes = await app.fetch(
+      new Request(`${WORKER_ORIGIN}/api/admin/parrain-guides/INSTAGRAM`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: `pawako_session=${parrainLogin.sessionCookie}`,
+          Origin: FRONTEND_ORIGIN,
+        },
+        body: JSON.stringify({ title: 'Piratage', blocks: [] }),
+      }),
+      env
+    );
+    assert.equal(forbiddenPutRes.status, 403);
+
+    // 3. Rejet d'une URL image dangereuse (javascript:)
+    const badImgRes = await app.fetch(
+      new Request(`${WORKER_ORIGIN}/api/admin/parrain-guides/INSTAGRAM`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: `pawako_session=${adminLogin.sessionCookie}`,
+          Origin: FRONTEND_ORIGIN,
+        },
+        body: JSON.stringify({
+          title: 'Guide Instagram Custom',
+          blocks: [
+            {
+              id: 'b1',
+              type: 'IMAGE',
+              title: 'Mauvaise image',
+              imageUrl: 'javascript:alert(1)',
+            },
+          ],
+        }),
+      }),
+      env
+    );
+    assert.equal(badImgRes.status, 400);
+
+    // 4. Admin enregistre un guide complet avec TEXT, CALLOUT, TABLE et IMAGE valide
+    const saveRes = await app.fetch(
+      new Request(`${WORKER_ORIGIN}/api/admin/parrain-guides/INSTAGRAM`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: `pawako_session=${adminLogin.sessionCookie}`,
+          Origin: FRONTEND_ORIGIN,
+        },
+        body: JSON.stringify({
+          title: 'Programme Parrain VA Instagram 2026',
+          subtitle: 'Règles de coaching, rémunération et suivi hebdomadaire.',
+          heroImageUrl: 'https://cdn.discordapp.com/icons/123456/banner.png',
+          blocks: [
+            {
+              id: 'b-text',
+              type: 'TEXT',
+              title: 'Votre mission de parrain',
+              body: 'Accompagnez chaque filleul jusqu’à son premier compte actif.\n\n- Point **obligatoire** chaque vendredi',
+            },
+            {
+              id: 'b-table',
+              type: 'TABLE',
+              title: 'Grille de primes',
+              headers: ['Palier', 'Condition', 'Prime'],
+              rows: [['Palier 1', '30 jours actifs', '150 EUR']],
+            },
+            {
+              id: 'b-img',
+              type: 'IMAGE',
+              title: 'Exemple tableau de bord',
+              imageUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+              caption: 'Capture interne',
+            },
+          ],
+        }),
+      }),
+      env
+    );
+    assert.equal(saveRes.status, 200);
+    const saveJson = (await saveRes.json()) as any;
+    assert.equal(saveJson.guide.title, 'Programme Parrain VA Instagram 2026');
+    assert.equal(saveJson.guide.blocks.length, 3);
+
+    // 5. Le parrain INSTAGRAM reçoit automatiquement son guide mis à jour (même s'il passe ?vaType=CHATTEUR)
+    const parrainGuideRes = await app.fetch(
+      new Request(`${WORKER_ORIGIN}/api/parrain/guide?vaType=CHATTEUR`, {
+        headers: { Cookie: `pawako_session=${parrainLogin.sessionCookie}`, Origin: FRONTEND_ORIGIN },
+      }),
+      env
+    );
+    assert.equal(parrainGuideRes.status, 200);
+    const parrainGuideJson = (await parrainGuideRes.json()) as any;
+    assert.equal(parrainGuideJson.guide.vaType, 'INSTAGRAM');
+    assert.equal(parrainGuideJson.guide.title, 'Programme Parrain VA Instagram 2026');
+    assert.equal(parrainGuideJson.guide.blocks[1].rows[0][2], '150 EUR');
+
+    // 6. Vérifier le journal d'audit PARRAIN_GUIDE_UPDATED
+    const repo = createRepo(env);
+    const logs = await repo.getAuditLogs(20);
+    assert.ok(logs.some(l => l.action === 'PARRAIN_GUIDE_UPDATED' && l.targetId === 'INSTAGRAM'));
+  });
 });
+
 
 
 

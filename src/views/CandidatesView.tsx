@@ -138,15 +138,22 @@ export const CandidatesView: React.FC<Props> = ({
     );
   };
 
-  const getCandidateReferrerDisplay = (c: Candidate): { name: string; username?: string } => {
+  const getCandidateReferrerDisplay = (
+    c: Candidate
+  ): { name: string; username?: string; outOfSpecialty: boolean } => {
     const matched = findReferrerFor(c);
     const liveName = matched?.discordDisplayName?.trim();
     const rawName = c.referrerName?.trim();
     const isRawPlaceholder = !rawName || /^Parrain\s+\d{3,5}$/i.test(rawName);
     const resolvedName = !isRawPlaceholder ? rawName : liveName || rawName || 'Non assigné';
+    const outOfSpecialty =
+      !isParrainOnly &&
+      Boolean(matched?.vaType) &&
+      matched!.vaType !== c.vaType;
     return {
       name: resolvedName,
       username: matched?.discordUsername,
+      outOfSpecialty,
     };
   };
 
@@ -485,6 +492,11 @@ export const CandidatesView: React.FC<Props> = ({
                               {refDisplay.username ? `@${refDisplay.username} · ` : ''}
                               {attrInfo.label}
                             </div>
+                            {refDisplay.outOfSpecialty && (
+                              <div className="text-[10px] font-semibold text-amber-700 dark:text-amber-300 mt-0.5 leading-tight">
+                                Hors spécialité parrain (non affiché / non rémunéré)
+                              </div>
+                            )}
                           </>
                         );
                       })()}
@@ -667,6 +679,11 @@ export const CandidatesView: React.FC<Props> = ({
                                 {refDisplay.username ? `@${refDisplay.username} · ` : ''}
                                 {attrInfo.label}
                               </div>
+                              {refDisplay.outOfSpecialty && (
+                                <div className="text-[10px] font-semibold text-amber-700 dark:text-amber-300 mt-0.5 max-w-[210px] leading-tight">
+                                  Hors spécialité parrain (non affiché / non rémunéré)
+                                </div>
+                              )}
                             </div>
                           );
                         })()}

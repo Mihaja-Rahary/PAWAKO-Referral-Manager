@@ -16,6 +16,7 @@ import { Navbar } from './components/Navbar';
 import { DashboardView } from './views/DashboardView';
 import { CandidatesView } from './views/CandidatesView';
 import { ReferrersView } from './views/ReferrersView';
+import { ParrainGuidesAdminView } from './views/ParrainGuidesAdminView';
 import { ParrainPortalView } from './views/ParrainPortalView';
 import { DiscordSyncView } from './views/DiscordSyncView';
 import { UsersView } from './views/UsersView';
@@ -473,6 +474,8 @@ export default function App() {
         return { title: 'Candidats & Recrutement' };
       case 'referrers':
         return { title: 'Gestion des Parrains' };
+      case 'parrain_guides':
+        return { title: 'Guides & Accueil Parrains' };
       case 'parrain_portal':
         return { title: 'Mon Espace Parrain' };
       case 'discord_sync':
@@ -591,6 +594,10 @@ export default function App() {
               />
             )}
 
+            {activeTab === 'parrain_guides' && (
+              <ParrainGuidesAdminView currentUserRole={currentUser?.role || 'ADMINISTRATEUR'} />
+            )}
+
             {activeTab === 'parrain_portal' && (
               <ParrainPortalView
                 currentUserRole={currentUser?.role || 'ADMINISTRATEUR'}
@@ -630,6 +637,7 @@ export default function App() {
         candidateId={selectedCandidateId}
         onClose={() => setSelectedCandidateId(null)}
         currentUserRole={currentUser?.role || 'ADMINISTRATEUR'}
+        referrers={referrers}
         onOpenStatusModal={candidate => setActiveStatusCandidate(candidate)}
         onOpenReassignModal={candidate => setActiveReassignCandidate(candidate)}
         onCandidateUpdated={triggerRefresh}

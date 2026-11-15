@@ -1473,6 +1473,130 @@ app.post('/api/parrain/invite/ensure', async c => {
   }
 });
 
+app.post('/api/parrain/specialty', async c => {
+  const repo = getRepository(c.env);
+  const user = await getAuthenticatedUser(c, repo);
+
+  if (!user) {
+    return c.json({ error: 'Session non authentifiée. Veuillez vous connecter.' }, 401);
+  }
+
+  if (user.role !== 'PARRAIN' && user.role !== 'ADMINISTRATEUR') {
+    return c.json({ error: 'Accès réservé exclusivement aux Parrains autorisés.' }, 403);
+  }
+
+  const body = await c.req.json().catch(() => ({}));
+  const vaType = body?.vaType;
+  if (vaType !== 'CHATTEUR' && vaType !== 'INSTAGRAM') {
+    return c.json({ error: 'Spécialité invalide. Choisissez CHATTEUR ou INSTAGRAM.' }, 400);
+  }
+
+  try {
+    const updated = await repo.setParrainOwnSpecialty(user.id, vaType);
+    return c.json({
+      success: true,
+      referrer: { ...updated, notes: undefined },
+    });
+  } catch (err: any) {
+    if (err instanceof FirestoreRestError) {
+      if (err.isPreconditionConflict) {
+        return c.json({ error: 'Conflit concurrent lors de la sélection de spécialité. Réessayez.' }, 409);
+      }
+      throw err;
+    }
+    const status = typeof err?.status === 'number' ? err.status : 400;
+    return c.json({ error: err?.message || 'Impossible de enregistrer votre spécialité.' }, status);
+  }
+});
+
+app.get('/api/parrain/guide', async c => {
+  const repo = getRepository(c.env);
+  const user = await getAuthenticatedUser(c, repo);
+
+  if (!user) {
+    return c.json({ error: 'Session non authentifiée. Veuillez vous connecter.' }, 401);
+  }
+
+  if (user.role !== 'PARRAIN' && user.role !== 'ADMINISTRATEUR' && user.role !== 'RESPONSABLE') {
+    return c.json({ error: 'Rôle utilisateur non autorisé.' }, 403);
+  }
+
+  const queryVaType = c.req.query('vaType');
+  let targetVaType: VAType | null =
+    queryVaType === 'CHATTEUR' || queryVaType === 'INSTAGRAM' ? queryVaType : null;
+
+  if (user.role === 'PARRAIN') {
+    const myRef = await repo.getReferrerByDiscordUserId(user.id);
+    if (!myRef || getEffectiveReferrerStatus(myRef) !== 'ACTIVE') {
+      return c.json({ error: 'Votre profil parrain est inactif, suspendu ou archivé.' }, 403);
+    }
+    if (myRef.vaType === 'CHATTEUR' || myRef.vaType === 'INSTAGRAM') {
+      targetVaType = myRef.vaType;
+    } else if (!targetVaType) {
+      return c.json({ guide: null, requiresSpecialtyChoice: true });
+    }
+  } else if (!targetVaType) {
+    const myRef = await repo.getReferrerByDiscordUserId(user.id).catch(() => null);
+    targetVaType =
+      myRef?.vaType === 'CHATTEUR' || myRef?.vaType === 'INSTAGRAM' ? myRef.vaType : 'CHATTEUR';
+  }
+
+  const guide = await repo.getParrainGuide(targetVaType);
+  return c.json({ guide });
+});
+
+app.get('/api/admin/parrain-guides', async c => {
+  const repo = getRepository(c.env);
+  const user = await getAuthenticatedUser(c, repo);
+
+  if (!user) {
+    return c.json({ error: 'Session non authentifiée.' }, 401);
+  }
+
+  if (user.role !== 'ADMINISTRATEUR' && user.role !== 'RESPONSABLE') {
+    return c.json({ error: 'Accès réservé exclusivement à la Direction et aux Responsables.' }, 403);
+  }
+
+  const guides = await repo.getAllParrainGuides();
+  return c.json({ guides });
+});
+
+app.put('/api/admin/parrain-guides/:vaType', async c => {
+  const repo = getRepository(c.env);
+  const user = await getAuthenticatedUser(c, repo);
+
+  if (!user) {
+    return c.json({ error: 'Session non authentifiée.' }, 401);
+  }
+
+  if (user.role !== 'ADMINISTRATEUR') {
+    return c.json({ error: 'Seuls les Administrateurs peuvent modifier les guides parrains.' }, 403);
+  }
+
+  const rawVaType = c.req.param('vaType')?.toUpperCase();
+  if (rawVaType !== 'CHATTEUR' && rawVaType !== 'INSTAGRAM') {
+    return c.json({ error: 'Spécialité invalide (CHATTEUR ou INSTAGRAM attendu).' }, 400);
+  }
+
+  const body = await c.req.json().catch(() => ({}));
+  try {
+    const guide = await repo.saveParrainGuide(
+      rawVaType as VAType,
+      {
+        title: typeof body.title === 'string' ? body.title : '',
+        subtitle: typeof body.subtitle === 'string' ? body.subtitle : '',
+        heroImageUrl: typeof body.heroImageUrl === 'string' ? body.heroImageUrl : null,
+        blocks: Array.isArray(body.blocks) ? body.blocks : [],
+      },
+      { id: user.id, displayName: user.displayName }
+    );
+    return c.json({ success: true, guide });
+  } catch (err: any) {
+    if (err instanceof FirestoreRestError) throw err;
+    return c.json({ error: err?.message || 'Impossible de enregistrer le guide parrain.' }, 400);
+  }
+});
+
 // -----------------------------------------------------------------------------
 // 7. CANDIDATS & RECRUTEMENT
 // -----------------------------------------------------------------------------
@@ -1490,15 +1614,19 @@ app.get('/api/candidates', async c => {
   }
 
   const isParrainOnly = user.role === 'PARRAIN';
+  let parrainLockedVaType: VAType | null = null;
   if (isParrainOnly) {
     const myRef = await repo.getReferrerByDiscordUserId(user.id);
     if (!myRef || getEffectiveReferrerStatus(myRef) !== 'ACTIVE') {
       return c.json({ error: 'Votre profil parrain est inactif, suspendu ou archivé.' }, 403);
     }
+    parrainLockedVaType =
+      myRef.vaType === 'CHATTEUR' || myRef.vaType === 'INSTAGRAM' ? myRef.vaType : null;
   }
 
   const search = c.req.query('search');
-  const vaType = c.req.query('vaType') as VAType | 'ALL' | undefined;
+  const requestedVaType = c.req.query('vaType') as VAType | 'ALL' | undefined;
+  const vaType = isParrainOnly ? (parrainLockedVaType || undefined) : requestedVaType;
   const adminStatus = c.req.query('adminStatus') as AdminStatus | 'ALL' | undefined;
   const operationalStatus = c.req.query('operationalStatus') as OperationalStatus | 'ALL' | undefined;
   const status = c.req.query('status') as CandidateStatus | 'ALL' | undefined;
@@ -1510,6 +1638,20 @@ app.get('/api/candidates', async c => {
     hasAnomalyParam === 'true' ? true : hasAnomalyParam === 'false' ? false : undefined;
   const page = parseInt(c.req.query('page') || '1', 10);
   const limit = parseInt(c.req.query('limit') || '50', 10);
+
+  if (
+    isParrainOnly &&
+    (!parrainLockedVaType ||
+      (requestedVaType && requestedVaType !== 'ALL' && requestedVaType !== parrainLockedVaType))
+  ) {
+    return c.json({
+      candidates: [],
+      total: 0,
+      page: 1,
+      totalPages: 0,
+      pageSize: Math.max(1, Math.min(200, limit)),
+    });
+  }
 
   const result = await repo.getCandidates({
     search,
@@ -1565,6 +1707,9 @@ app.get('/api/candidates/:id', async c => {
       candidate.referrerDiscordUserId === user.id || candidate.referrerId === myRef.id;
     if (!isOwnedByParrain) {
       return c.json({ error: 'Accès refusé. Ce candidat n est pas l un de vos filleuls.' }, 403);
+    }
+    if (!myRef.vaType || candidate.vaType !== myRef.vaType) {
+      return c.json({ error: 'Accès refusé. Ce candidat est hors de votre spécialité parrain.' }, 403);
     }
   }
 
@@ -1878,10 +2023,14 @@ app.post('/api/referrers', async c => {
       getDiscordBotConfig(c.env),
       getEnvGuildIds(c.env)
     );
+    const requestedVaType: VAType | null =
+      body.vaType === 'CHATTEUR' || body.vaType === 'INSTAGRAM' ? body.vaType : null;
+
     const referrer = await repo.createReferrer({
       discordUserId: rawIdentifier,
       inviteCode: typeof body.inviteCode === 'string' ? body.inviteCode : undefined,
       notes: typeof body.notes === 'string' ? body.notes : undefined,
+      vaType: requestedVaType,
       actorUserId: user.id,
       actorName: user.displayName,
       discordBotConfig: effectiveDiscord.botConfig,
@@ -1972,6 +2121,17 @@ app.patch('/api/referrers/:id', async c => {
 
   const body = await c.req.json().catch(() => ({}));
   try {
+    let nextVaType: VAType | null | undefined = undefined;
+    if (Object.prototype.hasOwnProperty.call(body, 'vaType')) {
+      if (body.vaType === 'CHATTEUR' || body.vaType === 'INSTAGRAM') {
+        nextVaType = body.vaType;
+      } else if (body.vaType === null || body.vaType === '') {
+        nextVaType = null;
+      } else {
+        return c.json({ error: 'Spécialité invalide (CHATTEUR, INSTAGRAM ou null attendu).' }, 400);
+      }
+    }
+
     const updated = await repo.updateReferrer(
       c.req.param('id'),
       {
@@ -1979,6 +2139,7 @@ app.patch('/api/referrers/:id', async c => {
         discordDisplayName:
           typeof body.discordDisplayName === 'string' ? body.discordDisplayName : undefined,
         discordUsername: typeof body.discordUsername === 'string' ? body.discordUsername : undefined,
+        vaType: nextVaType,
       },
       { id: user.id, displayName: user.displayName }
     );

@@ -18,6 +18,8 @@ import {
   DiscordRoleMapping,
   DiscordBotDiscoveryResult,
   AuditLog,
+  ParrainGuide,
+  ParrainGuideBlock,
 } from './types';
 
 // Base URL de l'API : Cloudflare Worker (https://referral-manager.pawako-saas.workers.dev) ou vide en local
@@ -298,6 +300,7 @@ export const api = {
     discordUserId: string;
     inviteCode?: string;
     notes?: string;
+    vaType?: VAType | null;
   }): Promise<{ success: boolean; referrer: Referrer }> {
     return request('/api/referrers', {
       method: 'POST',
@@ -308,7 +311,7 @@ export const api = {
 
   async updateReferrer(
     id: string,
-    payload: { notes?: string; discordDisplayName?: string; discordUsername?: string }
+    payload: { notes?: string; discordDisplayName?: string; discordUsername?: string; vaType?: VAType | null }
   ): Promise<{ success: boolean; referrer: Referrer }> {
     return request(`/api/referrers/${id}`, {
       method: 'PATCH',
@@ -443,6 +446,47 @@ export const api = {
   }> {
     return request('/api/parrain/invite/ensure', {
       method: 'POST',
+    });
+  },
+
+  async setParrainSpecialty(vaType: VAType): Promise<{
+    success: boolean;
+    referrer: Referrer;
+  }> {
+    return request('/api/parrain/specialty', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ vaType }),
+    });
+  },
+
+  async getParrainGuide(vaType?: VAType): Promise<{
+    guide: ParrainGuide | null;
+    requiresSpecialtyChoice?: boolean;
+  }> {
+    const qs = vaType ? `?vaType=${encodeURIComponent(vaType)}` : '';
+    return request(`/api/parrain/guide${qs}`);
+  },
+
+  async getAdminParrainGuides(): Promise<{
+    guides: Record<VAType, ParrainGuide>;
+  }> {
+    return request('/api/admin/parrain-guides');
+  },
+
+  async saveAdminParrainGuide(
+    vaType: VAType,
+    payload: {
+      title: string;
+      subtitle?: string;
+      heroImageUrl?: string | null;
+      blocks: ParrainGuideBlock[];
+    }
+  ): Promise<{ success: boolean; guide: ParrainGuide }> {
+    return request(`/api/admin/parrain-guides/${vaType}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
     });
   },
 

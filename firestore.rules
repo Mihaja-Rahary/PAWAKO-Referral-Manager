@@ -54,5 +54,10 @@ service cloud.firestore {
     match /pawako_metadata/{metaId} {
       allow read, write: if false;
     }
+
+    // Parrain Guides Collection (Protected - Access via Server Backend Only)
+    match /pawako_parrain_guides/{guideId} {
+      allow read, write: if false;
+    }
   }
 }
