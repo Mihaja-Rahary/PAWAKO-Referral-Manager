@@ -140,6 +140,7 @@ export interface ParrainGuide {
   id: string;
   vaType: VAType;
   category?: string;
+  tags?: string[];
   order?: number;
   title: string;
   subtitle: string;

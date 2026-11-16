@@ -489,6 +489,7 @@ export const api = {
     title: string;
     subtitle?: string;
     category?: string;
+    tags?: string[];
     order?: number;
     heroImageUrl?: string | null;
     blocks: ParrainGuideBlock[];
@@ -507,6 +508,7 @@ export const api = {
       title: string;
       subtitle?: string;
       category?: string;
+      tags?: string[];
       order?: number;
       heroImageUrl?: string | null;
       blocks: ParrainGuideBlock[];

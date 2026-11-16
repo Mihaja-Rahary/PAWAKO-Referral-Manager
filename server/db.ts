@@ -726,6 +726,7 @@ class DatabaseService {
       title: string;
       subtitle?: string;
       category?: string;
+      tags?: string[];
       order?: number;
       heroImageUrl?: string | null;
       blocks: ParrainGuideBlock[];
@@ -752,6 +753,7 @@ class DatabaseService {
       details: {
         vaType: doc.vaType,
         category: doc.category,
+        tags: doc.tags,
         title: doc.title,
         blocksCount: doc.blocks.length,
         sizeBytes: byteLength,
@@ -768,6 +770,7 @@ class DatabaseService {
       title: string;
       subtitle?: string;
       category?: string;
+      tags?: string[];
       order?: number;
       heroImageUrl?: string | null;
       blocks: ParrainGuideBlock[];
@@ -818,6 +821,7 @@ class DatabaseService {
       details: {
         vaType: doc.vaType,
         category: doc.category,
+        tags: doc.tags,
         title: doc.title,
         blocksCount: doc.blocks.length,
         sizeBytes: byteLength,

@@ -31,19 +31,19 @@ export const Navbar: React.FC<Props> = ({
   };
 
   return (
-    <header className="h-16 bg-white dark:bg-[#090611] border-b border-slate-200 dark:border-[#1e1530] px-3 sm:px-6 flex items-center justify-between gap-2 sm:gap-6 shrink-0 transition-colors">
+    <header className="h-16 bg-white dark:bg-[#0c0c12] border-b border-slate-200 dark:border-white/10 px-3 sm:px-6 flex items-center justify-between gap-2 sm:gap-6 shrink-0 transition-colors">
       <div className="flex items-center gap-2 min-w-0">
         {onOpenMobileMenu && (
           <button
             type="button"
             onClick={onOpenMobileMenu}
             aria-label="Ouvrir le menu de navigation"
-            className="lg:hidden min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg text-slate-600 dark:text-[#c4badb] hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-[#191129] transition-colors cursor-pointer shrink-0"
+            className="lg:hidden min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/10 transition-colors cursor-pointer shrink-0"
           >
             <Menu className="w-5 h-5" />
           </button>
         )}
-        <h2 className="font-serif text-base sm:text-xl font-bold text-slate-950 dark:text-[#f8f6fc] tracking-tight truncate">
+        <h2 className="text-base sm:text-xl font-extrabold text-slate-950 dark:text-white tracking-tight truncate">
           {title}
         </h2>
       </div>
@@ -55,9 +55,9 @@ export const Navbar: React.FC<Props> = ({
           onClick={handleRefreshClick}
           title="Actualiser"
           aria-label="Actualiser"
-          className="min-h-[40px] min-w-[40px] sm:min-h-0 sm:min-w-0 flex items-center justify-center p-2 text-slate-500 dark:text-[#9d93b8] hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-[#191129] rounded-lg transition-colors border border-slate-200 dark:border-[#241a38] bg-white dark:bg-[#100b1a] cursor-pointer"
+          className="min-h-[40px] min-w-[40px] sm:min-h-0 sm:min-w-0 flex items-center justify-center p-2 text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/10 rounded-lg transition-colors border border-slate-200 dark:border-white/10 bg-white dark:bg-[#111118] cursor-pointer"
         >
-          <RefreshCw className={`w-3.5 h-3.5 ${isSpinning ? 'animate-spin text-violet-500' : ''}`} />
+          <RefreshCw className={`w-3.5 h-3.5 ${isSpinning ? 'animate-spin text-[#FA4616]' : ''}`} />
         </button>
 
         {currentUser ? (

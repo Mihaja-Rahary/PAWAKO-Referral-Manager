@@ -153,19 +153,19 @@ export const Sidebar: React.FC<Props> = ({
 
   const sidebarContent = (isDrawer: boolean) => (
     <aside
-      className={`w-72 lg:w-64 bg-white dark:bg-[#090611] border-r border-slate-200 dark:border-[#1e1530] flex flex-col shrink-0 h-full transition-colors ${
+      className={`w-72 lg:w-64 bg-white dark:bg-[#0c0c12] border-r border-slate-200 dark:border-white/10 flex flex-col shrink-0 h-full transition-colors ${
         isDrawer ? 'shadow-2xl' : 'min-h-screen'
       }`}
     >
       {/* Compact Brand Header */}
-      <div className="p-4 sm:p-5 border-b border-slate-100 dark:border-[#1c132e] flex items-center justify-between gap-3">
+      <div className="p-4 sm:p-5 border-b border-slate-100 dark:border-white/10 flex items-center justify-between gap-3">
         <div className="flex items-center gap-3 min-w-0">
           <PawakoLogo size="md" />
           <div className="min-w-0">
-            <div className="font-serif font-bold text-slate-950 dark:text-[#f8f6fc] text-lg tracking-tight leading-none whitespace-nowrap">
+            <div className="font-extrabold text-slate-950 dark:text-white text-lg tracking-tight leading-none whitespace-nowrap">
               PAWAKO
             </div>
-            <p className="text-[11px] text-slate-500 dark:text-[#9d93b8] mt-1 font-medium truncate">
+            <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1 font-medium truncate">
               Referral Manager
             </p>
           </div>
@@ -200,18 +200,18 @@ export const Sidebar: React.FC<Props> = ({
                   <button
                     key={item.id}
                     onClick={() => handleSelectTab(item.id)}
-                    className={`w-full min-h-[42px] lg:min-h-[38px] flex items-center justify-between px-3 py-2 text-xs font-medium rounded-xl transition-all text-left cursor-pointer ${
+                    className={`w-full min-h-[42px] lg:min-h-[38px] flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-xl transition-all text-left cursor-pointer ${
                       isActive
-                        ? 'bg-slate-950 text-white dark:bg-[#19112b] dark:text-white border border-slate-950 dark:border-violet-500/45 shadow-xs'
-                        : 'text-slate-600 dark:text-[#9d93b8] hover:text-slate-950 dark:hover:text-[#f4f1fa] hover:bg-slate-100/80 dark:hover:bg-[#130d21] border border-transparent'
+                        ? 'bg-slate-950 text-white dark:bg-[#181826] dark:text-white border border-slate-950 dark:border-[#FA4616]/50 shadow-xs'
+                        : 'text-slate-600 dark:text-slate-300 hover:text-slate-950 dark:hover:text-white hover:bg-slate-100/80 dark:hover:bg-white/5 border border-transparent'
                     }`}
                   >
                     <div className="flex items-center gap-2.5 min-w-0">
                       <Icon
                         className={`w-4 h-4 shrink-0 ${
                           isActive
-                            ? 'text-violet-300 dark:text-violet-400'
-                            : 'text-slate-400 dark:text-[#6e648c]'
+                            ? 'text-[#FA4616] dark:text-orange-400'
+                            : 'text-slate-400 dark:text-slate-500'
                         }`}
                       />
                       <span className="truncate whitespace-nowrap">{item.label}</span>
@@ -219,7 +219,7 @@ export const Sidebar: React.FC<Props> = ({
                     {item.countLabel && (
                       <span
                         className={`text-[11px] font-mono tabular-nums shrink-0 ml-2 ${
-                          isActive ? 'text-slate-300 dark:text-violet-300' : 'text-slate-400 dark:text-[#6e648c]'
+                          isActive ? 'text-orange-300' : 'text-slate-400 dark:text-slate-500'
                         }`}
                       >
                         {item.countLabel}

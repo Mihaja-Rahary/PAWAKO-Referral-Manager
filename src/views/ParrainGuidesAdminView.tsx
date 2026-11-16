@@ -17,6 +17,7 @@ import {
   extractGuideExcerpt,
   resolveGuideCoverUrl,
 } from '../utils/blogCovers';
+import { getSpecialtyTheme, getTopicColorTheme } from '../utils/categoryTheme';
 import {
   BookOpen,
   Save,
@@ -41,6 +42,7 @@ import {
   FilePlus2,
   Clock,
   Sparkles,
+  Tag,
 } from 'lucide-react';
 
 interface Props {
@@ -49,7 +51,29 @@ interface Props {
 
 const FIRESTORE_SAFE_LIMIT_BYTES = 800_000;
 
-const CATEGORY_PRESETS = ['Onboarding', 'Rémunération', 'Bonnes pratiques', 'Règles & Suivi', 'Outils'];
+const CATEGORY_PRESETS = [
+  'Onboarding',
+  'Discord',
+  'Outils',
+  'Rémunération',
+  'Bonnes pratiques',
+  'Règles & Suivi',
+];
+
+const TAG_SUGGESTIONS = [
+  'Onboarding',
+  'Discord',
+  'Outils',
+  'Rémunération',
+  'Simulation',
+  'Coaching',
+  'Règles',
+  'Checklist',
+];
+
+function cleanTagLabel(raw: string): string {
+  return raw.replace(/^#+/, '').replace(/\s+/g, ' ').trim().slice(0, 32);
+}
 
 type StarterTemplate = 'onboarding' | 'remuneration' | 'blank';
 
@@ -180,6 +204,8 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
   const [isDirty, setIsDirty] = useState(false);
   const [mode, setMode] = useState<'edit' | 'preview'>('edit');
   const [guideSearch, setGuideSearch] = useState('');
+  const [activeCategoryFilter, setActiveCategoryFilter] = useState<string>('ALL');
+  const [tagInput, setTagInput] = useState('');
   const [showCoverStudio, setShowCoverStudio] = useState(false);
 
   const [isLoading, setIsLoading] = useState(true);
@@ -195,6 +221,8 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
   const [newTitle, setNewTitle] = useState('');
   const [newVaType, setNewVaType] = useState<VAType>('CHATTEUR');
   const [newCategory, setNewCategory] = useState('Onboarding');
+  const [newTags, setNewTags] = useState<string[]>(['Onboarding']);
+  const [newTagInput, setNewTagInput] = useState('');
   const [newSubtitle, setNewSubtitle] = useState('');
   const [newTemplate, setNewTemplate] = useState<StarterTemplate>('onboarding');
   const [createError, setCreateError] = useState<string | null>(null);
@@ -256,23 +284,91 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
     };
   }, [guideList]);
 
+  const trackTopicFilters = useMemo(() => {
+    const trackList = guidesByTrack[activeVaType] || [];
+    const counts = new Map<string, { label: string; count: number }>();
+
+    for (const g of trackList) {
+      const seenInGuide = new Set<string>();
+      const labels = [
+        ...(g.category ? [g.category] : []),
+        ...(Array.isArray(g.tags) ? g.tags : []),
+      ];
+      for (const rawLabel of labels) {
+        const cleaned = cleanTagLabel(rawLabel);
+        if (!cleaned) continue;
+        const key = cleaned.toLowerCase();
+        if (seenInGuide.has(key)) continue;
+        seenInGuide.add(key);
+        const current = counts.get(key);
+        if (current) {
+          current.count += 1;
+        } else {
+          counts.set(key, { label: cleaned, count: 1 });
+        }
+      }
+    }
+
+    return Array.from(counts.values()).sort(
+      (a, b) => b.count - a.count || a.label.localeCompare(b.label, 'fr')
+    );
+  }, [guidesByTrack, activeVaType]);
+
+  const allKnownTags = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const preset of [...TAG_SUGGESTIONS, ...CATEGORY_PRESETS]) {
+      map.set(preset.toLowerCase(), preset);
+    }
+    for (const g of guideList) {
+      if (g.category) {
+        const cleaned = cleanTagLabel(g.category);
+        if (cleaned && !map.has(cleaned.toLowerCase())) {
+          map.set(cleaned.toLowerCase(), cleaned);
+        }
+      }
+      if (Array.isArray(g.tags)) {
+        for (const t of g.tags) {
+          const cleaned = cleanTagLabel(t);
+          if (cleaned && !map.has(cleaned.toLowerCase())) {
+            map.set(cleaned.toLowerCase(), cleaned);
+          }
+        }
+      }
+    }
+    return Array.from(map.values());
+  }, [guideList]);
+
   const filteredTrackGuides = useMemo(() => {
     const trackList = guidesByTrack[activeVaType] || [];
     const q = guideSearch.trim().toLowerCase();
-    if (!q) return trackList;
-    return trackList.filter(
-      g =>
+    const catKey = activeCategoryFilter === 'ALL' ? null : activeCategoryFilter.toLowerCase();
+
+    return trackList.filter(g => {
+      if (catKey) {
+        const guideTopics = [
+          ...(g.category ? [cleanTagLabel(g.category).toLowerCase()] : []),
+          ...(Array.isArray(g.tags) ? g.tags.map(t => cleanTagLabel(t).toLowerCase()) : []),
+        ];
+        if (!guideTopics.includes(catKey)) return false;
+      }
+
+      if (!q) return true;
+      const inTags = Array.isArray(g.tags) && g.tags.some(t => t.toLowerCase().includes(q));
+      return (
         g.title.toLowerCase().includes(q) ||
         (g.category || '').toLowerCase().includes(q) ||
-        (g.subtitle || '').toLowerCase().includes(q)
-    );
-  }, [guidesByTrack, activeVaType, guideSearch]);
+        (g.subtitle || '').toLowerCase().includes(q) ||
+        inTags
+      );
+    });
+  }, [guidesByTrack, activeVaType, guideSearch, activeCategoryFilter]);
 
   const applyGuideSelection = (target: ParrainGuide) => {
     setSelectedGuideId(target.id);
     setActiveVaType(target.vaType);
     setDraft(structuredClone(target));
     setIsDirty(false);
+    setTagInput('');
     setFeedback(null);
   };
 
@@ -288,6 +384,7 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
   const handleSelectTrack = (vaType: VAType) => {
     if (vaType === activeVaType) return;
     setGuideSearch('');
+    setActiveCategoryFilter('ALL');
     const trackGuides = guidesByTrack[vaType] || [];
     const primary = trackGuides.find(g => g.id === vaType) || trackGuides[0];
     if (!primary) {
@@ -471,6 +568,7 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
         title: draft.title.trim(),
         subtitle: draft.subtitle || '',
         category: draft.category || (draft.isPrimary ? 'Guide principal' : 'Onboarding'),
+        tags: Array.isArray(draft.tags) ? draft.tags : [],
         order: typeof draft.order === 'number' ? draft.order : draft.isPrimary ? 0 : 10,
         heroImageUrl: draft.heroImageUrl || null,
         blocks: draft.blocks,
@@ -500,10 +598,73 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
     }
   };
 
+  const handleAddDraftTag = (raw: string) => {
+    if (!isAdmin || !draft) return;
+    const cleaned = cleanTagLabel(raw);
+    if (!cleaned) return;
+    const current = Array.isArray(draft.tags) ? draft.tags : [];
+    if (current.some(t => t.toLowerCase() === cleaned.toLowerCase())) {
+      setTagInput('');
+      return;
+    }
+    if (current.length >= 8) {
+      setFeedback({ type: 'err', text: 'Un article peut contenir au maximum 8 tags.' });
+      return;
+    }
+    updateDraft(prev => ({
+      ...prev,
+      tags: [...(Array.isArray(prev.tags) ? prev.tags : []), cleaned],
+    }));
+    setTagInput('');
+  };
+
+  const handleToggleDraftTag = (raw: string) => {
+    if (!isAdmin || !draft) return;
+    const cleaned = cleanTagLabel(raw);
+    if (!cleaned) return;
+    const current = Array.isArray(draft.tags) ? draft.tags : [];
+    const exists = current.some(t => t.toLowerCase() === cleaned.toLowerCase());
+    if (exists) {
+      updateDraft(prev => ({
+        ...prev,
+        tags: (prev.tags || []).filter(t => t.toLowerCase() !== cleaned.toLowerCase()),
+      }));
+    } else {
+      handleAddDraftTag(cleaned);
+    }
+  };
+
+  const handleAddNewModalTag = (raw: string) => {
+    const cleaned = cleanTagLabel(raw);
+    if (!cleaned) return;
+    setNewTags(prev => {
+      if (prev.some(t => t.toLowerCase() === cleaned.toLowerCase()) || prev.length >= 8) {
+        return prev;
+      }
+      return [...prev, cleaned];
+    });
+    setNewTagInput('');
+  };
+
+  const handleToggleNewModalTag = (raw: string) => {
+    const cleaned = cleanTagLabel(raw);
+    if (!cleaned) return;
+    setNewTags(prev => {
+      const exists = prev.some(t => t.toLowerCase() === cleaned.toLowerCase());
+      if (exists) {
+        return prev.filter(t => t.toLowerCase() !== cleaned.toLowerCase());
+      }
+      if (prev.length >= 8) return prev;
+      return [...prev, cleaned];
+    });
+  };
+
   const openCreateModal = () => {
     setNewTitle('');
     setNewVaType(activeVaType);
     setNewCategory('Onboarding');
+    setNewTags(['Onboarding']);
+    setNewTagInput('');
     setNewSubtitle('');
     setNewTemplate('onboarding');
     setCreateError(null);
@@ -527,6 +688,7 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
         title: newTitle.trim(),
         subtitle: newSubtitle.trim(),
         category: newCategory.trim() || 'Onboarding',
+        tags: newTags,
         order: nextOrder,
         heroImageUrl: null,
         blocks: buildStarterBlocks(newTemplate, newVaType),
@@ -535,6 +697,7 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
       setGuideList(prev => [...prev, res.guide]);
       setShowCreateModal(false);
       setActiveVaType(res.guide.vaType);
+      setActiveCategoryFilter('ALL');
       setSelectedGuideId(res.guide.id);
       setDraft(structuredClone(res.guide));
       setIsDirty(false);
@@ -703,7 +866,7 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
                   type="button"
                   onClick={handleSave}
                   disabled={isSaving || isOverSizeLimit}
-                  className="min-h-[40px] px-4 py-2 text-xs font-semibold text-white bg-violet-600 hover:bg-violet-500 disabled:opacity-50 rounded-xl transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
+                  className="min-h-[40px] px-4 py-2 text-xs font-bold text-white bg-gradient-to-r from-[#FA4616] to-rose-500 hover:from-[#e43d11] hover:to-rose-400 disabled:opacity-50 rounded-xl shadow-sm shadow-[#FA4616]/20 transition-all flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
                 >
                   {isSaving ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
                   <span>{isSaving ? 'Publication...' : isDirty ? 'Publier les modifs *' : 'Enregistrer & Publier'}</span>
@@ -724,21 +887,22 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
             ).map(tab => {
               const active = activeVaType === tab.id;
               const count = guidesByTrack[tab.id].length;
+              const specTheme = getSpecialtyTheme(tab.id);
               return (
                 <button
                   key={tab.id}
                   type="button"
                   onClick={() => handleSelectTrack(tab.id)}
-                  className={`min-h-[38px] px-3.5 py-1.5 text-xs font-semibold rounded-xl border transition-colors whitespace-nowrap shrink-0 flex items-center gap-2 cursor-pointer ${
+                  className={`min-h-[38px] px-3.5 py-1.5 text-xs font-bold rounded-xl border transition-all whitespace-nowrap shrink-0 flex items-center gap-2 cursor-pointer ${
                     active
-                      ? 'bg-violet-600 text-white border-violet-600'
+                      ? `${specTheme.button} border-transparent`
                       : 'bg-slate-50 dark:bg-[#171026] text-slate-700 dark:text-[#d8d0eb] border-slate-200 dark:border-[#241a38] hover:bg-slate-100 dark:hover:bg-[#231839]'
                   }`}
                 >
                   <span>{tab.label}</span>
                   <span
                     className={`font-mono tabular-nums text-[11px] ${
-                      active ? 'text-violet-100' : 'text-slate-400 dark:text-[#7c7296]'
+                      active ? 'text-white/90' : 'text-slate-400 dark:text-[#7c7296]'
                     }`}
                   >
                     {count}
@@ -766,29 +930,87 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
           </div>
         </div>
 
-        {/* Visual Blog Cards Selector */}
+        {/* Visual Blog Cards Selector with Category & Tag Organization Filter */}
         <div className="pt-4 border-t border-slate-100 dark:border-[#1e1530] space-y-3">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
             <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-500 dark:text-[#9d93b8]">
               Articles publiés dans ce journal ({guidesByTrack[activeVaType].length})
             </div>
-            {guidesByTrack[activeVaType].length > 2 && (
+            {guidesByTrack[activeVaType].length > 1 && (
               <div className="relative w-full sm:w-64">
                 <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
                 <input
                   type="text"
                   value={guideSearch}
                   onChange={e => setGuideSearch(e.target.value)}
-                  placeholder="Filtrer les articles..."
+                  placeholder="Rechercher titre, catégorie ou tag..."
                   className="w-full min-h-[34px] pl-8 pr-3 py-1 text-xs border border-slate-200 dark:border-[#241a38] rounded-lg bg-slate-50 dark:bg-[#08050f] text-slate-900 dark:text-[#f4f1fa]"
                 />
               </div>
             )}
           </div>
 
+          {trackTopicFilters.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Filtrer par catégorie ou tag">
+              <button
+                type="button"
+                onClick={() => setActiveCategoryFilter('ALL')}
+                className={`min-h-[30px] px-2.5 py-1 text-[11px] font-semibold rounded-lg border transition-colors whitespace-nowrap shrink-0 cursor-pointer flex items-center gap-1.5 ${
+                  activeCategoryFilter === 'ALL'
+                    ? 'bg-slate-950 dark:bg-violet-600 text-white border-slate-950 dark:border-violet-600'
+                    : 'bg-slate-50 dark:bg-[#171026] text-slate-600 dark:text-[#b7aed0] border-slate-200 dark:border-[#241a38] hover:text-slate-900 dark:hover:text-[#f4f1fa]'
+                }`}
+              >
+                <span>Tous</span>
+                <span className="font-mono tabular-nums opacity-75">
+                  {guidesByTrack[activeVaType].length}
+                </span>
+              </button>
+
+              {trackTopicFilters.map(topic => {
+                const isActive = activeCategoryFilter.toLowerCase() === topic.label.toLowerCase();
+                const topicTheme = getTopicColorTheme(topic.label);
+                return (
+                  <button
+                    key={topic.label}
+                    type="button"
+                    onClick={() =>
+                      setActiveCategoryFilter(prev =>
+                        prev.toLowerCase() === topic.label.toLowerCase() ? 'ALL' : topic.label
+                      )
+                    }
+                    className={`min-h-[30px] px-2.5 py-1 text-[11px] font-bold rounded-lg border transition-colors whitespace-nowrap shrink-0 cursor-pointer flex items-center gap-1.5 ${
+                      isActive
+                        ? topicTheme.chipActive
+                        : `${topicTheme.badge} hover:brightness-95 dark:hover:brightness-110`
+                    }`}
+                  >
+                    <span className={`w-1.5 h-1.5 rounded-full ${isActive ? 'bg-current opacity-80' : topicTheme.dot}`} />
+                    <span>{topic.label}</span>
+                    <span className="font-mono tabular-nums opacity-75">{topic.count}</span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
           {filteredTrackGuides.length === 0 ? (
-            <div className="p-6 rounded-xl border border-dashed border-slate-200 dark:border-[#241a38] text-xs text-slate-500 dark:text-[#9d93b8] text-center">
-              Aucun article ne correspond à « {guideSearch} ».
+            <div className="p-6 rounded-xl border border-dashed border-slate-200 dark:border-[#241a38] text-xs text-slate-500 dark:text-[#9d93b8] text-center space-y-2">
+              <p>
+                Aucun article ne correspond à votre filtre
+                {activeCategoryFilter !== 'ALL' ? ` (« ${activeCategoryFilter} »)` : ''}
+                {guideSearch.trim() ? ` pour « ${guideSearch.trim()} »` : ''}.
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveCategoryFilter('ALL');
+                  setGuideSearch('');
+                }}
+                className="px-3 py-1 bg-slate-100 dark:bg-[#171026] hover:bg-slate-200 dark:hover:bg-[#231839] text-slate-800 dark:text-[#f4f1fa] font-semibold rounded-lg cursor-pointer"
+              >
+                Réinitialiser les filtres
+              </button>
             </div>
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5">
@@ -796,15 +1018,18 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
                 const isSelected = g.id === draft.id;
                 const thumbUrl = resolveGuideCoverUrl(g);
                 const mins = estimateReadingMinutes(g);
+                const cardTags = Array.isArray(g.tags) ? g.tags.slice(0, 3) : [];
+                const cardCat = g.category || (g.isPrimary ? 'Guide principal' : 'Onboarding');
+                const cardTheme = getTopicColorTheme(cardCat);
                 return (
                   <button
                     key={g.id}
                     type="button"
                     onClick={() => handleSelectGuide(g)}
-                    className={`group text-left rounded-xl border overflow-hidden transition-colors cursor-pointer flex flex-col ${
+                    className={`group text-left rounded-xl border overflow-hidden transition-all cursor-pointer flex flex-col ${
                       isSelected
-                        ? 'bg-violet-50/60 dark:bg-[#1a112b] border-violet-600 dark:border-violet-400'
-                        : 'bg-slate-50/70 dark:bg-[#140d21] border-slate-200 dark:border-[#241a38] hover:border-slate-300 dark:hover:border-[#3c2b5e]'
+                        ? 'bg-orange-50/40 dark:bg-[#1b1520] border-[#FA4616] ring-1 ring-[#FA4616]/40'
+                        : `bg-slate-50/70 dark:bg-[#140d21] border-slate-200 dark:border-[#241a38] ${cardTheme.borderAccent}`
                     }`}
                   >
                     <div className="aspect-[16/9] w-full overflow-hidden bg-slate-200 dark:bg-[#08050f] border-b border-slate-200/70 dark:border-[#241a38]">
@@ -816,10 +1041,11 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
                       />
                     </div>
                     <div className="p-3.5 space-y-1.5 flex-1 flex flex-col justify-between">
-                      <div className="space-y-1">
+                      <div className="space-y-1.5">
                         <div className="flex items-center justify-between gap-2 text-[11px] text-slate-500 dark:text-[#9d93b8]">
-                          <span className="font-semibold uppercase tracking-wider text-violet-700 dark:text-violet-300 truncate">
-                            {g.category || (g.isPrimary ? 'Guide principal' : 'Onboarding')}
+                          <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md border font-bold uppercase tracking-wider truncate ${cardTheme.badge}`}>
+                            <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${cardTheme.dot}`} />
+                            <span className="truncate">{cardCat}</span>
                           </span>
                           <span className="font-mono tabular-nums shrink-0">{mins} min</span>
                         </div>
@@ -829,6 +1055,21 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
                         <p className="text-[11px] text-slate-500 dark:text-[#9d93b8] line-clamp-2 leading-relaxed">
                           {extractGuideExcerpt(g, 95)}
                         </p>
+                        {cardTags.length > 0 && (
+                          <div className="flex flex-wrap items-center gap-1 pt-0.5">
+                            {cardTags.map(t => {
+                              const tagTheme = getTopicColorTheme(t);
+                              return (
+                                <span
+                                  key={t}
+                                  className={`px-1.5 py-0.5 rounded border text-[10px] font-semibold ${tagTheme.badge}`}
+                                >
+                                  #{t}
+                                </span>
+                              );
+                            })}
+                          </div>
+                        )}
                       </div>
 
                       <div className="pt-2 flex items-center justify-between text-[11px] text-slate-400 dark:text-[#7c7296]">
@@ -836,7 +1077,7 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
                           {g.blocks.length} bloc{g.blocks.length > 1 ? 's' : ''}
                         </span>
                         {isSelected && (
-                          <span className="font-semibold text-violet-600 dark:text-violet-300">
+                          <span className="font-bold text-[#FA4616] dark:text-orange-400">
                             En cours d&apos;édition
                           </span>
                         )}
@@ -1008,7 +1249,7 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
                     list="pawako-guide-categories"
                     value={draft.category || ''}
                     onChange={e => updateDraft(prev => ({ ...prev, category: e.target.value }))}
-                    placeholder="Ex: Onboarding"
+                    placeholder="Ex: Onboarding, Discord, Outils"
                     className="w-full min-h-[36px] px-3 py-1.5 border border-slate-200 dark:border-[#241a38] rounded-lg bg-slate-50 dark:bg-[#08050f] text-slate-900 dark:text-[#f4f1fa] disabled:opacity-70"
                   />
                   <datalist id="pawako-guide-categories">
@@ -1052,6 +1293,80 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
                     className="w-full min-h-[36px] px-3 py-1.5 font-mono tabular-nums border border-slate-200 dark:border-[#241a38] rounded-lg bg-slate-50 dark:bg-[#08050f] text-slate-900 dark:text-[#f4f1fa] disabled:opacity-70"
                   />
                 </div>
+              </div>
+
+              {/* Tags / Thématiques d'organisation */}
+              <div className="pt-1 space-y-2.5 text-xs">
+                <div className="flex items-center justify-between gap-2">
+                  <label className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-400 dark:text-[#7c7296]">
+                    <Tag className="w-3.5 h-3.5 text-violet-500" />
+                    <span>Tags d&apos;organisation</span>
+                  </label>
+                  <span className="font-mono tabular-nums text-[11px] text-slate-400 dark:text-[#7c7296]">
+                    {(draft.tags || []).length} / 8
+                  </span>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  {(draft.tags || []).map(tag => (
+                    <button
+                      key={tag}
+                      type="button"
+                      disabled={!isAdmin}
+                      onClick={() => handleToggleDraftTag(tag)}
+                      title={isAdmin ? `Retirer le tag ${tag}` : tag}
+                      className="min-h-[30px] px-2.5 py-1 rounded-lg bg-violet-50 dark:bg-[#1a112b] border border-violet-200 dark:border-violet-500/35 text-violet-800 dark:text-violet-200 font-semibold text-[11px] inline-flex items-center gap-1.5 cursor-pointer disabled:cursor-default disabled:opacity-80 hover:bg-violet-100 dark:hover:bg-[#23173a] transition-colors"
+                    >
+                      <span>#{tag}</span>
+                      {isAdmin && <X className="w-3 h-3 opacity-70" />}
+                    </button>
+                  ))}
+
+                  {isAdmin && (draft.tags || []).length < 8 && (
+                    <div className="flex items-center gap-1.5 flex-1 min-w-[200px]">
+                      <input
+                        type="text"
+                        value={tagInput}
+                        onChange={e => setTagInput(e.target.value)}
+                        onKeyDown={e => {
+                          if (e.key === 'Enter' || e.key === ',') {
+                            e.preventDefault();
+                            handleAddDraftTag(tagInput);
+                          }
+                        }}
+                        placeholder="Ajouter un tag (ex: Discord, Outils)..."
+                        className="flex-1 min-h-[32px] px-2.5 py-1 text-xs border border-slate-200 dark:border-[#241a38] rounded-lg bg-slate-50 dark:bg-[#08050f] text-slate-900 dark:text-[#f4f1fa]"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => handleAddDraftTag(tagInput)}
+                        disabled={!cleanTagLabel(tagInput)}
+                        className="min-h-[32px] px-3 py-1 bg-slate-950 dark:bg-violet-600 hover:bg-slate-800 dark:hover:bg-violet-500 disabled:opacity-40 text-white font-semibold rounded-lg text-[11px] cursor-pointer whitespace-nowrap"
+                      >
+                        + Ajouter
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                {isAdmin && (
+                  <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+                    <span className="text-slate-400 dark:text-[#7c7296] mr-1">Suggestions :</span>
+                    {allKnownTags
+                      .filter(t => !(draft.tags || []).some(cur => cur.toLowerCase() === t.toLowerCase()))
+                      .slice(0, 8)
+                      .map(suggestion => (
+                        <button
+                          key={suggestion}
+                          type="button"
+                          onClick={() => handleAddDraftTag(suggestion)}
+                          className="px-2 py-0.5 rounded-md border border-slate-200 dark:border-[#241a38] bg-white dark:bg-[#140d21] text-slate-600 dark:text-[#b7aed0] hover:border-violet-400 hover:text-violet-700 dark:hover:text-violet-300 transition-colors cursor-pointer"
+                        >
+                          + {suggestion}
+                        </button>
+                      ))}
+                  </div>
+                )}
               </div>
 
               <div className="space-y-2.5">
@@ -1457,16 +1772,73 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
 
                 <div>
                   <label className="block text-[11px] font-semibold text-slate-600 dark:text-[#9d93b8] mb-1">
-                    Rubrique
+                    Rubrique / Catégorie
                   </label>
                   <input
                     type="text"
                     list="pawako-guide-categories"
                     value={newCategory}
                     onChange={e => setNewCategory(e.target.value)}
-                    placeholder="Onboarding"
+                    placeholder="Onboarding, Discord, Outils..."
                     className="w-full min-h-[38px] px-3 py-2 border border-slate-200 dark:border-[#241a38] rounded-lg bg-slate-50 dark:bg-[#08050f] text-slate-900 dark:text-[#f4f1fa]"
                   />
+                </div>
+              </div>
+
+              {/* Tags dans la modale de création */}
+              <div className="space-y-2">
+                <label className="block text-[11px] font-semibold text-slate-600 dark:text-[#9d93b8]">
+                  Tags (ex: Onboarding, Discord, Outils)
+                </label>
+                <div className="flex flex-wrap gap-1.5">
+                  {newTags.map(tag => (
+                    <button
+                      key={tag}
+                      type="button"
+                      onClick={() => handleToggleNewModalTag(tag)}
+                      className="min-h-[28px] px-2.5 py-0.5 rounded-lg bg-violet-50 dark:bg-[#1a112b] border border-violet-200 dark:border-violet-500/35 text-violet-800 dark:text-violet-200 font-semibold text-[11px] inline-flex items-center gap-1 cursor-pointer"
+                    >
+                      <span>#{tag}</span>
+                      <X className="w-3 h-3 opacity-70" />
+                    </button>
+                  ))}
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <input
+                    type="text"
+                    value={newTagInput}
+                    onChange={e => setNewTagInput(e.target.value)}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter' || e.key === ',') {
+                        e.preventDefault();
+                        handleAddNewModalTag(newTagInput);
+                      }
+                    }}
+                    placeholder="Ajouter un tag personnalisé..."
+                    className="flex-1 min-h-[34px] px-3 py-1.5 text-xs border border-slate-200 dark:border-[#241a38] rounded-lg bg-slate-50 dark:bg-[#08050f] text-slate-900 dark:text-[#f4f1fa]"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => handleAddNewModalTag(newTagInput)}
+                    disabled={!cleanTagLabel(newTagInput)}
+                    className="min-h-[34px] px-3 py-1.5 bg-slate-100 dark:bg-[#171026] hover:bg-slate-200 dark:hover:bg-[#231839] border border-slate-200 dark:border-[#241a38] rounded-lg text-xs font-semibold cursor-pointer disabled:opacity-40"
+                  >
+                    + Ajouter
+                  </button>
+                </div>
+                <div className="flex flex-wrap gap-1.5 text-[11px]">
+                  {['Onboarding', 'Discord', 'Outils', 'Rémunération', 'Checklist']
+                    .filter(s => !newTags.some(t => t.toLowerCase() === s.toLowerCase()))
+                    .map(s => (
+                      <button
+                        key={s}
+                        type="button"
+                        onClick={() => handleAddNewModalTag(s)}
+                        className="px-2 py-0.5 rounded-md border border-slate-200 dark:border-[#241a38] bg-slate-50 dark:bg-[#140d21] text-slate-600 dark:text-[#b7aed0] hover:border-violet-400 cursor-pointer"
+                      >
+                        + {s}
+                      </button>
+                    ))}
                 </div>
               </div>
 

@@ -258,12 +258,12 @@ export const CandidatesView: React.FC<Props> = ({
 
           <div className="flex flex-wrap items-center gap-1.5">
             {[
-              { id: 'ALL', label: 'Tous', active: status === 'ALL' && !anomalyOnly },
-              { id: 'EN_ATTENTE', label: 'En attente', active: status === 'EN_ATTENTE' && !anomalyOnly },
-              { id: 'EN_FORMATION', label: 'Formation', active: status === 'EN_FORMATION' && !anomalyOnly },
-              { id: 'EN_SIMULATION', label: 'Simulation', active: status === 'EN_SIMULATION' && !anomalyOnly },
-              { id: 'EN_PRODUCTION', label: 'En Production', active: status === 'EN_PRODUCTION' && !anomalyOnly },
-              { id: 'ANOMALY', label: 'Anomalies', active: anomalyOnly },
+              { id: 'ALL', label: 'Tous', active: status === 'ALL' && !anomalyOnly, activeCls: 'bg-slate-950 dark:bg-white text-white dark:text-slate-950 shadow-xs' },
+              { id: 'EN_ATTENTE', label: 'En attente', active: status === 'EN_ATTENTE' && !anomalyOnly, activeCls: 'bg-amber-500 text-slate-950 shadow-xs' },
+              { id: 'EN_FORMATION', label: 'Formation', active: status === 'EN_FORMATION' && !anomalyOnly, activeCls: 'bg-sky-600 text-white shadow-xs' },
+              { id: 'EN_SIMULATION', label: 'Simulation', active: status === 'EN_SIMULATION' && !anomalyOnly, activeCls: 'bg-indigo-600 text-white shadow-xs' },
+              { id: 'EN_PRODUCTION', label: 'En Production', active: status === 'EN_PRODUCTION' && !anomalyOnly, activeCls: 'bg-emerald-600 text-white shadow-xs' },
+              { id: 'ANOMALY', label: 'Anomalies', active: anomalyOnly, activeCls: 'bg-rose-600 text-white shadow-xs' },
             ].map(tab => (
               <button
                 key={tab.id}
@@ -278,11 +278,9 @@ export const CandidatesView: React.FC<Props> = ({
                   }
                   setPage(1);
                 }}
-                className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
                   tab.active
-                    ? tab.id === 'ANOMALY'
-                      ? 'bg-rose-600 text-white shadow-xs'
-                      : 'bg-slate-950 dark:bg-violet-600 text-white shadow-xs'
+                    ? tab.activeCls
                     : 'bg-slate-100 dark:bg-[#171026] text-slate-600 dark:text-[#b4aacb] hover:text-slate-900 dark:hover:text-[#f4f1fa] hover:bg-slate-200/70 dark:hover:bg-[#1f1633]'
                 }`}
               >

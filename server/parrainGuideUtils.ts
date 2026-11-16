@@ -41,6 +41,34 @@ export function generateCustomGuideId(vaType: VAType, title: string): string {
   return `guide-${vaType.toLowerCase()}-${slug}-${Date.now().toString(36)}-${rand}`;
 }
 
+export function sanitizeGuideTags(rawTags: unknown): string[] {
+  let candidates: string[] = [];
+  if (Array.isArray(rawTags)) {
+    candidates = rawTags.filter((item): item is string => typeof item === 'string');
+  } else if (typeof rawTags === 'string') {
+    candidates = rawTags.split(',');
+  }
+
+  const seen = new Set<string>();
+  const result: string[] = [];
+
+  for (const item of candidates) {
+    const cleaned = item
+      .replace(/^#+/, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 32);
+    if (!cleaned) continue;
+    const key = cleaned.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(cleaned);
+    if (result.length >= 8) break;
+  }
+
+  return result;
+}
+
 export function buildDefaultParrainGuide(vaType: VAType): ParrainGuide {
   const now = new Date().toISOString();
   if (vaType === 'CHATTEUR') {
@@ -48,6 +76,7 @@ export function buildDefaultParrainGuide(vaType: VAType): ParrainGuide {
       id: 'CHATTEUR',
       vaType: 'CHATTEUR',
       category: 'Guide principal',
+      tags: ['Onboarding', 'Rémunération', 'Discord'],
       order: 0,
       title: 'Guide Officiel Parrain — Pôle VA Chatteur',
       subtitle:
@@ -100,6 +129,7 @@ export function buildDefaultParrainGuide(vaType: VAType): ParrainGuide {
     id: 'INSTAGRAM',
     vaType: 'INSTAGRAM',
     category: 'Guide principal',
+    tags: ['Onboarding', 'Rémunération', 'Outils'],
     order: 0,
     title: 'Guide Officiel Parrain — Pôle VA Instagram',
     subtitle:
@@ -164,6 +194,12 @@ export function normalizeStoredParrainGuide(raw: ParrainGuide): ParrainGuide {
         : isPrimary
           ? 'Guide principal'
           : 'Onboarding',
+    tags:
+      raw.tags === undefined
+        ? isPrimary
+          ? buildDefaultParrainGuide(vaType).tags || []
+          : []
+        : sanitizeGuideTags(raw.tags),
     order: typeof raw.order === 'number' && Number.isFinite(raw.order) ? raw.order : isPrimary ? 0 : 10,
     title: String(raw.title || '').trim() || fallbackTitle,
     subtitle: String(raw.subtitle || ''),
@@ -197,6 +233,7 @@ export function sanitizeAndBuildParrainGuide(
     title: string;
     subtitle?: string;
     category?: string;
+    tags?: string[];
     order?: number;
     heroImageUrl?: string | null;
     blocks: ParrainGuideBlock[];
@@ -233,6 +270,7 @@ export function sanitizeAndBuildParrainGuide(
       : isPrimary
         ? 'Guide principal'
         : 'Onboarding';
+  const cleanTags = sanitizeGuideTags(payload.tags);
   const cleanOrder =
     typeof payload.order === 'number' && Number.isFinite(payload.order)
       ? Math.max(0, Math.min(999, Math.round(payload.order)))
@@ -333,6 +371,7 @@ export function sanitizeAndBuildParrainGuide(
     id: targetId,
     vaType: resolvedVaType,
     category: cleanCategory,
+    tags: cleanTags,
     order: cleanOrder,
     title: cleanTitle,
     subtitle: cleanSubtitle,

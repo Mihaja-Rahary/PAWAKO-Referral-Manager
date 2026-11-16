@@ -31,7 +31,7 @@ import { ReassignReferrerModal } from './components/ReassignReferrerModal';
 import { NewCandidateModal } from './components/NewCandidateModal';
 import { PawakoLogo } from './components/PawakoLogo';
 import { ThemeToggle } from './components/ThemeToggle';
-import { LogOut, Shield, AlertCircle, RefreshCw } from 'lucide-react';
+import { LogOut, Shield, AlertCircle, RefreshCw, Menu } from 'lucide-react';
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
@@ -41,6 +41,7 @@ export default function App() {
   const [isOAuthConfigured, setIsOAuthConfigured] = useState(false);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [isParrainMobileMenuOpen, setIsParrainMobileMenuOpen] = useState(false);
 
   // URL Path router state
   const [currentPath, setCurrentPath] = useState<string>(() => {
@@ -363,71 +364,82 @@ export default function App() {
     }
 
     return (
-      <div className="min-h-screen bg-slate-50 dark:bg-[#06040a] text-slate-900 dark:text-[#f4f1fa] flex flex-col font-sans antialiased transition-colors">
-        {/* Parrain Portal Top Bar */}
-        <header className="border-b border-slate-200 dark:border-[#1e1530] bg-white/95 dark:bg-[#090611]/95 sticky top-0 z-10 px-3 sm:px-6 h-16 flex items-center justify-between gap-2 transition-colors">
-          <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
-            <PawakoLogo size="sm" />
-            <div className="flex items-center gap-2 text-sm tracking-tight min-w-0">
-              <span className="font-bold text-slate-900 dark:text-[#f4f1fa] whitespace-nowrap">PAWAKO</span>
-              <span className="text-slate-300 dark:text-[#3b2d5c] hidden xs:inline" aria-hidden="true">·</span>
-              <span className="text-xs font-semibold text-violet-700 dark:text-violet-300 truncate">
-                Espace Parrain
-              </span>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2 sm:gap-3 shrink-0">
-            {(currentUser.role === 'ADMINISTRATEUR' || currentUser.role === 'RESPONSABLE') && (
+      <div className="min-h-screen bg-[#f8fafc] dark:bg-[#09090d] text-slate-900 dark:text-slate-100 flex flex-col font-sans antialiased transition-colors">
+        {/* Parrain Whop-inspired Top Bar */}
+        <header className="border-b border-slate-200/90 dark:border-white/10 bg-white/90 dark:bg-[#0c0c12]/90 backdrop-blur-md sticky top-0 z-20 transition-colors">
+          <div className="max-w-[1440px] mx-auto w-full px-3 sm:px-6 h-16 flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 sm:gap-3 min-w-0">
               <button
-                onClick={() => navigate('/admin')}
-                className="min-h-[38px] flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs font-semibold text-violet-700 dark:text-violet-200 bg-violet-50 dark:bg-[#191129] border border-violet-200 dark:border-violet-500/35 rounded-lg hover:bg-violet-100 dark:hover:bg-[#231839] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                type="button"
+                onClick={() => setIsParrainMobileMenuOpen(true)}
+                aria-label="Ouvrir la barre latérale parrain"
+                className="lg:hidden min-h-[40px] min-w-[40px] flex items-center justify-center rounded-xl text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-white/10 transition-colors cursor-pointer shrink-0"
               >
-                <Shield className="w-3.5 h-3.5" />
-                <span className="hidden sm:inline">Administration</span>
+                <Menu className="w-5 h-5" />
               </button>
-            )}
-
-            <ThemeToggle compact />
-
-            <div className="flex items-center gap-2 pl-0.5">
-              {currentUser.avatar ? (
-                <img
-                  src={currentUser.avatar}
-                  alt={currentUser.displayName}
-                  referrerPolicy="no-referrer"
-                  className="w-8 h-8 rounded-full border border-slate-200 dark:border-[#2e224a] object-cover"
-                />
-              ) : (
-                <div className="w-8 h-8 rounded-full bg-violet-600 text-white flex items-center justify-center font-bold text-xs">
-                  {currentUser.displayName.charAt(0)}
-                </div>
-              )}
-              <div className="text-left hidden sm:block">
-                <div className="text-xs font-semibold text-slate-900 dark:text-[#f4f1fa] truncate max-w-[140px]">
-                  {currentUser.displayName}
-                </div>
-                <div className="text-[10px] text-violet-600 dark:text-violet-300 font-medium">Parrain</div>
+              <PawakoLogo size="sm" />
+              <div className="flex items-center gap-2 text-sm tracking-tight min-w-0">
+                <span className="font-extrabold text-slate-950 dark:text-white whitespace-nowrap">PAWAKO</span>
+                <span className="hidden sm:inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-bold bg-orange-50 text-[#d9380d] border border-orange-200 dark:bg-[#FA4616]/15 dark:text-orange-300 dark:border-[#FA4616]/30 whitespace-nowrap">
+                  Hub Parrains
+                </span>
               </div>
             </div>
 
-            <button
-              onClick={() => handleLogout('/parrain/login')}
-              className="min-h-[38px] flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs font-medium text-slate-600 dark:text-[#c4badb] hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-[#191129] rounded-lg border border-slate-200 dark:border-[#241a38] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-            >
-              <LogOut className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">Déconnexion</span>
-            </button>
+            <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+              {(currentUser.role === 'ADMINISTRATEUR' || currentUser.role === 'RESPONSABLE') && (
+                <button
+                  onClick={() => navigate('/admin')}
+                  className="min-h-[38px] flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs font-semibold text-indigo-700 dark:text-indigo-200 bg-indigo-50 dark:bg-indigo-500/15 border border-indigo-200 dark:border-indigo-500/35 rounded-xl hover:bg-indigo-100 dark:hover:bg-indigo-500/25 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                >
+                  <Shield className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">Administration</span>
+                </button>
+              )}
+
+              <ThemeToggle compact />
+
+              <div className="flex items-center gap-2 pl-0.5">
+                {currentUser.avatar ? (
+                  <img
+                    src={currentUser.avatar}
+                    alt={currentUser.displayName}
+                    referrerPolicy="no-referrer"
+                    className="w-8 h-8 rounded-full border border-slate-200 dark:border-white/15 object-cover"
+                  />
+                ) : (
+                  <div className="w-8 h-8 rounded-full bg-gradient-to-br from-[#FA4616] to-rose-500 text-white flex items-center justify-center font-bold text-xs">
+                    {currentUser.displayName.charAt(0)}
+                  </div>
+                )}
+                <div className="text-left hidden sm:block">
+                  <div className="text-xs font-semibold text-slate-900 dark:text-white truncate max-w-[140px]">
+                    {currentUser.displayName}
+                  </div>
+                  <div className="text-[10px] text-[#FA4616] dark:text-orange-400 font-semibold">Parrain</div>
+                </div>
+              </div>
+
+              <button
+                onClick={() => handleLogout('/parrain/login')}
+                className="min-h-[38px] flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs font-medium text-slate-600 dark:text-slate-300 hover:text-slate-950 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/10 rounded-xl border border-slate-200 dark:border-white/10 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+              >
+                <LogOut className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Déconnexion</span>
+              </button>
+            </div>
           </div>
         </header>
 
-        {/* Parrain Main Content */}
-        <main className="flex-1 p-4 sm:p-6 max-w-6xl mx-auto w-full">
+        {/* Parrain 3-Column Social Hub */}
+        <main className="flex-1 px-3 sm:px-6 py-5 max-w-[1440px] mx-auto w-full">
           <ParrainPortalView
             currentUserRole={currentUser.role}
             onSelectCandidate={id => setSelectedCandidateId(id)}
             refreshTrigger={refreshTrigger}
             onManualRefresh={triggerRefresh}
+            isMobileSidebarOpen={isParrainMobileMenuOpen}
+            onCloseMobileSidebar={() => setIsParrainMobileMenuOpen(false)}
           />
         </main>
 
@@ -448,7 +460,7 @@ export default function App() {
   // 5. Route : /admin (Espace Administration Protégé)
   if (isAuthLoading && !currentUser) {
     return (
-      <div className="min-h-screen bg-slate-50 dark:bg-[#06040a] flex flex-col items-center justify-center gap-3 text-slate-500 dark:text-[#9d93b8]">
+      <div className="min-h-screen bg-[#f8fafc] dark:bg-[#09090d] flex flex-col items-center justify-center gap-3 text-slate-500 dark:text-slate-400">
         <PawakoLogo size="sm" />
         <div className="text-xs font-medium animate-pulse">Chargement du tableau de bord...</div>
       </div>
@@ -494,7 +506,7 @@ export default function App() {
   const { title } = getHeaderInfo();
 
   return (
-    <div className="flex h-screen bg-slate-50 dark:bg-[#06040a] text-slate-900 dark:text-[#f4f1fa] overflow-hidden font-sans antialiased transition-colors">
+    <div className="flex h-screen bg-[#f8fafc] dark:bg-[#09090d] text-slate-900 dark:text-slate-100 overflow-hidden font-sans antialiased transition-colors">
       {/* Sidebar Navigation */}
       <Sidebar
         activeTab={activeTab}
@@ -604,6 +616,7 @@ export default function App() {
                 onSelectCandidate={id => setSelectedCandidateId(id)}
                 refreshTrigger={refreshTrigger}
                 onManualRefresh={triggerRefresh}
+                isEmbeddedInAdmin
               />
             )}
 

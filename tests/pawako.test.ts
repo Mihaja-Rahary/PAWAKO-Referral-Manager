@@ -2632,6 +2632,7 @@ describe('PAWAKO Referral Manager — Tests Complets Isolés (Mockés)', () => {
           title: 'Checklist 7 jours Nouveau Parrain Instagram',
           subtitle: 'Étapes clés pour démarrer efficacement.',
           category: 'Onboarding',
+          tags: ['#Onboarding', 'Discord', 'Outils', 'discord', '  Outils  '],
           order: 15,
           blocks: [
             {
@@ -2649,6 +2650,7 @@ describe('PAWAKO Referral Manager — Tests Complets Isolés (Mockés)', () => {
     const createdInsta = ((await createInstaRes.json()) as any).guide;
     assert.ok(createdInsta.id.startsWith('guide-instagram-'));
     assert.equal(createdInsta.category, 'Onboarding');
+    assert.deepEqual(createdInsta.tags, ['Onboarding', 'Discord', 'Outils']);
     assert.equal(createdInsta.isPrimary, false);
 
     const createChatRes = await app.fetch(
@@ -2663,6 +2665,7 @@ describe('PAWAKO Referral Manager — Tests Complets Isolés (Mockés)', () => {
           vaType: 'CHATTEUR',
           title: 'Guide Secret Chatteur',
           category: 'Règles',
+          tags: ['Discord', 'Règles'],
           blocks: [],
         }),
       }),
@@ -2682,6 +2685,8 @@ describe('PAWAKO Referral Manager — Tests Complets Isolés (Mockés)', () => {
     assert.equal(adminListJson.guideList.length, 4);
     assert.ok(adminListJson.guides.CHATTEUR);
     assert.ok(adminListJson.guides.INSTAGRAM);
+    assert.ok(Array.isArray(adminListJson.guides.CHATTEUR.tags));
+    assert.ok(adminListJson.guides.CHATTEUR.tags.includes('Onboarding'));
 
     // 4. Parrain INSTAGRAM voit le guide principal + le nouveau guide INSTAGRAM, jamais le guide CHATTEUR
     const parrainGuidesRes = await app.fetch(
@@ -2693,10 +2698,12 @@ describe('PAWAKO Referral Manager — Tests Complets Isolés (Mockés)', () => {
     assert.equal(parrainGuidesRes.status, 200);
     const parrainGuidesJson = (await parrainGuidesRes.json()) as any;
     assert.equal(parrainGuidesJson.guides.length, 2);
-    assert.ok(parrainGuidesJson.guides.some((g: any) => g.id === createdInsta.id));
+    const parrainCreatedInsta = parrainGuidesJson.guides.find((g: any) => g.id === createdInsta.id);
+    assert.ok(parrainCreatedInsta);
+    assert.deepEqual(parrainCreatedInsta.tags, ['Onboarding', 'Discord', 'Outils']);
     assert.ok(parrainGuidesJson.guides.every((g: any) => g.vaType === 'INSTAGRAM'));
 
-    // 5. Admin modifie le guide personnalisé (PUT) et obtient 404 sur un ID inexistant
+    // 5. Admin modifie le guide personnalisé (PUT) avec nouveaux tags (plafonné à 8) et obtient 404 sur un ID inexistant
     const updateCustomRes = await app.fetch(
       new Request(`${WORKER_ORIGIN}/api/admin/parrain-guides/${encodeURIComponent(createdInsta.id)}`, {
         method: 'PUT',
@@ -2708,7 +2715,8 @@ describe('PAWAKO Referral Manager — Tests Complets Isolés (Mockés)', () => {
         body: JSON.stringify({
           vaType: 'INSTAGRAM',
           title: 'Checklist 7 jours — Version Finale',
-          category: 'Bonnes pratiques',
+          category: 'Outils',
+          tags: ['Outils', 'Discord', 'T1', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7-Overflow'],
           blocks: createdInsta.blocks,
         }),
       }),
@@ -2717,7 +2725,11 @@ describe('PAWAKO Referral Manager — Tests Complets Isolés (Mockés)', () => {
     assert.equal(updateCustomRes.status, 200);
     const updatedCustom = ((await updateCustomRes.json()) as any).guide;
     assert.equal(updatedCustom.title, 'Checklist 7 jours — Version Finale');
-    assert.equal(updatedCustom.category, 'Bonnes pratiques');
+    assert.equal(updatedCustom.category, 'Outils');
+    assert.equal(updatedCustom.tags.length, 8);
+    assert.equal(updatedCustom.tags[0], 'Outils');
+    assert.equal(updatedCustom.tags[1], 'Discord');
+    assert.ok(!updatedCustom.tags.includes('T7-Overflow'));
 
     const updateMissingRes = await app.fetch(
       new Request(`${WORKER_ORIGIN}/api/admin/parrain-guides/guide-inexistant-404`, {

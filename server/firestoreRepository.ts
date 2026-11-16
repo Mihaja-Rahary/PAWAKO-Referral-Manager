@@ -4417,6 +4417,7 @@ export class FirestoreRepository {
       title: string;
       subtitle?: string;
       category?: string;
+      tags?: string[];
       order?: number;
       heroImageUrl?: string | null;
       blocks: ParrainGuideBlock[];
@@ -4442,6 +4443,7 @@ export class FirestoreRepository {
       details: {
         vaType: docToSave.vaType,
         category: docToSave.category,
+        tags: docToSave.tags,
         title: docToSave.title,
         blocksCount: docToSave.blocks.length,
         sizeBytes: byteLength,
@@ -4458,6 +4460,7 @@ export class FirestoreRepository {
       title: string;
       subtitle?: string;
       category?: string;
+      tags?: string[];
       order?: number;
       heroImageUrl?: string | null;
       blocks: ParrainGuideBlock[];
@@ -4514,6 +4517,7 @@ export class FirestoreRepository {
       details: {
         vaType: docToSave.vaType,
         category: docToSave.category,
+        tags: docToSave.tags,
         title: docToSave.title,
         blocksCount: docToSave.blocks.length,
         sizeBytes: byteLength,

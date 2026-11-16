@@ -2,6 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { ParrainGuide, ParrainGuideBlock, ParrainGuideCalloutTone } from '../types';
 import { formatDate, getVaTypeLabel } from '../utils/statusUtils';
 import { estimateReadingMinutes, resolveGuideCoverUrl } from '../utils/blogCovers';
+import { getSpecialtyTheme, getTopicColorTheme } from '../utils/categoryTheme';
 import {
   Info,
   ShieldCheck,
@@ -447,6 +448,9 @@ export const ParrainGuideRenderer: React.FC<Props> = ({ guide, compactHeader = f
   );
 
   const hasSidebarToc = tocSections.length >= 2;
+  const specialtyTheme = getSpecialtyTheme(guide.vaType);
+  const categoryLabel = guide.category || (guide.isPrimary ? 'Guide principal' : 'Article');
+  const categoryTheme = getTopicColorTheme(categoryLabel);
 
   const scrollToSection = (domId: string) => {
     const el = document.getElementById(domId);
@@ -456,46 +460,66 @@ export const ParrainGuideRenderer: React.FC<Props> = ({ guide, compactHeader = f
   };
 
   return (
-    <article className="bg-white dark:bg-[#100b1a] border border-slate-200 dark:border-[#241a38] rounded-2xl overflow-hidden transition-colors">
+    <article className="bg-white dark:bg-[#12121a] border border-slate-200 dark:border-white/10 rounded-2xl overflow-hidden shadow-xs transition-colors">
+      <div className={`h-1 w-full bg-gradient-to-r ${specialtyTheme.gradient}`} />
       {/* Editorial Article Header */}
       <header className={`${compactHeader ? 'px-5 pt-6 pb-5 sm:px-8 sm:pt-8' : 'px-5 pt-7 pb-6 sm:px-10 sm:pt-10'} max-w-5xl mx-auto space-y-5`}>
-        {/* Unboxed Editorial Kicker & Metadata Line */}
-        <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-xs text-slate-500 dark:text-[#9d93b8]">
-          <span className="font-semibold uppercase tracking-wider text-violet-700 dark:text-violet-300">
-            {guide.category || (guide.isPrimary ? 'Guide principal' : 'Article')}
-          </span>
-          <span aria-hidden="true" className="text-slate-300 dark:text-[#3b2d5c]">·</span>
-          <span>Parcours {getVaTypeLabel(guide.vaType)}</span>
-          <span aria-hidden="true" className="text-slate-300 dark:text-[#3b2d5c]">·</span>
-          <span className="inline-flex items-center gap-1 font-mono tabular-nums">
-            <Clock className="w-3.5 h-3.5 text-slate-400 dark:text-[#7c7296]" />
-            {readingMinutes} min de lecture
-          </span>
-          {guide.updatedAt && (
-            <>
-              <span aria-hidden="true" className="text-slate-300 dark:text-[#3b2d5c]">·</span>
-              <span className="font-mono tabular-nums">
-                Mis à jour le {formatDate(guide.updatedAt)}
-              </span>
-            </>
+        {/* Colorful Kicker & Metadata Line */}
+        <div className="space-y-2.5">
+          <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+            <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md border text-[11px] font-bold uppercase tracking-wider ${categoryTheme.badge}`}>
+              <span className={`w-1.5 h-1.5 rounded-full ${categoryTheme.dot}`} />
+              <span>{categoryLabel}</span>
+            </span>
+            <span className={`inline-flex items-center px-2 py-0.5 rounded-md border text-[11px] font-semibold ${specialtyTheme.badge}`}>
+              Parcours {getVaTypeLabel(guide.vaType)}
+            </span>
+            <span className="inline-flex items-center gap-1 font-mono tabular-nums">
+              <Clock className="w-3.5 h-3.5 text-slate-400 dark:text-slate-500" />
+              {readingMinutes} min de lecture
+            </span>
+            {guide.updatedAt && (
+              <>
+                <span aria-hidden="true" className="text-slate-300 dark:text-white/20">·</span>
+                <span className="font-mono tabular-nums">
+                  Mis à jour le {formatDate(guide.updatedAt)}
+                </span>
+              </>
+            )}
+          </div>
+
+          {Array.isArray(guide.tags) && guide.tags.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+              {guide.tags.map(tag => {
+                const tagTheme = getTopicColorTheme(tag);
+                return (
+                  <span
+                    key={tag}
+                    className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md border font-semibold ${tagTheme.badge}`}
+                  >
+                    <span>#{tag}</span>
+                  </span>
+                );
+              })}
+            </div>
           )}
         </div>
 
-        {/* Display Serif Headline */}
-        <h1 className="font-serif text-2xl sm:text-4xl lg:text-[2.55rem] font-bold text-slate-950 dark:text-[#f8f6fc] tracking-tight leading-[1.14] [text-wrap:balance]">
+        {/* Display Headline */}
+        <h1 className="font-serif text-2xl sm:text-4xl lg:text-[2.55rem] font-bold text-slate-950 dark:text-white tracking-tight leading-[1.14] [text-wrap:balance]">
           {guide.title}
         </h1>
 
         {/* Lead Deck / Chapeau */}
         {guide.subtitle && (
-          <p className="text-base sm:text-lg text-slate-600 dark:text-[#b7aed0] leading-relaxed max-w-3xl">
+          <p className="text-base sm:text-lg text-slate-600 dark:text-slate-300 leading-relaxed max-w-3xl">
             {guide.subtitle}
           </p>
         )}
 
         {/* Featured Cover Photo cleanly framed below headline/deck */}
         <div className="pt-2">
-          <div className="aspect-[16/9] max-h-[420px] w-full rounded-2xl overflow-hidden bg-slate-100 dark:bg-[#08050f] border border-slate-200/80 dark:border-[#241a38]">
+          <div className="aspect-[16/9] max-h-[420px] w-full rounded-2xl overflow-hidden bg-slate-100 dark:bg-[#09090d] border border-slate-200/80 dark:border-white/10">
             <SafeImage
               src={coverUrl}
               alt={guide.title}
@@ -508,7 +532,7 @@ export const ParrainGuideRenderer: React.FC<Props> = ({ guide, compactHeader = f
       {/* Main Long-Form Editorial Body + Optional Sticky Sommaire */}
       <div className="px-5 pb-8 sm:px-10 sm:pb-12 pt-4 sm:pt-6 max-w-5xl mx-auto">
         {guide.blocks.length === 0 ? (
-          <div className="border border-dashed border-slate-200 dark:border-[#241a38] rounded-2xl p-10 text-center text-sm text-slate-500 dark:text-[#9d93b8]">
+          <div className="border border-dashed border-slate-200 dark:border-white/10 rounded-2xl p-10 text-center text-sm text-slate-500 dark:text-slate-400">
             Aucun chapitre rédigé dans cet article pour le moment.
           </div>
         ) : hasSidebarToc ? (
@@ -521,10 +545,10 @@ export const ParrainGuideRenderer: React.FC<Props> = ({ guide, compactHeader = f
             </div>
 
             {/* Sticky Table of Contents (~30%) */}
-            <aside className="hidden lg:block lg:col-span-4 sticky top-6 space-y-4">
-              <div className="rounded-2xl border border-slate-200 dark:border-[#241a38] bg-slate-50/70 dark:bg-[#140e22] p-5 space-y-4">
-                <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-[#9d93b8]">
-                  <ListChecks className="w-4 h-4 text-violet-600 dark:text-violet-400" />
+            <aside className="hidden lg:block lg:col-span-4 sticky top-20 space-y-4">
+              <div className="rounded-2xl border border-slate-200 dark:border-white/10 bg-slate-50/80 dark:bg-[#171722] p-5 space-y-4">
+                <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-slate-600 dark:text-slate-300">
+                  <ListChecks className={`w-4 h-4 ${specialtyTheme.text}`} />
                   <span>Sommaire de l&apos;article</span>
                 </div>
 
@@ -534,9 +558,9 @@ export const ParrainGuideRenderer: React.FC<Props> = ({ guide, compactHeader = f
                       key={sec.id}
                       type="button"
                       onClick={() => scrollToSection(sec.domId)}
-                      className="w-full text-left py-1.5 px-2.5 rounded-lg text-xs text-slate-600 dark:text-[#c4badb] hover:bg-white dark:hover:bg-[#1d1431] hover:text-slate-950 dark:hover:text-white transition-colors flex items-baseline gap-2.5 cursor-pointer"
+                      className="w-full text-left py-1.5 px-2.5 rounded-lg text-xs text-slate-600 dark:text-slate-300 hover:bg-white dark:hover:bg-white/5 hover:text-slate-950 dark:hover:text-white transition-colors flex items-baseline gap-2.5 cursor-pointer"
                     >
-                      <span className="font-mono tabular-nums text-[11px] text-violet-600 dark:text-violet-400 shrink-0">
+                      <span className={`font-mono tabular-nums text-[11px] font-bold shrink-0 ${specialtyTheme.text}`}>
                         {sec.number}
                       </span>
                       <span className="leading-snug font-medium line-clamp-2">{sec.title}</span>
@@ -544,9 +568,9 @@ export const ParrainGuideRenderer: React.FC<Props> = ({ guide, compactHeader = f
                   ))}
                 </nav>
 
-                <div className="pt-3 border-t border-slate-200/80 dark:border-[#241a38] text-[11px] text-slate-500 dark:text-[#9d93b8] flex items-center justify-between">
+                <div className="pt-3 border-t border-slate-200/80 dark:border-white/10 text-[11px] text-slate-500 dark:text-slate-400 flex items-center justify-between">
                   <span className="inline-flex items-center gap-1.5">
-                    <BookOpen className="w-3.5 h-3.5 text-violet-500" />
+                    <BookOpen className={`w-3.5 h-3.5 ${specialtyTheme.text}`} />
                     <span>PAWAKO Éditorial</span>
                   </span>
                   <span className="font-mono tabular-nums">{readingMinutes} min</span>
