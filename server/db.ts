@@ -696,13 +696,13 @@ class DatabaseService {
     return existing;
   }
 
-  getParrainGuide(vaType: VAType): ParrainGuide {
+  getParrainGuide(vaType: VAType): ParrainGuide | null {
     if (vaType !== 'CHATTEUR' && vaType !== 'INSTAGRAM') {
       throw new Error('Spécialité invalide (CHATTEUR ou INSTAGRAM attendu).');
     }
     const stored = this.data.parrain_guides?.[vaType];
-    if (!stored) {
-      return buildDefaultParrainGuide(vaType);
+    if (!stored || stored.isArchived === true) {
+      return null;
     }
     return normalizeStoredParrainGuide({
       ...stored,
@@ -714,26 +714,11 @@ class DatabaseService {
   listParrainGuides(): ParrainGuide[] {
     const storedMap = this.data.parrain_guides || {};
     const byId = new Map<string, ParrainGuide>();
-    const archivedPrimaryIds = new Set<string>();
 
     for (const [key, raw] of Object.entries(storedMap)) {
-      if (!raw) continue;
-      const rawId = String(raw.id || key).trim().toUpperCase();
-      if (raw.isArchived === true) {
-        if (rawId === 'CHATTEUR' || rawId === 'INSTAGRAM') {
-          archivedPrimaryIds.add(rawId);
-        }
-        continue;
-      }
+      if (!raw || raw.isArchived === true) continue;
       const normalized = normalizeStoredParrainGuide({ ...raw, id: raw.id || key });
       byId.set(normalized.id, normalized);
-    }
-
-    if (!byId.has('CHATTEUR') && !archivedPrimaryIds.has('CHATTEUR')) {
-      byId.set('CHATTEUR', buildDefaultParrainGuide('CHATTEUR'));
-    }
-    if (!byId.has('INSTAGRAM') && !archivedPrimaryIds.has('INSTAGRAM')) {
-      byId.set('INSTAGRAM', buildDefaultParrainGuide('INSTAGRAM'));
     }
 
     return sortParrainGuides(Array.from(byId.values()));
@@ -743,10 +728,11 @@ class DatabaseService {
     return this.listParrainGuides().filter(g => g.vaType === vaType);
   }
 
-  getAllParrainGuides(): Record<VAType, ParrainGuide> {
+  getAllParrainGuides(): Partial<Record<VAType, ParrainGuide>> {
+    const all = this.listParrainGuides();
     return {
-      CHATTEUR: this.getParrainGuide('CHATTEUR'),
-      INSTAGRAM: this.getParrainGuide('INSTAGRAM'),
+      CHATTEUR: all.find(g => g.id === 'CHATTEUR'),
+      INSTAGRAM: all.find(g => g.id === 'INSTAGRAM'),
     };
   }
 
@@ -858,85 +844,33 @@ class DatabaseService {
       },
     });
 
-    return { ...doc, isDefault: false, isPrimary };
+    return { ...doc, isDefault: false, isPrimary: false };
   }
 
   deleteParrainGuide(
     guideId: string,
-    actor: { id: string; displayName: string },
-    options?: { permanent?: boolean }
-  ): { deletedId: string; resetToDefault: boolean; archived?: boolean; vaType: VAType } {
+    actor: { id: string; displayName: string }
+  ): { deletedId: string; resetToDefault: boolean; vaType: VAType } {
     const trimmedId = (guideId || '').trim();
-    const isPrimary = isPrimaryGuideId(trimmedId);
-    const targetId = isPrimary ? trimmedId.toUpperCase() : trimmedId;
+    const isLegacyTrackId = isPrimaryGuideId(trimmedId);
+    const targetId = isLegacyTrackId ? trimmedId.toUpperCase() : trimmedId;
 
     if (!isValidGuideId(targetId)) {
       throw new Error('Identifiant de guide invalide.');
     }
 
     const existing = this.data.parrain_guides?.[targetId];
-    if (!isPrimary && !existing) {
-      const err: any = new Error('Guide de parrainage introuvable.');
+    if (!existing) {
+      const err: any = new Error('Article de parrainage introuvable.');
       err.status = 404;
       throw err;
     }
 
-    const vaType: VAType = isPrimary
+    const vaType: VAType = isLegacyTrackId
       ? (targetId as VAType)
-      : existing?.vaType === 'INSTAGRAM'
+      : existing.vaType === 'INSTAGRAM'
         ? 'INSTAGRAM'
         : 'CHATTEUR';
-
-    const permanent = Boolean(options?.permanent);
-
-    if (isPrimary && permanent) {
-      if (existing?.isArchived === true) {
-        const err: any = new Error('Ce guide parrain a déjà été supprimé.');
-        err.status = 404;
-        throw err;
-      }
-
-      if (!this.data.parrain_guides) {
-        this.data.parrain_guides = {};
-      }
-      const now = new Date().toISOString();
-      const archivedDoc: ParrainGuide = {
-        id: targetId,
-        vaType,
-        title: existing?.title || buildDefaultParrainGuide(vaType).title,
-        subtitle: '',
-        blocks: [],
-        createdAt: existing?.createdAt || now,
-        updatedAt: now,
-        updatedByUserId: actor.id,
-        updatedByName: actor.displayName,
-        isPrimary: true,
-        isArchived: true,
-      };
-      this.data.parrain_guides[targetId] = archivedDoc;
-      this.saveDatabase();
-
-      this.logAudit({
-        action: 'PARRAIN_GUIDE_DELETED',
-        actorUserId: actor.id,
-        actorName: actor.displayName,
-        targetType: 'PARRAIN_GUIDE',
-        targetId,
-        details: {
-          vaType,
-          title: archivedDoc.title,
-          resetToDefault: false,
-          permanent: true,
-        },
-      });
-
-      return {
-        deletedId: targetId,
-        resetToDefault: false,
-        archived: true,
-        vaType,
-      };
-    }
 
     if (this.data.parrain_guides && targetId in this.data.parrain_guides) {
       delete this.data.parrain_guides[targetId];
@@ -951,46 +885,16 @@ class DatabaseService {
       targetId,
       details: {
         vaType,
-        title: existing?.title || buildDefaultParrainGuide(vaType).title,
-        resetToDefault: isPrimary,
+        title: existing.title || 'Article supprimé',
+        resetToDefault: false,
       },
     });
 
     return {
       deletedId: targetId,
-      resetToDefault: isPrimary,
-      archived: false,
+      resetToDefault: false,
       vaType,
     };
-  }
-
-  restoreDefaultParrainGuide(
-    vaType: VAType,
-    actor: { id: string; displayName: string }
-  ): ParrainGuide {
-    if (vaType !== 'CHATTEUR' && vaType !== 'INSTAGRAM') {
-      throw new Error('Spécialité invalide (CHATTEUR ou INSTAGRAM attendu).');
-    }
-
-    if (this.data.parrain_guides && vaType in this.data.parrain_guides) {
-      delete this.data.parrain_guides[vaType];
-      this.saveDatabase();
-    }
-
-    const restored = buildDefaultParrainGuide(vaType);
-    this.logAudit({
-      action: 'PARRAIN_GUIDE_RESTORED',
-      actorUserId: actor.id,
-      actorName: actor.displayName,
-      targetType: 'PARRAIN_GUIDE',
-      targetId: vaType,
-      details: {
-        vaType,
-        title: restored.title,
-      },
-    });
-
-    return restored;
   }
 
   incrementReferrerUsage(referrerId: string): void {

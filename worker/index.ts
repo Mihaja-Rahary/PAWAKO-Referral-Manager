@@ -1663,18 +1663,12 @@ app.delete('/api/admin/parrain-guides/:guideId', async c => {
   }
 
   const rawParam = c.req.param('guideId') || '';
-  const permanentParam = c.req.query('permanent');
-  const permanent = permanentParam === 'true' || permanentParam === '1';
 
   try {
-    const result = await repo.deleteParrainGuide(
-      rawParam,
-      {
-        id: user.id,
-        displayName: user.displayName,
-      },
-      { permanent }
-    );
+    const result = await repo.deleteParrainGuide(rawParam, {
+      id: user.id,
+      displayName: user.displayName,
+    });
     const guideList = await repo.listParrainGuides();
     const guides = {
       CHATTEUR: guideList.find(g => g.id === 'CHATTEUR'),
@@ -1685,40 +1679,6 @@ app.delete('/api/admin/parrain-guides/:guideId', async c => {
     if (err instanceof FirestoreRestError) throw err;
     const status = err?.status === 404 ? 404 : 400;
     return c.json({ error: err?.message || 'Impossible de supprimer le guide parrain.' }, status);
-  }
-});
-
-app.post('/api/admin/parrain-guides/:guideId/restore-default', async c => {
-  const repo = getRepository(c.env);
-  const user = await getAuthenticatedUser(c, repo);
-
-  if (!user) {
-    return c.json({ error: 'Session non authentifiée.' }, 401);
-  }
-
-  if (user.role !== 'ADMINISTRATEUR') {
-    return c.json({ error: 'Seuls les Administrateurs peuvent restaurer les guides parrains.' }, 403);
-  }
-
-  const rawParam = (c.req.param('guideId') || '').trim().toUpperCase();
-  if (rawParam !== 'CHATTEUR' && rawParam !== 'INSTAGRAM') {
-    return c.json({ error: 'Spécialité invalide (CHATTEUR ou INSTAGRAM attendu).' }, 400);
-  }
-
-  try {
-    const guide = await repo.restoreDefaultParrainGuide(rawParam as VAType, {
-      id: user.id,
-      displayName: user.displayName,
-    });
-    const guideList = await repo.listParrainGuides();
-    const guides = {
-      CHATTEUR: guideList.find(g => g.id === 'CHATTEUR'),
-      INSTAGRAM: guideList.find(g => g.id === 'INSTAGRAM'),
-    };
-    return c.json({ success: true, guide, guides, guideList });
-  } catch (err: any) {
-    if (err instanceof FirestoreRestError) throw err;
-    return c.json({ error: err?.message || 'Impossible de restaurer le guide officiel.' }, 400);
   }
 });
 

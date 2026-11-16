@@ -531,32 +531,16 @@ export const api = {
     });
   },
 
-  async deleteAdminParrainGuide(
-    guideId: string,
-    options?: { permanent?: boolean }
-  ): Promise<{
+  async deleteAdminParrainGuide(guideId: string): Promise<{
     success: boolean;
     deletedId: string;
     resetToDefault: boolean;
-    archived?: boolean;
     vaType: VAType;
     guides?: Partial<Record<VAType, ParrainGuide>>;
     guideList?: ParrainGuide[];
   }> {
-    const qs = options?.permanent ? '?permanent=true' : '';
-    return request(`/api/admin/parrain-guides/${encodeURIComponent(guideId)}${qs}`, {
+    return request(`/api/admin/parrain-guides/${encodeURIComponent(guideId)}`, {
       method: 'DELETE',
-    });
-  },
-
-  async restoreDefaultAdminParrainGuide(vaType: VAType): Promise<{
-    success: boolean;
-    guide: ParrainGuide;
-    guides?: Partial<Record<VAType, ParrainGuide>>;
-    guideList?: ParrainGuide[];
-  }> {
-    return request(`/api/admin/parrain-guides/${encodeURIComponent(vaType)}/restore-default`, {
-      method: 'POST',
     });
   },
 

@@ -93,7 +93,7 @@ export function extractGuideExcerpt(guide: ParrainGuide, maxLength = 155): strin
     }
   }
 
-  return 'Découvrez les conseils, règles officielles et bonnes pratiques pour accompagner vos filleuls.';
+  return '';
 }
 
 export function estimateReadingMinutes(guide: ParrainGuide): number {

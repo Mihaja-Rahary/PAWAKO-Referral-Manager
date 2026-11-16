@@ -739,17 +739,12 @@ apiRouter.put('/admin/parrain-guides/:guideId', requireAdmin, (req: Request, res
 apiRouter.delete('/admin/parrain-guides/:guideId', requireAdmin, (req: Request, res: Response) => {
   const currentUser: User = (req as any).user;
   const rawParam = req.params.guideId || '';
-  const permanent = req.query.permanent === 'true' || req.query.permanent === '1';
 
   try {
-    const result = db.deleteParrainGuide(
-      rawParam,
-      {
-        id: currentUser.id,
-        displayName: currentUser.displayName,
-      },
-      { permanent }
-    );
+    const result = db.deleteParrainGuide(rawParam, {
+      id: currentUser.id,
+      displayName: currentUser.displayName,
+    });
     const guideList = db.listParrainGuides();
     const guides = {
       CHATTEUR: guideList.find(g => g.id === 'CHATTEUR'),
@@ -759,29 +754,6 @@ apiRouter.delete('/admin/parrain-guides/:guideId', requireAdmin, (req: Request, 
   } catch (err: any) {
     const status = err?.status === 404 ? 404 : 400;
     res.status(status).json({ error: err?.message || 'Impossible de supprimer le guide parrain.' });
-  }
-});
-
-apiRouter.post('/admin/parrain-guides/:guideId/restore-default', requireAdmin, (req: Request, res: Response) => {
-  const currentUser: User = (req as any).user;
-  const rawParam = (req.params.guideId || '').trim().toUpperCase();
-  if (rawParam !== 'CHATTEUR' && rawParam !== 'INSTAGRAM') {
-    return res.status(400).json({ error: 'Spécialité invalide (CHATTEUR ou INSTAGRAM attendu).' });
-  }
-
-  try {
-    const guide = db.restoreDefaultParrainGuide(rawParam as VAType, {
-      id: currentUser.id,
-      displayName: currentUser.displayName,
-    });
-    const guideList = db.listParrainGuides();
-    const guides = {
-      CHATTEUR: guideList.find(g => g.id === 'CHATTEUR'),
-      INSTAGRAM: guideList.find(g => g.id === 'INSTAGRAM'),
-    };
-    res.json({ success: true, guide, guides, guideList });
-  } catch (err: any) {
-    res.status(400).json({ error: err?.message || 'Impossible de restaurer le guide officiel.' });
   }
 });
 

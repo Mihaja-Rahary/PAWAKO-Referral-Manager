@@ -1113,8 +1113,9 @@ export const ParrainPortalView: React.FC<Props> = ({
                       {(() => {
                         const leadCover = resolveGuideCoverUrl(leadGuide);
                         const leadMinutes = estimateReadingMinutes(leadGuide);
-                        const leadCat = leadGuide.category || 'Guide principal';
-                        const leadTheme = getTopicColorTheme(leadCat);
+                        const leadCat = leadGuide.category?.trim() || '';
+                        const leadExcerpt = extractGuideExcerpt(leadGuide, 190);
+                        const leadTheme = getTopicColorTheme(leadCat || leadGuide.vaType);
 
                         return (
                           <button
@@ -1141,10 +1142,12 @@ export const ParrainPortalView: React.FC<Props> = ({
                             <div className="md:col-span-6 p-5 sm:p-6 flex flex-col justify-between gap-4">
                               <div className="space-y-3">
                                 <div className="flex flex-wrap items-center gap-2 text-[11px]">
-                                  <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md border font-bold uppercase tracking-wider ${leadTheme.badge}`}>
-                                    <span className={`w-1.5 h-1.5 rounded-full ${leadTheme.dot}`} />
-                                    <span>{leadCat}</span>
-                                  </span>
+                                  {leadCat && (
+                                    <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md border font-bold uppercase tracking-wider ${leadTheme.badge}`}>
+                                      <span className={`w-1.5 h-1.5 rounded-full ${leadTheme.dot}`} />
+                                      <span>{leadCat}</span>
+                                    </span>
+                                  )}
                                   <span className="inline-flex items-center gap-1 font-mono tabular-nums text-slate-500 dark:text-slate-400">
                                     <Clock className="w-3 h-3" />
                                     {leadMinutes} min
@@ -1155,9 +1158,11 @@ export const ParrainPortalView: React.FC<Props> = ({
                                   {leadGuide.title}
                                 </h3>
 
-                                <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-300 leading-relaxed line-clamp-3">
-                                  {extractGuideExcerpt(leadGuide, 190)}
-                                </p>
+                                {leadExcerpt && (
+                                  <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-300 leading-relaxed line-clamp-3">
+                                    {leadExcerpt}
+                                  </p>
+                                )}
 
                                 {Array.isArray(leadGuide.tags) && leadGuide.tags.length > 0 && (
                                   <div className="flex flex-wrap items-center gap-1.5">
@@ -1193,8 +1198,9 @@ export const ParrainPortalView: React.FC<Props> = ({
                               const itemCover = resolveGuideCoverUrl(item);
                               const itemMinutes = estimateReadingMinutes(item);
                               const itemTags = Array.isArray(item.tags) ? item.tags.slice(0, 4) : [];
-                              const itemCat = item.category || 'Onboarding';
-                              const itemTheme = getTopicColorTheme(itemCat);
+                              const itemCat = item.category?.trim() || '';
+                              const itemExcerpt = extractGuideExcerpt(item, 150);
+                              const itemTheme = getTopicColorTheme(itemCat || item.vaType);
 
                               return (
                                 <button
@@ -1218,10 +1224,14 @@ export const ParrainPortalView: React.FC<Props> = ({
                                   <div className="flex-1 min-w-0 flex flex-col justify-between gap-3">
                                     <div className="space-y-2">
                                       <div className="flex flex-wrap items-center justify-between gap-2 text-[11px]">
-                                        <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md border font-bold uppercase tracking-wider ${itemTheme.badge}`}>
-                                          <span className={`w-1.5 h-1.5 rounded-full ${itemTheme.dot}`} />
-                                          <span>{itemCat}</span>
-                                        </span>
+                                        {itemCat ? (
+                                          <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md border font-bold uppercase tracking-wider ${itemTheme.badge}`}>
+                                            <span className={`w-1.5 h-1.5 rounded-full ${itemTheme.dot}`} />
+                                            <span>{itemCat}</span>
+                                          </span>
+                                        ) : (
+                                          <span />
+                                        )}
                                         <span className="inline-flex items-center gap-1 font-mono tabular-nums text-slate-500 dark:text-slate-400">
                                           <Clock className="w-3 h-3" />
                                           {itemMinutes} min
@@ -1232,9 +1242,11 @@ export const ParrainPortalView: React.FC<Props> = ({
                                         {item.title}
                                       </h4>
 
-                                      <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed line-clamp-2">
-                                        {extractGuideExcerpt(item, 150)}
-                                      </p>
+                                      {itemExcerpt && (
+                                        <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed line-clamp-2">
+                                          {itemExcerpt}
+                                        </p>
+                                      )}
                                     </div>
 
                                     <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-100 dark:border-white/10">
@@ -1268,8 +1280,9 @@ export const ParrainPortalView: React.FC<Props> = ({
                               const itemCover = resolveGuideCoverUrl(item);
                               const itemMinutes = estimateReadingMinutes(item);
                               const itemTags = Array.isArray(item.tags) ? item.tags.slice(0, 3) : [];
-                              const itemCat = item.category || 'Onboarding';
-                              const itemTheme = getTopicColorTheme(itemCat);
+                              const itemCat = item.category?.trim() || '';
+                              const itemExcerpt = extractGuideExcerpt(item, 140);
+                              const itemTheme = getTopicColorTheme(itemCat || item.vaType);
 
                               return (
                                 <button
@@ -1293,10 +1306,14 @@ export const ParrainPortalView: React.FC<Props> = ({
                                   <div className="p-5 flex-1 flex flex-col justify-between gap-4">
                                     <div className="space-y-2.5">
                                       <div className="flex flex-wrap items-center justify-between gap-2 text-[11px]">
-                                        <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md border font-bold uppercase tracking-wider ${itemTheme.badge}`}>
-                                          <span className={`w-1.5 h-1.5 rounded-full ${itemTheme.dot}`} />
-                                          <span>{itemCat}</span>
-                                        </span>
+                                        {itemCat ? (
+                                          <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md border font-bold uppercase tracking-wider ${itemTheme.badge}`}>
+                                            <span className={`w-1.5 h-1.5 rounded-full ${itemTheme.dot}`} />
+                                            <span>{itemCat}</span>
+                                          </span>
+                                        ) : (
+                                          <span />
+                                        )}
                                         <span className="inline-flex items-center gap-1 font-mono tabular-nums text-slate-500 dark:text-slate-400">
                                           <Clock className="w-3 h-3" />
                                           {itemMinutes} min
@@ -1307,9 +1324,11 @@ export const ParrainPortalView: React.FC<Props> = ({
                                         {item.title}
                                       </h4>
 
-                                      <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed line-clamp-3">
-                                        {extractGuideExcerpt(item, 140)}
-                                      </p>
+                                      {itemExcerpt && (
+                                        <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed line-clamp-3">
+                                          {itemExcerpt}
+                                        </p>
+                                      )}
 
                                       {itemTags.length > 0 && (
                                         <div className="flex flex-wrap items-center gap-1 pt-0.5">

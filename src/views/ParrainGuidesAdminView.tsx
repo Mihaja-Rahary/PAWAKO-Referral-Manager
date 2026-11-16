@@ -37,7 +37,6 @@ import {
   CheckCircle2,
   Lock,
   Search,
-  RotateCcw,
   X,
   FilePlus2,
   Clock,
@@ -75,60 +74,8 @@ function cleanTagLabel(raw: string): string {
   return raw.replace(/^#+/, '').replace(/\s+/g, ' ').trim().slice(0, 32);
 }
 
-type StarterTemplate = 'onboarding' | 'remuneration' | 'blank';
-
 function createBlockId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-}
-
-function buildStarterBlocks(template: StarterTemplate, vaType: VAType): ParrainGuideBlock[] {
-  const trackLabel = vaType === 'CHATTEUR' ? 'VA Chatteur' : 'VA Instagram';
-  if (template === 'onboarding') {
-    return [
-      {
-        id: createBlockId('txt'),
-        type: 'TEXT',
-        title: `Bienvenue dans le parcours ${trackLabel}`,
-        body: `## Vos premières étapes de parrainage\n\n1. Vérifiez que votre lien Discord officiel est actif dans l'onglet **Mes Filleuls & Lien**.\n2. Présentez clairement les attentes du poste **${trackLabel}** avant d'envoyer votre lien.\n3. Suivez chaque filleul dès son arrivée jusqu'à sa mise en production.`,
-      },
-      {
-        id: createBlockId('call'),
-        type: 'CALLOUT',
-        tone: 'condition',
-        title: 'Point clé à retenir',
-        body: `Seuls les filleuls actifs en **${trackLabel}** sont affichés dans votre espace et éligibles à la rémunération.`,
-      },
-    ];
-  }
-  if (template === 'remuneration') {
-    return [
-      {
-        id: createBlockId('tbl'),
-        type: 'TABLE',
-        title: `Barème & Paliers ${trackLabel}`,
-        headers: ['Palier', 'Condition de validation', 'Rémunération'],
-        rows: [
-          ['Palier 1', 'Filleul validé et actif 14 jours', 'À compléter'],
-          ['Palier 2', 'Objectif de performance atteint', 'À compléter'],
-        ],
-      },
-      {
-        id: createBlockId('call'),
-        type: 'CALLOUT',
-        tone: 'info',
-        title: 'Modalités de versement',
-        body: 'Précisez ici les dates de calcul et les conditions de versement des primes.',
-      },
-    ];
-  }
-  return [
-    {
-      id: createBlockId('txt'),
-      type: 'TEXT',
-      title: 'Introduction',
-      body: 'Rédigez votre article avec la barre visuelle ci-dessus : titres, listes, citations et liens.',
-    },
-  ];
 }
 
 async function compressImageFileToDataUrl(file: File): Promise<string> {
@@ -220,21 +167,16 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [newTitle, setNewTitle] = useState('');
   const [newVaType, setNewVaType] = useState<VAType>('CHATTEUR');
-  const [newCategory, setNewCategory] = useState('Onboarding');
-  const [newTags, setNewTags] = useState<string[]>(['Onboarding']);
+  const [newCategory, setNewCategory] = useState('');
+  const [newTags, setNewTags] = useState<string[]>([]);
   const [newTagInput, setNewTagInput] = useState('');
   const [newSubtitle, setNewSubtitle] = useState('');
-  const [newTemplate, setNewTemplate] = useState<StarterTemplate>('onboarding');
   const [createError, setCreateError] = useState<string | null>(null);
   const [isCreating, setIsCreating] = useState(false);
 
-  // Delete / Reset Confirmation Modal state
-  const [confirmDeleteGuide, setConfirmDeleteGuide] = useState<{
-    guide: ParrainGuide;
-    mode: 'delete' | 'reset';
-  } | null>(null);
+  // Delete Confirmation Modal state
+  const [confirmDeleteGuide, setConfirmDeleteGuide] = useState<ParrainGuide | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
-  const [isRestoringDefault, setIsRestoringDefault] = useState(false);
 
   // Unsaved guard modal when switching guides
   const [pendingSwitchGuide, setPendingSwitchGuide] = useState<ParrainGuide | null>(null);
@@ -435,15 +377,15 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
       newBlock = {
         id: createBlockId('tbl'),
         type: 'TABLE',
-        title: 'Nouveau tableau',
-        headers: ['Critère', 'Détail', 'Validation'],
-        rows: [['Exemple ligne 1', 'À compléter', 'Condition requise']],
+        title: '',
+        headers: ['Colonne 1', 'Colonne 2'],
+        rows: [['', '']],
       };
     } else if (type === 'IMAGE') {
       newBlock = {
         id: createBlockId('img'),
         type: 'IMAGE',
-        title: 'Illustration / Schéma',
+        title: '',
         imageUrl: '',
         caption: '',
       };
@@ -452,15 +394,15 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
         id: createBlockId('call'),
         type: 'CALLOUT',
         tone: 'condition',
-        title: 'Condition / Point d’attention',
-        body: 'Expliquez ici la **règle importante** ou la bonne pratique à respecter.',
+        title: '',
+        body: '',
       };
     } else {
       newBlock = {
         id: createBlockId('txt'),
         type: 'TEXT',
-        title: 'Nouveau chapitre',
-        body: 'Rédigez votre contenu ici.\n\n- Utilisez la barre visuelle ci-dessus pour formater votre texte\n- Ajoutez des liens utiles pour accompagner les nouveaux parrains',
+        title: '',
+        body: '',
       };
     }
 
@@ -578,9 +520,9 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
         vaType: draft.vaType,
         title: draft.title.trim(),
         subtitle: draft.subtitle || '',
-        category: draft.category || (draft.isPrimary ? 'Guide principal' : 'Onboarding'),
+        category: draft.category || '',
         tags: Array.isArray(draft.tags) ? draft.tags : [],
-        order: typeof draft.order === 'number' ? draft.order : draft.isPrimary ? 0 : 10,
+        order: typeof draft.order === 'number' ? draft.order : 10,
         heroImageUrl: draft.heroImageUrl || null,
         blocks: draft.blocks,
       });
@@ -673,11 +615,10 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
   const openCreateModal = () => {
     setNewTitle('');
     setNewVaType(activeVaType);
-    setNewCategory('Onboarding');
-    setNewTags(['Onboarding']);
+    setNewCategory('');
+    setNewTags([]);
     setNewTagInput('');
     setNewSubtitle('');
-    setNewTemplate('onboarding');
     setCreateError(null);
     setShowCreateModal(true);
   };
@@ -693,16 +634,16 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
     try {
       setIsCreating(true);
       setCreateError(null);
-      const nextOrder = (guidesByTrack[newVaType]?.length || 1) * 10;
+      const nextOrder = (guidesByTrack[newVaType]?.length || 0) * 10;
       const res = await api.createAdminParrainGuide({
         vaType: newVaType,
         title: newTitle.trim(),
         subtitle: newSubtitle.trim(),
-        category: newCategory.trim() || 'Onboarding',
+        category: newCategory.trim(),
         tags: newTags,
         order: nextOrder,
         heroImageUrl: null,
-        blocks: buildStarterBlocks(newTemplate, newVaType),
+        blocks: [],
       });
 
       setGuideList(prev => [...prev, res.guide]);
@@ -715,7 +656,7 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
       setMode('edit');
       setFeedback({
         type: 'ok',
-        text: `Nouvel article « ${res.guide.title} » créé. Vous pouvez maintenant le rédiger et le publier.`,
+        text: `Nouvel article vierge « ${res.guide.title} » créé. Vous pouvez maintenant le rédiger et le publier.`,
       });
     } catch (err: any) {
       setCreateError(err?.message || "Impossible de créer l'article.");
@@ -728,9 +669,8 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
     if (!confirmDeleteGuide || !isAdmin || isDeleting) return;
     try {
       setIsDeleting(true);
-      const { guide: target, mode: deleteMode } = confirmDeleteGuide;
-      const isPermanentDelete = deleteMode === 'delete';
-      const res = await api.deleteAdminParrainGuide(target.id, { permanent: isPermanentDelete });
+      const target = confirmDeleteGuide;
+      const res = await api.deleteAdminParrainGuide(target.id);
 
       const nextList: ParrainGuide[] = Array.isArray(res.guideList)
         ? res.guideList
@@ -739,11 +679,7 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
       setGuideList(nextList);
       setConfirmDeleteGuide(null);
 
-      const fallbackGuide =
-        (res.resetToDefault
-          ? nextList.find(g => g.id === target.id)
-          : nextList.find(g => g.vaType === target.vaType && g.id === target.vaType) ||
-            nextList.find(g => g.vaType === target.vaType)) || null;
+      const fallbackGuide = nextList.find(g => g.vaType === target.vaType) || null;
 
       if (fallbackGuide) {
         setActiveVaType(fallbackGuide.vaType);
@@ -757,9 +693,7 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
       setIsDirty(false);
       setFeedback({
         type: 'ok',
-        text: res.resetToDefault
-          ? `L'article principal « ${target.title} » a été réinitialisé sur le modèle par défaut.`
-          : `L'article « ${target.title} » a été supprimé du journal des parrains.`,
+        text: `L'article « ${target.title} » a été supprimé définitivement.`,
       });
     } catch (err: any) {
       setConfirmDeleteGuide(null);
@@ -769,35 +703,6 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
       });
     } finally {
       setIsDeleting(false);
-    }
-  };
-
-  const handleRestoreDefaultGuide = async (vaType: VAType) => {
-    if (!isAdmin || isRestoringDefault) return;
-    try {
-      setIsRestoringDefault(true);
-      setFeedback(null);
-      const res = await api.restoreDefaultAdminParrainGuide(vaType);
-      const nextList = Array.isArray(res.guideList)
-        ? res.guideList
-        : [...guideList.filter(g => g.id !== res.guide.id), res.guide];
-      setGuideList(nextList);
-      setActiveVaType(vaType);
-      setActiveCategoryFilter('ALL');
-      setSelectedGuideId(res.guide.id);
-      setDraft(structuredClone(res.guide));
-      setIsDirty(false);
-      setFeedback({
-        type: 'ok',
-        text: `Le guide officiel « ${res.guide.title} » a été restauré dans le journal.`,
-      });
-    } catch (err: any) {
-      setFeedback({
-        type: 'err',
-        text: err?.message || 'Impossible de restaurer le guide officiel.',
-      });
-    } finally {
-      setIsRestoringDefault(false);
     }
   };
 
@@ -842,8 +747,6 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
     );
   }
 
-  const isPrimaryDraft = Boolean(draft && (draft.isPrimary || draft.id === 'CHATTEUR' || draft.id === 'INSTAGRAM'));
-  const hasPrimaryInActiveTrack = guidesByTrack[activeVaType].some(g => g.id === activeVaType);
   const resolvedCover = draft ? resolveGuideCoverUrl(draft) : '';
   const draftMinutes = draft ? estimateReadingMinutes(draft) : 1;
 
@@ -980,21 +883,8 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
         {/* Visual Blog Cards Selector with Category & Tag Organization Filter */}
         <div className="pt-4 border-t border-slate-100 dark:border-[#1e1530] space-y-3">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-            <div className="flex flex-wrap items-center gap-2.5">
-              <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-500 dark:text-[#9d93b8]">
-                Articles publiés dans ce journal ({guidesByTrack[activeVaType].length})
-              </div>
-              {isAdmin && !hasPrimaryInActiveTrack && (
-                <button
-                  type="button"
-                  disabled={isRestoringDefault}
-                  onClick={() => handleRestoreDefaultGuide(activeVaType)}
-                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-semibold text-violet-700 dark:text-violet-300 bg-violet-50 dark:bg-violet-950/30 hover:bg-violet-100 dark:hover:bg-violet-950/50 border border-violet-200 dark:border-violet-500/30 cursor-pointer disabled:opacity-50"
-                >
-                  <RotateCcw className={`w-3 h-3 ${isRestoringDefault ? 'animate-spin' : ''}`} />
-                  <span>Restaurer le guide officiel</span>
-                </button>
-              )}
+            <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-500 dark:text-[#9d93b8]">
+              Articles publiés dans ce journal ({guidesByTrack[activeVaType].length})
             </div>
             {guidesByTrack[activeVaType].length > 1 && (
               <div className="relative w-full sm:w-64">
@@ -1070,15 +960,6 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
                     <Plus className="w-3.5 h-3.5" />
                     <span>Créer un article</span>
                   </button>
-                  <button
-                    type="button"
-                    disabled={isRestoringDefault}
-                    onClick={() => handleRestoreDefaultGuide(activeVaType)}
-                    className="px-3.5 py-1.5 bg-slate-100 dark:bg-[#171026] hover:bg-slate-200 dark:hover:bg-[#231839] text-slate-800 dark:text-[#f4f1fa] font-semibold rounded-lg inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
-                  >
-                    <RotateCcw className={`w-3.5 h-3.5 ${isRestoringDefault ? 'animate-spin' : ''}`} />
-                    <span>Restaurer le guide officiel par défaut</span>
-                  </button>
                 </div>
               )}
             </div>
@@ -1107,8 +988,9 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
                 const thumbUrl = resolveGuideCoverUrl(g);
                 const mins = estimateReadingMinutes(g);
                 const cardTags = Array.isArray(g.tags) ? g.tags.slice(0, 3) : [];
-                const cardCat = g.category || (g.isPrimary ? 'Guide principal' : 'Onboarding');
-                const cardTheme = getTopicColorTheme(cardCat);
+                const cardCat = (g.category || '').trim();
+                const cardExcerpt = extractGuideExcerpt(g, 95);
+                const cardTheme = getTopicColorTheme(cardCat || g.title);
                 return (
                   <div
                     key={g.id}
@@ -1138,18 +1020,24 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
                     <div className="p-3.5 space-y-1.5 flex-1 flex flex-col justify-between">
                       <div className="space-y-1.5">
                         <div className="flex items-center justify-between gap-2 text-[11px] text-slate-500 dark:text-[#9d93b8]">
-                          <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md border font-bold uppercase tracking-wider truncate ${cardTheme.badge}`}>
-                            <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${cardTheme.dot}`} />
-                            <span className="truncate">{cardCat}</span>
-                          </span>
+                          {cardCat ? (
+                            <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md border font-bold uppercase tracking-wider truncate ${cardTheme.badge}`}>
+                              <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${cardTheme.dot}`} />
+                              <span className="truncate">{cardCat}</span>
+                            </span>
+                          ) : (
+                            <span />
+                          )}
                           <span className="font-mono tabular-nums shrink-0">{mins} min</span>
                         </div>
                         <div className="font-serif text-sm font-bold text-slate-900 dark:text-[#f4f1fa] line-clamp-2 leading-snug">
                           {g.title}
                         </div>
-                        <p className="text-[11px] text-slate-500 dark:text-[#9d93b8] line-clamp-2 leading-relaxed">
-                          {extractGuideExcerpt(g, 95)}
-                        </p>
+                        {cardExcerpt && (
+                          <p className="text-[11px] text-slate-500 dark:text-[#9d93b8] line-clamp-2 leading-relaxed">
+                            {cardExcerpt}
+                          </p>
+                        )}
                         {cardTags.length > 0 && (
                           <div className="flex flex-wrap items-center gap-1 pt-0.5">
                             {cardTags.map(t => {
@@ -1183,7 +1071,7 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
                             type="button"
                             onClick={e => {
                               e.stopPropagation();
-                              setConfirmDeleteGuide({ guide: g, mode: 'delete' });
+                              setConfirmDeleteGuide(g);
                             }}
                             title={`Supprimer « ${g.title} »`}
                             aria-label={`Supprimer « ${g.title} »`}
@@ -1233,10 +1121,10 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
         <div className="bg-white dark:bg-[#100b1a] border border-slate-200 dark:border-[#241a38] rounded-2xl p-10 text-center space-y-3 text-xs text-slate-500 dark:text-[#9d93b8]">
           <BookOpen className="w-7 h-7 text-violet-500 mx-auto" />
           <div className="text-sm font-bold text-slate-900 dark:text-[#f4f1fa]">
-            Aucun article sélectionné dans le journal {activeVaType === 'CHATTEUR' ? 'VA Chatteur' : 'VA Instagram'}
+            Aucun article dans le journal {activeVaType === 'CHATTEUR' ? 'VA Chatteur' : 'VA Instagram'}
           </div>
           <p className="max-w-md mx-auto leading-relaxed">
-            Créez un nouvel article ou restaurez le guide officiel pour publier du contenu auprès des parrains de cette spécialité.
+            Créez un nouvel article à partir d&apos;une page vierge pour publier du contenu auprès des parrains de cette spécialité.
           </p>
         </div>
       ) : mode === 'preview' ? (
@@ -1248,7 +1136,7 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
             {isAdmin && (
               <button
                 type="button"
-                onClick={() => setConfirmDeleteGuide({ guide: draft, mode: 'delete' })}
+                onClick={() => setConfirmDeleteGuide(draft)}
                 className="min-h-[32px] px-3 py-1 text-xs text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/25 hover:bg-rose-100 dark:hover:bg-rose-950/45 border border-rose-200 dark:border-rose-500/30 rounded-lg font-semibold flex items-center gap-1.5 cursor-pointer transition-colors"
               >
                 <Trash2 className="w-3.5 h-3.5" />
@@ -1285,21 +1173,10 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
                   <span>{showCoverStudio ? 'Masquer options couverture' : 'Changer la couverture'}</span>
                 </button>
 
-                {isAdmin && isPrimaryDraft && !draft.isDefault && (
-                  <button
-                    type="button"
-                    onClick={() => setConfirmDeleteGuide({ guide: draft, mode: 'reset' })}
-                    className="min-h-[34px] px-3 py-1 text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/25 hover:bg-amber-100 dark:hover:bg-amber-950/45 border border-amber-200 dark:border-amber-500/30 rounded-lg font-semibold flex items-center gap-1.5 cursor-pointer transition-colors"
-                  >
-                    <RotateCcw className="w-3.5 h-3.5" />
-                    <span>Réinitialiser</span>
-                  </button>
-                )}
-
                 {isAdmin && (
                   <button
                     type="button"
-                    onClick={() => setConfirmDeleteGuide({ guide: draft, mode: 'delete' })}
+                    onClick={() => setConfirmDeleteGuide(draft)}
                     className="min-h-[34px] px-3 py-1 text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/25 hover:bg-rose-100 dark:hover:bg-rose-950/45 border border-rose-200 dark:border-rose-500/30 rounded-lg font-semibold flex items-center gap-1.5 cursor-pointer transition-colors"
                   >
                     <Trash2 className="w-3.5 h-3.5" />
@@ -1409,7 +1286,7 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
                     Parcours cible
                   </label>
                   <select
-                    disabled={!isAdmin || isPrimaryDraft}
+                    disabled={!isAdmin}
                     value={draft.vaType}
                     onChange={e => updateDraft(prev => ({ ...prev, vaType: e.target.value as VAType }))}
                     className="w-full min-h-[36px] px-3 py-1.5 border border-slate-200 dark:border-[#241a38] rounded-lg bg-slate-50 dark:bg-[#08050f] text-slate-900 dark:text-[#f4f1fa] disabled:opacity-70"
@@ -1427,7 +1304,7 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
                     type="number"
                     min={0}
                     max={999}
-                    disabled={!isAdmin || isPrimaryDraft}
+                    disabled={!isAdmin}
                     value={typeof draft.order === 'number' ? draft.order : 0}
                     onChange={e =>
                       updateDraft(prev => ({
@@ -1555,6 +1432,11 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
 
           {/* Chapters / Blocks Composer */}
           <div className="space-y-4">
+            {draft.blocks.length === 0 && (
+              <div className="bg-white dark:bg-[#100b1a] border border-dashed border-slate-200 dark:border-[#241a38] rounded-2xl p-6 text-center text-xs text-slate-500 dark:text-[#9d93b8]">
+                Page vierge — aucun bloc ajouté pour le moment. Utilisez les boutons ci-dessous pour ajouter votre contenu librement.
+              </div>
+            )}
             {draft.blocks.map((block, index) => (
               <div
                 key={block.id}
@@ -2000,33 +1882,9 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
                 />
               </div>
 
-              <div>
-                <label className="block text-[11px] font-semibold text-slate-600 dark:text-[#9d93b8] mb-1">
-                  Modèle de départ
-                </label>
-                <div className="grid grid-cols-3 gap-2">
-                  {(
-                    [
-                      { id: 'onboarding' as StarterTemplate, label: 'Onboarding' },
-                      { id: 'remuneration' as StarterTemplate, label: 'Rémunération' },
-                      { id: 'blank' as StarterTemplate, label: 'Page vierge' },
-                    ]
-                  ).map(tpl => (
-                    <button
-                      key={tpl.id}
-                      type="button"
-                      onClick={() => setNewTemplate(tpl.id)}
-                      className={`min-h-[36px] px-2.5 py-1.5 rounded-lg border font-semibold cursor-pointer transition-colors ${
-                        newTemplate === tpl.id
-                          ? 'bg-violet-600 text-white border-violet-600'
-                          : 'bg-slate-50 dark:bg-[#171026] text-slate-700 dark:text-[#d8d0eb] border-slate-200 dark:border-[#241a38]'
-                      }`}
-                    >
-                      {tpl.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
+              <p className="text-[11px] text-slate-500 dark:text-[#9d93b8] leading-relaxed">
+                L&apos;article sera créé à partir d&apos;une page vierge, sans aucun texte ni modèle pré-rempli.
+              </p>
             </div>
 
             <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100 dark:border-[#1e1530]">
@@ -2043,29 +1901,23 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
                 className="min-h-[38px] px-4 py-1.5 bg-violet-600 hover:bg-violet-500 disabled:opacity-50 text-white font-semibold rounded-lg flex items-center gap-1.5 cursor-pointer"
               >
                 {isCreating ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
-                <span>{isCreating ? 'Création...' : "Créer l'article"}</span>
+                <span>{isCreating ? 'Création...' : "Créer la page vierge"}</span>
               </button>
             </div>
           </form>
         </div>
       )}
 
-      {/* Modal: Confirmer la suppression ou réinitialisation */}
+      {/* Modal: Confirmer la suppression définitive */}
       {confirmDeleteGuide && (
         <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="w-full max-w-md bg-white dark:bg-[#100b1a] border border-slate-200 dark:border-[#241a38] rounded-2xl p-5 sm:p-6 space-y-4 text-xs shadow-xl">
             <div className="space-y-1.5">
               <h3 className="font-serif text-base font-bold text-slate-900 dark:text-[#f4f1fa]">
-                {confirmDeleteGuide.mode === 'reset'
-                  ? 'Réinitialiser le guide principal ?'
-                  : 'Supprimer cet article ?'}
+                Supprimer cet article ?
               </h3>
               <p className="text-slate-600 dark:text-[#b7aed0] leading-relaxed">
-                {confirmDeleteGuide.mode === 'reset'
-                  ? `Cette action supprime vos personnalisations sur « ${confirmDeleteGuide.guide.title} » et restaure le modèle officiel par défaut.`
-                  : confirmDeleteGuide.guide.isPrimary
-                    ? `L'article officiel « ${confirmDeleteGuide.guide.title} » sera retiré du journal des parrains et du studio. Vous pourrez le restaurer à tout moment via « Restaurer le guide officiel ».`
-                    : `L'article « ${confirmDeleteGuide.guide.title} » sera retiré immédiatement du journal des parrains. Cette action est irréversible.`}
+                L&apos;article « <strong>{confirmDeleteGuide.title}</strong> » sera supprimé définitivement de la base de données et retiré du journal des parrains. Cette action est irréversible.
               </p>
             </div>
             <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100 dark:border-[#1e1530]">
@@ -2081,26 +1933,10 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
                 type="button"
                 disabled={isDeleting}
                 onClick={handleConfirmDeleteGuide}
-                className={`min-h-[38px] px-4 py-1.5 disabled:opacity-50 text-white font-semibold rounded-lg flex items-center gap-1.5 cursor-pointer ${
-                  confirmDeleteGuide.mode === 'reset'
-                    ? 'bg-amber-600 hover:bg-amber-500'
-                    : 'bg-rose-600 hover:bg-rose-500'
-                }`}
+                className="min-h-[38px] px-4 py-1.5 bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white font-semibold rounded-lg flex items-center gap-1.5 cursor-pointer"
               >
-                {isDeleting ? (
-                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                ) : confirmDeleteGuide.mode === 'reset' ? (
-                  <RotateCcw className="w-3.5 h-3.5" />
-                ) : (
-                  <Trash2 className="w-3.5 h-3.5" />
-                )}
-                <span>
-                  {isDeleting
-                    ? 'Suppression...'
-                    : confirmDeleteGuide.mode === 'reset'
-                      ? 'Réinitialiser'
-                      : 'Supprimer'}
-                </span>
+                {isDeleting ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                <span>{isDeleting ? 'Suppression...' : 'Supprimer définitivement'}</span>
               </button>
             </div>
           </div>

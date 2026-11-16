@@ -2424,18 +2424,18 @@ describe('PAWAKO Referral Manager — Tests Complets Isolés (Mockés)', () => {
       avatar: null,
     });
 
-    // 0. Admin lit tous les guides par défaut via GET /api/admin/parrain-guides
-    const listDefaultRes = await app.fetch(
+    // 0. Base neuve : aucun article pré-fait n'existe ni pour CHATTEUR ni pour INSTAGRAM
+    const listEmptyRes = await app.fetch(
       new Request(`${WORKER_ORIGIN}/api/admin/parrain-guides`, {
         headers: { Cookie: `pawako_session=${adminLogin.sessionCookie}`, Origin: FRONTEND_ORIGIN },
       }),
       env
     );
-    assert.equal(listDefaultRes.status, 200);
-    const listDefaultJson = (await listDefaultRes.json()) as any;
-    assert.equal(listDefaultJson.guides.CHATTEUR.vaType, 'CHATTEUR');
-    assert.equal(listDefaultJson.guides.INSTAGRAM.vaType, 'INSTAGRAM');
-    assert.equal(listDefaultJson.guides.CHATTEUR.isDefault, true);
+    assert.equal(listEmptyRes.status, 200);
+    const listEmptyJson = (await listEmptyRes.json()) as any;
+    assert.deepEqual(listEmptyJson.guideList, []);
+    assert.equal(listEmptyJson.guides.CHATTEUR ?? null, null);
+    assert.equal(listEmptyJson.guides.INSTAGRAM ?? null, null);
 
     // 1. Avant choix de spécialité, GET /api/parrain/guide retourne requiresSpecialtyChoice
     const preGuideRes = await app.fetch(
@@ -2674,7 +2674,7 @@ describe('PAWAKO Referral Manager — Tests Complets Isolés (Mockés)', () => {
     );
     assert.equal(createChatRes.status, 201);
 
-    // 3. Admin liste tous les guides via guideList
+    // 3. Admin liste tous les guides via guideList (uniquement les 2 articles réellement créés, aucun article pré-fait)
     const adminListRes = await app.fetch(
       new Request(`${WORKER_ORIGIN}/api/admin/parrain-guides`, {
         headers: { Cookie: `pawako_session=${adminLogin.sessionCookie}`, Origin: FRONTEND_ORIGIN },
@@ -2683,13 +2683,9 @@ describe('PAWAKO Referral Manager — Tests Complets Isolés (Mockés)', () => {
     );
     assert.equal(adminListRes.status, 200);
     const adminListJson = (await adminListRes.json()) as any;
-    assert.equal(adminListJson.guideList.length, 4);
-    assert.ok(adminListJson.guides.CHATTEUR);
-    assert.ok(adminListJson.guides.INSTAGRAM);
-    assert.ok(Array.isArray(adminListJson.guides.CHATTEUR.tags));
-    assert.ok(adminListJson.guides.CHATTEUR.tags.includes('Onboarding'));
+    assert.equal(adminListJson.guideList.length, 2);
 
-    // 4. Parrain INSTAGRAM voit le guide principal + le nouveau guide INSTAGRAM, jamais le guide CHATTEUR
+    // 4. Parrain INSTAGRAM voit uniquement le guide INSTAGRAM créé, jamais le guide CHATTEUR
     const parrainGuidesRes = await app.fetch(
       new Request(`${WORKER_ORIGIN}/api/parrain/guide`, {
         headers: { Cookie: `pawako_session=${parrainInstaLogin.sessionCookie}`, Origin: FRONTEND_ORIGIN },
@@ -2698,7 +2694,7 @@ describe('PAWAKO Referral Manager — Tests Complets Isolés (Mockés)', () => {
     );
     assert.equal(parrainGuidesRes.status, 200);
     const parrainGuidesJson = (await parrainGuidesRes.json()) as any;
-    assert.equal(parrainGuidesJson.guides.length, 2);
+    assert.equal(parrainGuidesJson.guides.length, 1);
     const parrainCreatedInsta = parrainGuidesJson.guides.find((g: any) => g.id === createdInsta.id);
     assert.ok(parrainCreatedInsta);
     assert.deepEqual(parrainCreatedInsta.tags, ['Onboarding', 'Discord', 'Outils']);
@@ -2756,7 +2752,7 @@ describe('PAWAKO Referral Manager — Tests Complets Isolés (Mockés)', () => {
     );
     assert.equal(forbiddenDeleteRes.status, 403);
 
-    // 7. Admin supprime le guide personnalisé -> retiré de guideList et de l'accueil parrain
+    // 7. Admin supprime le guide personnalisé -> retiré définitivement de guideList et de l'accueil parrain
     const deleteCustomRes = await app.fetch(
       new Request(`${WORKER_ORIGIN}/api/admin/parrain-guides/${encodeURIComponent(createdInsta.id)}`, {
         method: 'DELETE',
@@ -2768,7 +2764,7 @@ describe('PAWAKO Referral Manager — Tests Complets Isolés (Mockés)', () => {
     const deleteCustomJson = (await deleteCustomRes.json()) as any;
     assert.equal(deleteCustomJson.deletedId, createdInsta.id);
     assert.equal(deleteCustomJson.resetToDefault, false);
-    assert.equal(deleteCustomJson.guideList.length, 3);
+    assert.equal(deleteCustomJson.guideList.length, 1);
 
     const afterDeleteParrainRes = await app.fetch(
       new Request(`${WORKER_ORIGIN}/api/parrain/guide`, {
@@ -2777,32 +2773,8 @@ describe('PAWAKO Referral Manager — Tests Complets Isolés (Mockés)', () => {
       env
     );
     const afterDeleteParrainJson = (await afterDeleteParrainRes.json()) as any;
-    assert.equal(afterDeleteParrainJson.guides.length, 1);
-
-    // 8. Suppression d'un guide principal personnalise -> réinitialisation au modèle par défaut
-    await app.fetch(
-      new Request(`${WORKER_ORIGIN}/api/admin/parrain-guides/INSTAGRAM`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          Cookie: `pawako_session=${adminLogin.sessionCookie}`,
-          Origin: FRONTEND_ORIGIN,
-        },
-        body: JSON.stringify({ title: 'Guide Insta Customisé', blocks: [] }),
-      }),
-      env
-    );
-    const resetPrimaryRes = await app.fetch(
-      new Request(`${WORKER_ORIGIN}/api/admin/parrain-guides/INSTAGRAM`, {
-        method: 'DELETE',
-        headers: { Cookie: `pawako_session=${adminLogin.sessionCookie}`, Origin: FRONTEND_ORIGIN },
-      }),
-      env
-    );
-    assert.equal(resetPrimaryRes.status, 200);
-    const resetPrimaryJson = (await resetPrimaryRes.json()) as any;
-    assert.equal(resetPrimaryJson.resetToDefault, true);
-    assert.equal(resetPrimaryJson.guides.INSTAGRAM.isDefault, true);
+    assert.equal(afterDeleteParrainJson.guides.length, 0);
+    assert.equal(afterDeleteParrainJson.guide, null);
 
     const repo = createRepo(env);
     const logs = await repo.getAuditLogs(20);
@@ -3030,7 +3002,7 @@ describe('PAWAKO Referral Manager — Tests Complets Isolés (Mockés)', () => {
     assert.match(comboStageSync.candidate?.anomalyReason || '', /Qualifié et Non qualifié/i);
   });
 
-  it('7.11 Suppression permanente des articles (défaut + personnalisés) et restauration officielle dans Guides des parrains', async () => {
+  it('7.11 Page vierge sans texte généré & suppression physique réelle (y compris anciens guides CHATTEUR/INSTAGRAM)', async () => {
     const adminLogin = await loginViaWorkerOAuth(mock, env, 'admin', {
       id: env.INITIAL_ADMIN_DISCORD_ID!,
       username: 'super_admin',
@@ -3057,8 +3029,28 @@ describe('PAWAKO Referral Manager — Tests Complets Isolés (Mockés)', () => {
       env
     );
 
-    // 1. Créer un article personnalisé CHATTEUR
-    const createRes = await app.fetch(
+    // 1. Simuler un ancien document "Guide Officiel Parrain — Pôle VA Chatteur" présent dans Firestore
+    const seedLegacyRes = await app.fetch(
+      new Request(`${WORKER_ORIGIN}/api/admin/parrain-guides/CHATTEUR`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: `pawako_session=${adminLogin.sessionCookie}`,
+          Origin: FRONTEND_ORIGIN,
+        },
+        body: JSON.stringify({
+          vaType: 'CHATTEUR',
+          title: 'Guide Officiel Parrain — Pôle VA Chatteur',
+          subtitle: 'Ancien guide pré-fait',
+          blocks: [],
+        }),
+      }),
+      env
+    );
+    assert.equal(seedLegacyRes.status, 200);
+
+    // 2. Créer un article vierge (sans catégorie ni tag ni bloc pré-rempli)
+    const createBlankRes = await app.fetch(
       new Request(`${WORKER_ORIGIN}/api/admin/parrain-guides`, {
         method: 'POST',
         headers: {
@@ -3068,55 +3060,68 @@ describe('PAWAKO Referral Manager — Tests Complets Isolés (Mockés)', () => {
         },
         body: JSON.stringify({
           vaType: 'CHATTEUR',
-          title: 'Article Temporaire Chatteur',
-          category: 'Onboarding',
-          tags: ['Onboarding'],
+          title: 'Article Vierge Chatteur',
+          subtitle: '',
+          category: '',
+          tags: [],
           blocks: [],
         }),
       }),
       env
     );
-    assert.equal(createRes.status, 201);
-    const createdCustom = ((await createRes.json()) as any).guide;
+    assert.equal(createBlankRes.status, 201);
+    const createdBlank = ((await createBlankRes.json()) as any).guide;
+    assert.equal(createdBlank.category, '');
+    assert.deepEqual(createdBlank.tags, []);
+    assert.deepEqual(createdBlank.blocks, []);
 
-    // 2. Suppression permanente de l'article officiel CHATTEUR (?permanent=true)
-    const permDelPrimaryRes = await app.fetch(
-      new Request(`${WORKER_ORIGIN}/api/admin/parrain-guides/CHATTEUR?permanent=true`, {
+    // 3. Suppression physique réelle de l'ancien article CHATTEUR (ne doit jamais réapparaître)
+    const delLegacyRes = await app.fetch(
+      new Request(`${WORKER_ORIGIN}/api/admin/parrain-guides/CHATTEUR`, {
         method: 'DELETE',
         headers: { Cookie: `pawako_session=${adminLogin.sessionCookie}`, Origin: FRONTEND_ORIGIN },
       }),
       env
     );
-    assert.equal(permDelPrimaryRes.status, 200);
-    const permDelPrimaryJson = (await permDelPrimaryRes.json()) as any;
-    assert.equal(permDelPrimaryJson.deletedId, 'CHATTEUR');
-    assert.equal(permDelPrimaryJson.resetToDefault, false);
-    assert.equal(permDelPrimaryJson.archived, true);
-    assert.ok(!permDelPrimaryJson.guideList.some((g: any) => g.id === 'CHATTEUR'));
-    assert.ok(permDelPrimaryJson.guideList.some((g: any) => g.id === createdCustom.id));
+    assert.equal(delLegacyRes.status, 200);
+    const delLegacyJson = (await delLegacyRes.json()) as any;
+    assert.equal(delLegacyJson.deletedId, 'CHATTEUR');
+    assert.equal(delLegacyJson.resetToDefault, false);
+    assert.ok(!delLegacyJson.guideList.some((g: any) => g.id === 'CHATTEUR'));
+    assert.ok(delLegacyJson.guideList.some((g: any) => g.id === createdBlank.id));
 
-    // Le parrain CHATTEUR ne voit plus le guide officiel supprimé, uniquement l'article personnalisé restant
-    const parrainAfterPrimaryDelRes = await app.fetch(
+    // Vérifier que re-supprimer CHATTEUR renvoie 404 (preuve qu'il est réellement supprimé de Firestore)
+    const delLegacyAgainRes = await app.fetch(
+      new Request(`${WORKER_ORIGIN}/api/admin/parrain-guides/CHATTEUR`, {
+        method: 'DELETE',
+        headers: { Cookie: `pawako_session=${adminLogin.sessionCookie}`, Origin: FRONTEND_ORIGIN },
+      }),
+      env
+    );
+    assert.equal(delLegacyAgainRes.status, 404);
+
+    // Le parrain CHATTEUR ne voit plus l'ancien guide officiel supprimé, uniquement l'article vierge restant
+    const parrainAfterDelRes = await app.fetch(
       new Request(`${WORKER_ORIGIN}/api/parrain/guide`, {
         headers: { Cookie: `pawako_session=${parrainChatLogin.sessionCookie}`, Origin: FRONTEND_ORIGIN },
       }),
       env
     );
-    const parrainAfterPrimaryDel = (await parrainAfterPrimaryDelRes.json()) as any;
-    assert.equal(parrainAfterPrimaryDel.guides.length, 1);
-    assert.equal(parrainAfterPrimaryDel.guides[0].id, createdCustom.id);
+    const parrainAfterDel = (await parrainAfterDelRes.json()) as any;
+    assert.equal(parrainAfterDel.guides.length, 1);
+    assert.equal(parrainAfterDel.guides[0].id, createdBlank.id);
 
-    // 3. Suppression du dernier article personnalisé -> journal CHATTEUR vide sans erreur
-    const delCustomRes = await app.fetch(
-      new Request(`${WORKER_ORIGIN}/api/admin/parrain-guides/${encodeURIComponent(createdCustom.id)}?permanent=true`, {
+    // 4. Suppression du dernier article vierge -> journal CHATTEUR complètement vide
+    const delBlankRes = await app.fetch(
+      new Request(`${WORKER_ORIGIN}/api/admin/parrain-guides/${encodeURIComponent(createdBlank.id)}`, {
         method: 'DELETE',
         headers: { Cookie: `pawako_session=${adminLogin.sessionCookie}`, Origin: FRONTEND_ORIGIN },
       }),
       env
     );
-    assert.equal(delCustomRes.status, 200);
-    const delCustomJson = (await delCustomRes.json()) as any;
-    assert.equal(delCustomJson.guideList.filter((g: any) => g.vaType === 'CHATTEUR').length, 0);
+    assert.equal(delBlankRes.status, 200);
+    const delBlankJson = (await delBlankRes.json()) as any;
+    assert.equal(delBlankJson.guideList.filter((g: any) => g.vaType === 'CHATTEUR').length, 0);
 
     const parrainEmptyRes = await app.fetch(
       new Request(`${WORKER_ORIGIN}/api/parrain/guide`, {
@@ -3128,40 +3133,6 @@ describe('PAWAKO Referral Manager — Tests Complets Isolés (Mockés)', () => {
     const parrainEmptyJson = (await parrainEmptyRes.json()) as any;
     assert.equal(parrainEmptyJson.guide, null);
     assert.equal(parrainEmptyJson.guides.length, 0);
-
-    // 4. Un parrain ne peut pas restaurer le guide officiel (403)
-    const forbiddenRestoreRes = await app.fetch(
-      new Request(`${WORKER_ORIGIN}/api/admin/parrain-guides/CHATTEUR/restore-default`, {
-        method: 'POST',
-        headers: { Cookie: `pawako_session=${parrainChatLogin.sessionCookie}`, Origin: FRONTEND_ORIGIN },
-      }),
-      env
-    );
-    assert.equal(forbiddenRestoreRes.status, 403);
-
-    // 5. Admin restaure le guide officiel CHATTEUR
-    const restoreRes = await app.fetch(
-      new Request(`${WORKER_ORIGIN}/api/admin/parrain-guides/CHATTEUR/restore-default`, {
-        method: 'POST',
-        headers: { Cookie: `pawako_session=${adminLogin.sessionCookie}`, Origin: FRONTEND_ORIGIN },
-      }),
-      env
-    );
-    assert.equal(restoreRes.status, 200);
-    const restoreJson = (await restoreRes.json()) as any;
-    assert.equal(restoreJson.guide.id, 'CHATTEUR');
-    assert.equal(restoreJson.guide.isDefault, true);
-    assert.ok(restoreJson.guideList.some((g: any) => g.id === 'CHATTEUR'));
-
-    const parrainRestoredRes = await app.fetch(
-      new Request(`${WORKER_ORIGIN}/api/parrain/guide`, {
-        headers: { Cookie: `pawako_session=${parrainChatLogin.sessionCookie}`, Origin: FRONTEND_ORIGIN },
-      }),
-      env
-    );
-    const parrainRestoredJson = (await parrainRestoredRes.json()) as any;
-    assert.equal(parrainRestoredJson.guides.length, 1);
-    assert.equal(parrainRestoredJson.guides[0].id, 'CHATTEUR');
   });
 });
 

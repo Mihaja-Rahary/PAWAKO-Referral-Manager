@@ -449,8 +449,8 @@ export const ParrainGuideRenderer: React.FC<Props> = ({ guide, compactHeader = f
 
   const hasSidebarToc = tocSections.length >= 2;
   const specialtyTheme = getSpecialtyTheme(guide.vaType);
-  const categoryLabel = guide.category || (guide.isPrimary ? 'Guide principal' : 'Article');
-  const categoryTheme = getTopicColorTheme(categoryLabel);
+  const categoryLabel = guide.category?.trim() || '';
+  const categoryTheme = getTopicColorTheme(categoryLabel || guide.vaType);
 
   const scrollToSection = (domId: string) => {
     const el = document.getElementById(domId);
@@ -467,10 +467,12 @@ export const ParrainGuideRenderer: React.FC<Props> = ({ guide, compactHeader = f
         {/* Colorful Kicker & Metadata Line */}
         <div className="space-y-2.5">
           <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
-            <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md border text-[11px] font-bold uppercase tracking-wider ${categoryTheme.badge}`}>
-              <span className={`w-1.5 h-1.5 rounded-full ${categoryTheme.dot}`} />
-              <span>{categoryLabel}</span>
-            </span>
+            {categoryLabel && (
+              <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md border text-[11px] font-bold uppercase tracking-wider ${categoryTheme.badge}`}>
+                <span className={`w-1.5 h-1.5 rounded-full ${categoryTheme.dot}`} />
+                <span>{categoryLabel}</span>
+              </span>
+            )}
             <span className={`inline-flex items-center px-2 py-0.5 rounded-md border text-[11px] font-semibold ${specialtyTheme.badge}`}>
               Parcours {getVaTypeLabel(guide.vaType)}
             </span>

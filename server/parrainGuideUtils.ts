@@ -181,32 +181,20 @@ export function buildDefaultParrainGuide(vaType: VAType): ParrainGuide {
 export function normalizeStoredParrainGuide(raw: ParrainGuide): ParrainGuide {
   const vaType: VAType = raw.vaType === 'INSTAGRAM' ? 'INSTAGRAM' : 'CHATTEUR';
   const id = String(raw.id || vaType).trim();
-  const isPrimary = id === 'CHATTEUR' || id === 'INSTAGRAM';
-  const fallbackTitle = isPrimary ? buildDefaultParrainGuide(vaType).title : 'Guide de parrainage';
 
   return {
     ...raw,
     id,
     vaType,
-    category:
-      typeof raw.category === 'string' && raw.category.trim()
-        ? raw.category.trim().slice(0, 60)
-        : isPrimary
-          ? 'Guide principal'
-          : 'Onboarding',
-    tags:
-      raw.tags === undefined
-        ? isPrimary
-          ? buildDefaultParrainGuide(vaType).tags || []
-          : []
-        : sanitizeGuideTags(raw.tags),
-    order: typeof raw.order === 'number' && Number.isFinite(raw.order) ? raw.order : isPrimary ? 0 : 10,
-    title: String(raw.title || '').trim() || fallbackTitle,
+    category: typeof raw.category === 'string' ? raw.category.trim().slice(0, 60) : '',
+    tags: sanitizeGuideTags(raw.tags),
+    order: typeof raw.order === 'number' && Number.isFinite(raw.order) ? raw.order : 10,
+    title: String(raw.title || '').trim() || 'Article sans titre',
     subtitle: String(raw.subtitle || ''),
     heroImageUrl: raw.heroImageUrl || null,
     blocks: Array.isArray(raw.blocks) ? raw.blocks : [],
     isDefault: false,
-    isPrimary,
+    isPrimary: false,
   };
 }
 
@@ -265,18 +253,12 @@ export function sanitizeAndBuildParrainGuide(
 
   const cleanSubtitle = typeof payload.subtitle === 'string' ? payload.subtitle.trim().slice(0, 500) : '';
   const cleanCategory =
-    typeof payload.category === 'string' && payload.category.trim()
-      ? payload.category.trim().slice(0, 60)
-      : isPrimary
-        ? 'Guide principal'
-        : 'Onboarding';
+    typeof payload.category === 'string' ? payload.category.trim().slice(0, 60) : '';
   const cleanTags = sanitizeGuideTags(payload.tags);
   const cleanOrder =
     typeof payload.order === 'number' && Number.isFinite(payload.order)
       ? Math.max(0, Math.min(999, Math.round(payload.order)))
-      : isPrimary
-        ? 0
-        : 10;
+      : 10;
 
   const cleanHeroImageUrl =
     typeof payload.heroImageUrl === 'string' && payload.heroImageUrl.trim()

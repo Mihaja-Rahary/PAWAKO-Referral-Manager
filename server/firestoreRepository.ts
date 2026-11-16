@@ -4573,14 +4573,14 @@ export class FirestoreRepository {
 
   // --- GUIDES D'ACCUEIL PARRAIN (ÉDITEUR ADMIN) ---
 
-  async getParrainGuide(vaType: VAType): Promise<ParrainGuide> {
+  async getParrainGuide(vaType: VAType): Promise<ParrainGuide | null> {
     if (vaType !== 'CHATTEUR' && vaType !== 'INSTAGRAM') {
       throw new Error('Spécialité invalide (CHATTEUR ou INSTAGRAM attendu).');
     }
 
     const doc = await this.client.getDocument<ParrainGuide>('pawako_parrain_guides', vaType);
-    if (!doc) {
-      return buildDefaultParrainGuide(vaType);
+    if (!doc || doc.isArchived === true) {
+      return null;
     }
 
     const cleaned = stripFirestoreMeta(doc);
@@ -4594,26 +4594,14 @@ export class FirestoreRepository {
   async listParrainGuides(): Promise<ParrainGuide[]> {
     const rawDocs = await this.client.listDocuments<ParrainGuide>('pawako_parrain_guides');
     const byId = new Map<string, ParrainGuide>();
-    const archivedPrimaryIds = new Set<string>();
 
     for (const rawDoc of rawDocs) {
       const cleaned = stripFirestoreMeta(rawDoc);
-      const rawId = String(cleaned.id || '').trim().toUpperCase();
       if (cleaned.isArchived === true) {
-        if (rawId === 'CHATTEUR' || rawId === 'INSTAGRAM') {
-          archivedPrimaryIds.add(rawId);
-        }
         continue;
       }
       const normalized = normalizeStoredParrainGuide(cleaned);
       byId.set(normalized.id, normalized);
-    }
-
-    if (!byId.has('CHATTEUR') && !archivedPrimaryIds.has('CHATTEUR')) {
-      byId.set('CHATTEUR', buildDefaultParrainGuide('CHATTEUR'));
-    }
-    if (!byId.has('INSTAGRAM') && !archivedPrimaryIds.has('INSTAGRAM')) {
-      byId.set('INSTAGRAM', buildDefaultParrainGuide('INSTAGRAM'));
     }
 
     return sortParrainGuides(Array.from(byId.values()));
@@ -4624,11 +4612,11 @@ export class FirestoreRepository {
     return all.filter(g => g.vaType === vaType);
   }
 
-  async getAllParrainGuides(): Promise<Record<VAType, ParrainGuide>> {
+  async getAllParrainGuides(): Promise<Partial<Record<VAType, ParrainGuide>>> {
     const all = await this.listParrainGuides();
     return {
-      CHATTEUR: all.find(g => g.id === 'CHATTEUR') || buildDefaultParrainGuide('CHATTEUR'),
-      INSTAGRAM: all.find(g => g.id === 'INSTAGRAM') || buildDefaultParrainGuide('INSTAGRAM'),
+      CHATTEUR: all.find(g => g.id === 'CHATTEUR'),
+      INSTAGRAM: all.find(g => g.id === 'INSTAGRAM'),
     };
   }
 
@@ -4745,85 +4733,35 @@ export class FirestoreRepository {
       },
     });
 
-    return { ...docToSave, isDefault: false, isPrimary };
+    return { ...docToSave, isDefault: false, isPrimary: false };
   }
 
   async deleteParrainGuide(
     guideId: string,
-    actor: { id: string; displayName: string },
-    options?: { permanent?: boolean }
-  ): Promise<{ deletedId: string; resetToDefault: boolean; archived?: boolean; vaType: VAType }> {
+    actor: { id: string; displayName: string }
+  ): Promise<{ deletedId: string; resetToDefault: boolean; vaType: VAType }> {
     const trimmedId = (guideId || '').trim();
-    const isPrimary = isPrimaryGuideId(trimmedId);
-    const targetId = isPrimary ? trimmedId.toUpperCase() : trimmedId;
+    const isLegacyTrackId = isPrimaryGuideId(trimmedId);
+    const targetId = isLegacyTrackId ? trimmedId.toUpperCase() : trimmedId;
 
     if (!isValidGuideId(targetId)) {
       throw new Error('Identifiant de guide invalide.');
     }
 
     const existing = await this.client.getDocument<ParrainGuide>('pawako_parrain_guides', targetId);
-    if (!isPrimary && !existing) {
-      const err: any = new Error('Guide de parrainage introuvable.');
+    if (!existing) {
+      const err: any = new Error('Article de parrainage introuvable.');
       err.status = 404;
       throw err;
     }
 
-    const vaType: VAType = isPrimary
+    const vaType: VAType = isLegacyTrackId
       ? (targetId as VAType)
-      : existing?.vaType === 'INSTAGRAM'
+      : existing.vaType === 'INSTAGRAM'
         ? 'INSTAGRAM'
         : 'CHATTEUR';
 
-    const permanent = Boolean(options?.permanent);
-
-    if (isPrimary && permanent) {
-      if (existing?.isArchived === true) {
-        const err: any = new Error('Ce guide parrain a déjà été supprimé.');
-        err.status = 404;
-        throw err;
-      }
-
-      const now = new Date().toISOString();
-      const archivedDoc: ParrainGuide = {
-        id: targetId,
-        vaType,
-        title: existing?.title || buildDefaultParrainGuide(vaType).title,
-        subtitle: '',
-        blocks: [],
-        createdAt: existing?.createdAt || now,
-        updatedAt: now,
-        updatedByUserId: actor.id,
-        updatedByName: actor.displayName,
-        isPrimary: true,
-        isArchived: true,
-      };
-      await this.client.setDocument('pawako_parrain_guides', targetId, archivedDoc);
-
-      await this.logAudit({
-        action: 'PARRAIN_GUIDE_DELETED',
-        actorUserId: actor.id,
-        actorName: actor.displayName,
-        targetType: 'PARRAIN_GUIDE',
-        targetId,
-        details: {
-          vaType,
-          title: archivedDoc.title,
-          resetToDefault: false,
-          permanent: true,
-        },
-      });
-
-      return {
-        deletedId: targetId,
-        resetToDefault: false,
-        archived: true,
-        vaType,
-      };
-    }
-
-    if (existing) {
-      await this.client.deleteDocument('pawako_parrain_guides', targetId);
-    }
+    await this.client.deleteDocument('pawako_parrain_guides', targetId);
 
     await this.logAudit({
       action: 'PARRAIN_GUIDE_DELETED',
@@ -4833,45 +4771,15 @@ export class FirestoreRepository {
       targetId,
       details: {
         vaType,
-        title: existing?.title || buildDefaultParrainGuide(vaType).title,
-        resetToDefault: isPrimary,
+        title: existing.title || 'Article supprimé',
+        resetToDefault: false,
       },
     });
 
     return {
       deletedId: targetId,
-      resetToDefault: isPrimary,
-      archived: false,
+      resetToDefault: false,
       vaType,
     };
-  }
-
-  async restoreDefaultParrainGuide(
-    vaType: VAType,
-    actor: { id: string; displayName: string }
-  ): Promise<ParrainGuide> {
-    if (vaType !== 'CHATTEUR' && vaType !== 'INSTAGRAM') {
-      throw new Error('Spécialité invalide (CHATTEUR ou INSTAGRAM attendu).');
-    }
-
-    const existing = await this.client.getDocument<ParrainGuide>('pawako_parrain_guides', vaType);
-    if (existing) {
-      await this.client.deleteDocument('pawako_parrain_guides', vaType);
-    }
-
-    const restored = buildDefaultParrainGuide(vaType);
-    await this.logAudit({
-      action: 'PARRAIN_GUIDE_RESTORED',
-      actorUserId: actor.id,
-      actorName: actor.displayName,
-      targetType: 'PARRAIN_GUIDE',
-      targetId: vaType,
-      details: {
-        vaType,
-        title: restored.title,
-      },
-    });
-
-    return restored;
   }
 }
