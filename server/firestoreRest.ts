@@ -575,13 +575,18 @@ export function fromFirestoreDocument<T = any>(doc: any): T {
   for (const [k, v] of Object.entries(fields)) {
     data[k] = fromFirestoreValue(v);
   }
-  if ((!data.id || typeof data.id !== 'string') && typeof doc.name === 'string') {
+  if (typeof doc.name === 'string') {
     const lastSegment = doc.name.split('/').filter(Boolean).pop();
     if (lastSegment) {
+      let decodedSegment = lastSegment;
       try {
-        data.id = decodeURIComponent(lastSegment);
+        decodedSegment = decodeURIComponent(lastSegment);
       } catch {
-        data.id = lastSegment;
+        decodedSegment = lastSegment;
+      }
+      data._docId = decodedSegment;
+      if (!data.id || typeof data.id !== 'string') {
+        data.id = decodedSegment;
       }
     }
   }

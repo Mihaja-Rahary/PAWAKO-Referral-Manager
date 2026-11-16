@@ -24,8 +24,8 @@ import {
   ParrainGuideBlock,
 } from './types';
 import {
-  buildDefaultParrainGuide,
   generateCustomGuideId,
+  isLegacyPreMadeParrainGuide,
   isPrimaryGuideId,
   isValidGuideId,
   normalizeStoredParrainGuide,
@@ -701,7 +701,14 @@ class DatabaseService {
       throw new Error('Spécialité invalide (CHATTEUR ou INSTAGRAM attendu).');
     }
     const stored = this.data.parrain_guides?.[vaType];
-    if (!stored || stored.isArchived === true) {
+    if (!stored) {
+      return null;
+    }
+    if (stored.isArchived === true || isLegacyPreMadeParrainGuide(stored)) {
+      if (this.data.parrain_guides && vaType in this.data.parrain_guides) {
+        delete this.data.parrain_guides[vaType];
+        this.saveDatabase();
+      }
       return null;
     }
     return normalizeStoredParrainGuide({
@@ -714,11 +721,22 @@ class DatabaseService {
   listParrainGuides(): ParrainGuide[] {
     const storedMap = this.data.parrain_guides || {};
     const byId = new Map<string, ParrainGuide>();
+    let purged = false;
 
     for (const [key, raw] of Object.entries(storedMap)) {
-      if (!raw || raw.isArchived === true) continue;
+      if (!raw || raw.isArchived === true || isLegacyPreMadeParrainGuide(raw)) {
+        if (this.data.parrain_guides && key in this.data.parrain_guides) {
+          delete this.data.parrain_guides[key];
+          purged = true;
+        }
+        continue;
+      }
       const normalized = normalizeStoredParrainGuide({ ...raw, id: raw.id || key });
       byId.set(normalized.id, normalized);
+    }
+
+    if (purged) {
+      this.saveDatabase();
     }
 
     return sortParrainGuides(Array.from(byId.values()));
@@ -859,7 +877,12 @@ class DatabaseService {
       throw new Error('Identifiant de guide invalide.');
     }
 
-    const existing = this.data.parrain_guides?.[targetId];
+    const storedMap = this.data.parrain_guides || {};
+    const matchingKeys = Object.entries(storedMap)
+      .filter(([key, raw]) => key === trimmedId || key === targetId || raw?.id === trimmedId || raw?.id === targetId)
+      .map(([key]) => key);
+
+    const existing = storedMap[targetId] || (matchingKeys[0] ? storedMap[matchingKeys[0]] : undefined);
     if (!existing) {
       const err: any = new Error('Article de parrainage introuvable.');
       err.status = 404;
@@ -872,8 +895,13 @@ class DatabaseService {
         ? 'INSTAGRAM'
         : 'CHATTEUR';
 
-    if (this.data.parrain_guides && targetId in this.data.parrain_guides) {
-      delete this.data.parrain_guides[targetId];
+    if (this.data.parrain_guides) {
+      for (const k of matchingKeys) {
+        delete this.data.parrain_guides[k];
+      }
+      if (targetId in this.data.parrain_guides) {
+        delete this.data.parrain_guides[targetId];
+      }
       this.saveDatabase();
     }
 

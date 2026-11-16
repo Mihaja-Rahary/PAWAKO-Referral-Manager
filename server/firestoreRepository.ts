@@ -47,16 +47,14 @@ import {
   ParrainGuideBlock,
 } from './types';
 import {
-  buildDefaultParrainGuide,
   generateCustomGuideId,
+  isLegacyPreMadeParrainGuide,
   isPrimaryGuideId,
   isValidGuideId,
   normalizeStoredParrainGuide,
   sanitizeAndBuildParrainGuide,
   sortParrainGuides,
 } from './parrainGuideUtils';
-
-export { buildDefaultParrainGuide };
 
 export const OFFICIAL_DISCORD_SERVERS: DiscordServerInfo[] = [
   {
@@ -150,7 +148,7 @@ export function getEffectiveReferrerStatus(ref: Partial<Referrer> | null | undef
 }
 
 function stripFirestoreMeta<T extends Record<string, any>>(doc: T): T {
-  const { _updateTime, ...clean } = doc as Record<string, any>;
+  const { _updateTime, _docId, ...clean } = doc as Record<string, any>;
   return clean as T;
 }
 
@@ -4579,11 +4577,17 @@ export class FirestoreRepository {
     }
 
     const doc = await this.client.getDocument<ParrainGuide>('pawako_parrain_guides', vaType);
-    if (!doc || doc.isArchived === true) {
+    if (!doc) {
       return null;
     }
 
     const cleaned = stripFirestoreMeta(doc);
+    if (cleaned.isArchived === true || isLegacyPreMadeParrainGuide(cleaned)) {
+      const docId = String((doc as any)._docId || vaType).trim();
+      await this.client.deleteDocument('pawako_parrain_guides', docId).catch(() => {});
+      return null;
+    }
+
     return normalizeStoredParrainGuide({
       ...cleaned,
       id: vaType,
@@ -4594,14 +4598,28 @@ export class FirestoreRepository {
   async listParrainGuides(): Promise<ParrainGuide[]> {
     const rawDocs = await this.client.listDocuments<ParrainGuide>('pawako_parrain_guides');
     const byId = new Map<string, ParrainGuide>();
+    const docIdsToPurge: string[] = [];
 
     for (const rawDoc of rawDocs) {
+      const realDocId = String((rawDoc as any)._docId || rawDoc.id || '').trim();
       const cleaned = stripFirestoreMeta(rawDoc);
-      if (cleaned.isArchived === true) {
+      if (cleaned.isArchived === true || isLegacyPreMadeParrainGuide(cleaned)) {
+        if (realDocId) {
+          docIdsToPurge.push(realDocId);
+        }
         continue;
       }
-      const normalized = normalizeStoredParrainGuide(cleaned);
+      const normalized = normalizeStoredParrainGuide({
+        ...cleaned,
+        id: String(cleaned.id || realDocId).trim(),
+      });
       byId.set(normalized.id, normalized);
+    }
+
+    if (docIdsToPurge.length > 0) {
+      await Promise.allSettled(
+        docIdsToPurge.map(docId => this.client.deleteDocument('pawako_parrain_guides', docId))
+      );
     }
 
     return sortParrainGuides(Array.from(byId.values()));
@@ -4744,24 +4762,51 @@ export class FirestoreRepository {
     const isLegacyTrackId = isPrimaryGuideId(trimmedId);
     const targetId = isLegacyTrackId ? trimmedId.toUpperCase() : trimmedId;
 
-    if (!isValidGuideId(targetId)) {
+    if (!trimmedId) {
       throw new Error('Identifiant de guide invalide.');
     }
 
-    const existing = await this.client.getDocument<ParrainGuide>('pawako_parrain_guides', targetId);
-    if (!existing) {
+    const directExisting = isValidGuideId(targetId)
+      ? await this.client.getDocument<ParrainGuide>('pawako_parrain_guides', targetId)
+      : null;
+
+    const allDocs = await this.client.listDocuments<ParrainGuide>('pawako_parrain_guides');
+    const matchingDocs = allDocs.filter(doc => {
+      const docKey = String((doc as any)._docId || doc.id || '').trim();
+      const fieldId = String(doc.id || '').trim();
+      return (
+        docKey === trimmedId ||
+        docKey === targetId ||
+        fieldId === trimmedId ||
+        fieldId === targetId
+      );
+    });
+
+    const referenceDoc = directExisting || matchingDocs[0] || null;
+    if (!referenceDoc) {
       const err: any = new Error('Article de parrainage introuvable.');
       err.status = 404;
       throw err;
     }
 
+    const docIdsToDelete = Array.from(
+      new Set(
+        [
+          directExisting ? String((directExisting as any)._docId || targetId).trim() : null,
+          ...matchingDocs.map(d => String((d as any)._docId || d.id || '').trim()),
+        ].filter((id): id is string => Boolean(id))
+      )
+    );
+
     const vaType: VAType = isLegacyTrackId
       ? (targetId as VAType)
-      : existing.vaType === 'INSTAGRAM'
+      : referenceDoc.vaType === 'INSTAGRAM'
         ? 'INSTAGRAM'
         : 'CHATTEUR';
 
-    await this.client.deleteDocument('pawako_parrain_guides', targetId);
+    await Promise.all(
+      docIdsToDelete.map(docId => this.client.deleteDocument('pawako_parrain_guides', docId))
+    );
 
     await this.logAudit({
       action: 'PARRAIN_GUIDE_DELETED',
@@ -4771,7 +4816,8 @@ export class FirestoreRepository {
       targetId,
       details: {
         vaType,
-        title: existing.title || 'Article supprimé',
+        title: referenceDoc.title || 'Article supprimé',
+        deletedDocIds: docIdsToDelete,
         resetToDefault: false,
       },
     });

@@ -3002,7 +3002,7 @@ describe('PAWAKO Referral Manager — Tests Complets Isolés (Mockés)', () => {
     assert.match(comboStageSync.candidate?.anomalyReason || '', /Qualifié et Non qualifié/i);
   });
 
-  it('7.11 Page vierge sans texte généré & suppression physique réelle (y compris anciens guides CHATTEUR/INSTAGRAM)', async () => {
+  it('7.11 Auto-suppression des anciens articles pré-faits (Pôle VA Chatteur/Instagram) & suppression physique réelle', async () => {
     const adminLogin = await loginViaWorkerOAuth(mock, env, 'admin', {
       id: env.INITIAL_ADMIN_DISCORD_ID!,
       username: 'super_admin',
@@ -3029,27 +3029,47 @@ describe('PAWAKO Referral Manager — Tests Complets Isolés (Mockés)', () => {
       env
     );
 
-    // 1. Simuler un ancien document "Guide Officiel Parrain — Pôle VA Chatteur" présent dans Firestore
-    const seedLegacyRes = await app.fetch(
-      new Request(`${WORKER_ORIGIN}/api/admin/parrain-guides/CHATTEUR`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          Cookie: `pawako_session=${adminLogin.sessionCookie}`,
-          Origin: FRONTEND_ORIGIN,
-        },
-        body: JSON.stringify({
-          vaType: 'CHATTEUR',
-          title: 'Guide Officiel Parrain — Pôle VA Chatteur',
-          subtitle: 'Ancien guide pré-fait',
-          blocks: [],
-        }),
+    // 1. Simuler la présence en base Firestore des anciens articles pré-faits (Pôle VA Chatteur & VA Instagram)
+    const repo = createRepo(env);
+    await (repo as any).client.setDocument('pawako_parrain_guides', 'CHATTEUR', {
+      id: 'CHATTEUR',
+      vaType: 'CHATTEUR',
+      title: 'Guide Officiel Parrain — Pôle VA Chatteur',
+      subtitle: 'Ancien guide pré-fait',
+      blocks: [],
+      isDefault: true,
+      updatedByUserId: 'SYSTEM',
+    });
+    await (repo as any).client.setDocument('pawako_parrain_guides', 'legacy-insta-doc-id', {
+      id: 'INSTAGRAM',
+      vaType: 'INSTAGRAM',
+      title: 'Guide Officiel Parrain — Pôle VA Instagram',
+      subtitle: 'Ancien guide pré-fait',
+      blocks: [],
+    });
+
+    // 2. La simple lecture /api/admin/parrain-guides purge définitivement ces anciens articles pré-faits de Firestore
+    const adminListAfterSeedRes = await app.fetch(
+      new Request(`${WORKER_ORIGIN}/api/admin/parrain-guides`, {
+        headers: { Cookie: `pawako_session=${adminLogin.sessionCookie}`, Origin: FRONTEND_ORIGIN },
       }),
       env
     );
-    assert.equal(seedLegacyRes.status, 200);
+    assert.equal(adminListAfterSeedRes.status, 200);
+    const adminListAfterSeedJson = (await adminListAfterSeedRes.json()) as any;
+    assert.deepEqual(adminListAfterSeedJson.guideList, []);
+    assert.equal(
+      await (repo as any).client.getDocument('pawako_parrain_guides', 'CHATTEUR'),
+      null,
+      'Le document pré-fait CHATTEUR doit être physiquement supprimé de Firestore'
+    );
+    assert.equal(
+      await (repo as any).client.getDocument('pawako_parrain_guides', 'legacy-insta-doc-id'),
+      null,
+      'Le document pré-fait INSTAGRAM doit être physiquement supprimé de Firestore'
+    );
 
-    // 2. Créer un article vierge (sans catégorie ni tag ni bloc pré-rempli)
+    // 3. Créer un article vierge (sans catégorie ni tag ni bloc pré-rempli) + un document avec docId différent de son champ id
     const createBlankRes = await app.fetch(
       new Request(`${WORKER_ORIGIN}/api/admin/parrain-guides`, {
         method: 'POST',
@@ -3075,43 +3095,39 @@ describe('PAWAKO Referral Manager — Tests Complets Isolés (Mockés)', () => {
     assert.deepEqual(createdBlank.tags, []);
     assert.deepEqual(createdBlank.blocks, []);
 
-    // 3. Suppression physique réelle de l'ancien article CHATTEUR (ne doit jamais réapparaître)
-    const delLegacyRes = await app.fetch(
-      new Request(`${WORKER_ORIGIN}/api/admin/parrain-guides/CHATTEUR`, {
+    await (repo as any).client.setDocument('pawako_parrain_guides', 'orphan-doc-key-99', {
+      id: 'custom-field-id-99',
+      vaType: 'CHATTEUR',
+      title: 'Article Custom Clé Désynchronisée',
+      subtitle: '',
+      category: '',
+      tags: [],
+      blocks: [],
+      updatedByUserId: env.INITIAL_ADMIN_DISCORD_ID!,
+    });
+
+    // 4. Suppression physique réelle par son champ id même quand le docId Firestore diffère
+    const delMismatchRes = await app.fetch(
+      new Request(`${WORKER_ORIGIN}/api/admin/parrain-guides/custom-field-id-99`, {
         method: 'DELETE',
         headers: { Cookie: `pawako_session=${adminLogin.sessionCookie}`, Origin: FRONTEND_ORIGIN },
       }),
       env
     );
-    assert.equal(delLegacyRes.status, 200);
-    const delLegacyJson = (await delLegacyRes.json()) as any;
-    assert.equal(delLegacyJson.deletedId, 'CHATTEUR');
-    assert.equal(delLegacyJson.resetToDefault, false);
-    assert.ok(!delLegacyJson.guideList.some((g: any) => g.id === 'CHATTEUR'));
-    assert.ok(delLegacyJson.guideList.some((g: any) => g.id === createdBlank.id));
+    assert.equal(delMismatchRes.status, 200);
+    assert.equal(await (repo as any).client.getDocument('pawako_parrain_guides', 'orphan-doc-key-99'), null);
 
-    // Vérifier que re-supprimer CHATTEUR renvoie 404 (preuve qu'il est réellement supprimé de Firestore)
-    const delLegacyAgainRes = await app.fetch(
-      new Request(`${WORKER_ORIGIN}/api/admin/parrain-guides/CHATTEUR`, {
+    // Re-supprimer renvoie 404
+    const delMismatchAgainRes = await app.fetch(
+      new Request(`${WORKER_ORIGIN}/api/admin/parrain-guides/custom-field-id-99`, {
         method: 'DELETE',
         headers: { Cookie: `pawako_session=${adminLogin.sessionCookie}`, Origin: FRONTEND_ORIGIN },
       }),
       env
     );
-    assert.equal(delLegacyAgainRes.status, 404);
+    assert.equal(delMismatchAgainRes.status, 404);
 
-    // Le parrain CHATTEUR ne voit plus l'ancien guide officiel supprimé, uniquement l'article vierge restant
-    const parrainAfterDelRes = await app.fetch(
-      new Request(`${WORKER_ORIGIN}/api/parrain/guide`, {
-        headers: { Cookie: `pawako_session=${parrainChatLogin.sessionCookie}`, Origin: FRONTEND_ORIGIN },
-      }),
-      env
-    );
-    const parrainAfterDel = (await parrainAfterDelRes.json()) as any;
-    assert.equal(parrainAfterDel.guides.length, 1);
-    assert.equal(parrainAfterDel.guides[0].id, createdBlank.id);
-
-    // 4. Suppression du dernier article vierge -> journal CHATTEUR complètement vide
+    // 5. Suppression du dernier article vierge -> journal CHATTEUR complètement vide
     const delBlankRes = await app.fetch(
       new Request(`${WORKER_ORIGIN}/api/admin/parrain-guides/${encodeURIComponent(createdBlank.id)}`, {
         method: 'DELETE',
