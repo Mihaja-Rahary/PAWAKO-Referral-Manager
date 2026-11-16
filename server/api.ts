@@ -3,7 +3,7 @@ import crypto from 'crypto';
 import { db } from './db';
 import { discordService } from './discordService';
 import { firestoreService } from './firestore';
-import { User, UserRole, Candidate, CandidateStatus, AdminStatus, OperationalStatus, VAType, DiscordServerType, DiscordRoleMapping } from './types';
+import { User, UserRole, Candidate, CandidateStatus, AdminStatus, OperationalStatus, RecruitmentStage, VAType, DiscordServerType, DiscordRoleMapping } from './types';
 import {
   validateWebhookTimestampAndEventId,
   verifySignedSessionToken,
@@ -120,6 +120,7 @@ export function toParrainCandidateView(candidate: Candidate) {
     adminStatus: candidate.adminStatus,
     operationalStatus: candidate.operationalStatus,
     status: candidate.status,
+    recruitmentStage: candidate.recruitmentStage || null,
     currentServer: candidate.currentServer,
     arrivalDate: candidate.arrivalDate,
     refusalReason: null, // Confidentialité stricte : les motifs de refus internes ne sont jamais exposés aux parrains
@@ -225,6 +226,7 @@ apiRouter.get('/candidates', requireAuth, (req: Request, res: Response) => {
     adminStatus,
     operationalStatus,
     status,
+    recruitmentStage,
     server,
     attributionStatus,
     hasAnomaly,
@@ -258,6 +260,7 @@ apiRouter.get('/candidates', requireAuth, (req: Request, res: Response) => {
     adminStatus: adminStatus as AdminStatus | 'ALL',
     operationalStatus: operationalStatus as OperationalStatus | 'ALL',
     status: status as CandidateStatus | 'ALL',
+    recruitmentStage: recruitmentStage as RecruitmentStage | 'ALL',
     server: server as DiscordServerType | 'AUCUN' | 'ALL',
     attributionStatus: attributionStatus as any,
     hasAnomaly: hasAnomaly === 'true' ? true : hasAnomaly === 'false' ? false : undefined,
@@ -348,10 +351,10 @@ apiRouter.post('/candidates', requireResponsableOrAdmin, (req: Request, res: Res
 // Modification manuelle du statut administratif ou opérationnel
 apiRouter.patch('/candidates/:id/status', requireResponsableOrAdmin, (req: Request, res: Response) => {
   const currentUser: User = (req as any).user;
-  const { newAdminStatus, newOperationalStatus, newStatus, refusalReason, notes } = req.body;
+  const { newAdminStatus, newOperationalStatus, newStatus, newRecruitmentStage, refusalReason, notes } = req.body;
 
-  if (!newAdminStatus && !newOperationalStatus && !newStatus) {
-    return res.status(400).json({ error: 'Un nouveau statut administratif, opérationnel ou synthétique est requis.' });
+  if (!newAdminStatus && !newOperationalStatus && !newStatus && newRecruitmentStage === undefined) {
+    return res.status(400).json({ error: 'Un nouveau statut administratif, opérationnel, synthétique ou phase recrutement est requis.' });
   }
 
   const isRefusal = newAdminStatus === 'REFUSE' || newStatus === 'REFUSE';
@@ -368,6 +371,7 @@ apiRouter.patch('/candidates/:id/status', requireResponsableOrAdmin, (req: Reque
     newAdminStatus,
     newOperationalStatus,
     newStatus,
+    newRecruitmentStage,
     authorUserId: currentUser.id,
     authorName: currentUser.displayName,
     authorSource: currentUser.role === 'ADMINISTRATEUR' ? 'MANUAL_ADMIN' : 'MANUAL_RESPONSABLE',

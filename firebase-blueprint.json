@@ -40,6 +40,11 @@
           "enum": ["RECRUTEMENT", "FORMATION", "SIMULATION", "VALIDE", "PRODUCTION", "INACTIF"],
           "description": "Statut opérationnel en cours"
         },
+        "recruitmentStage": {
+          "type": "string",
+          "enum": ["EN_ATTENTE_QUALIFICATION", "EN_ATTENTE_RETOUR", "QUALIFIE", "NON_QUALIFIE"],
+          "description": "Phase exacte sur le Serveur Recrutement (formulaire, relance 24h, qualifié, non qualifié)"
+        },
         "referrerId": {
           "type": "string",
           "description": "ID du parrain associé"

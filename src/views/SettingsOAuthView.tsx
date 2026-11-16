@@ -188,11 +188,22 @@ export const SettingsOAuthView: React.FC = () => {
   const devCallback = oauthInfo?.redirectUri || `${apiBase || currentOrigin}/auth/callback`;
   const webhookUrl = `${apiBase || currentOrigin}/api/discord/webhook`;
 
-  const serverSections: { id: DiscordServerType; title: string; roles: PawakoRoleType[] }[] = [
+  const serverSections: { id: DiscordServerType; title: string; subtitle?: string; roles: PawakoRoleType[] }[] = [
     {
       id: 'RECRUTEMENT',
-      title: '1. Serveur Recrutement',
-      roles: ['CANDIDAT', 'CANDIDAT_ACCEPTE', 'CANDIDAT_REFUSE'],
+      title: '1. Serveur Recrutement (6 rôles principaux)',
+      subtitle: 'VA Chatting, VA Instagram, En attente de qualification, En attente d’un retour, Qualifié, Non qualifié',
+      roles: [
+        'VA_CHATTING',
+        'VA_INSTAGRAM',
+        'EN_ATTENTE_QUALIFICATION',
+        'EN_ATTENTE_RETOUR',
+        'QUALIFIE',
+        'NON_QUALIFIE',
+        'CANDIDAT',
+        'CANDIDAT_ACCEPTE',
+        'CANDIDAT_REFUSE',
+      ],
     },
     {
       id: 'FORMATION',
@@ -342,7 +353,12 @@ export const SettingsOAuthView: React.FC = () => {
                   className="p-4 border border-slate-200 dark:border-[#241a38] rounded-xl bg-slate-50/40 dark:bg-[#171026] space-y-3"
                 >
                   <div className="border-b border-slate-200 dark:border-[#241a38] pb-2 flex items-center justify-between gap-2 flex-wrap">
-                    <h4 className="font-bold text-slate-900 dark:text-[#f4f1fa] text-xs">{sec.title}</h4>
+                    <div>
+                      <h4 className="font-bold text-slate-900 dark:text-[#f4f1fa] text-xs">{sec.title}</h4>
+                      {sec.subtitle && (
+                        <p className="text-[10px] text-slate-500 dark:text-[#9d93b8] mt-0.5">{sec.subtitle}</p>
+                      )}
+                    </div>
                     {matchedGuild ? (
                       <span className="text-[11px] font-medium text-emerald-700 dark:text-emerald-300">
                         {matchedGuild.name} · {availableRoles.length} rôle(s) détecté(s)

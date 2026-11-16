@@ -5,6 +5,7 @@ import app, { Env } from '../worker/index';
 import { FirestoreRestClient, toFirestoreDocument } from '../server/firestoreRest';
 import { FirestoreRepository } from '../server/firestoreRepository';
 import { toParrainCandidateView } from '../server/api';
+import { suggestRoleMappingsForGuild } from '../server/discordBot';
 import { Candidate } from '../server/types';
 
 // Clé privée RSA PKCS#8 générée localement à la volée pour les tests (aucun secret réel)
@@ -2807,6 +2808,226 @@ describe('PAWAKO Referral Manager — Tests Complets Isolés (Mockés)', () => {
     const logs = await repo.getAuditLogs(20);
     assert.ok(logs.some(l => l.action === 'PARRAIN_GUIDE_CREATED'));
     assert.ok(logs.some(l => l.action === 'PARRAIN_GUIDE_DELETED'));
+  });
+
+  it('7.10 Serveur Recrutement : auto-détection, synchro, filtres, anomalies et vie privée parrain des 6 rôles', async () => {
+    // 1. Auto-détection exacte des 6 rôles (sans collision Qualifié vs Non qualifié, apostrophe courbe ’ & droite ')
+    const rolesCurly = [
+      { id: 'r-chatting', name: 'VA Chatting', color: 0, position: 1, managed: false },
+      { id: 'r-insta', name: 'VA Instagram', color: 0, position: 2, managed: false },
+      { id: 'r-att-qual', name: 'En attente de qualification', color: 0, position: 3, managed: false },
+      { id: 'r-att-ret', name: 'En attente d’un retour', color: 0, position: 4, managed: false },
+      { id: 'r-qual', name: 'Qualifié', color: 0, position: 5, managed: false },
+      { id: 'r-non-qual', name: 'Non qualifié', color: 0, position: 6, managed: false },
+    ];
+    const suggestedCurly = suggestRoleMappingsForGuild('RECRUTEMENT', rolesCurly);
+    assert.equal(suggestedCurly.VA_CHATTING?.roleId, 'r-chatting');
+    assert.equal(suggestedCurly.VA_INSTAGRAM?.roleId, 'r-insta');
+    assert.equal(suggestedCurly.EN_ATTENTE_QUALIFICATION?.roleId, 'r-att-qual');
+    assert.equal(suggestedCurly.EN_ATTENTE_RETOUR?.roleId, 'r-att-ret');
+    assert.equal(suggestedCurly.QUALIFIE?.roleId, 'r-qual');
+    assert.equal(suggestedCurly.NON_QUALIFIE?.roleId, 'r-non-qual');
+
+    const rolesStraight = rolesCurly.map(r =>
+      r.id === 'r-att-ret' ? { ...r, name: "En attente d'un retour" } : r
+    );
+    const suggestedStraight = suggestRoleMappingsForGuild('RECRUTEMENT', rolesStraight);
+    assert.equal(suggestedStraight.EN_ATTENTE_RETOUR?.roleId, 'r-att-ret');
+
+    // 2. Auto-configuration complète via Bot + synchro des membres avec les 6 rôles
+    mock.mockBotGuilds = [
+      {
+        id: GUILD_IDS.RECRUTEMENT,
+        name: 'PAWAKO Recrutement',
+        channels: [{ id: '900000000000000001', name: 'recrutement-liens', type: 0, position: 0 }],
+        roles: rolesCurly,
+        members: [
+          {
+            user: { id: '910000000000000001', username: 'va_chat_att_qual', global_name: 'Nora Chat', avatar: null },
+            roles: ['r-chatting', 'r-att-qual'],
+          },
+          {
+            user: { id: '910000000000000002', username: 'va_insta_att_ret', global_name: 'Lina Insta', avatar: null },
+            roles: ['r-insta', 'r-att-ret'],
+          },
+          {
+            user: { id: '910000000000000003', username: 'va_chat_qual', global_name: 'Marc Qualifié', avatar: null },
+            roles: ['r-chatting', 'r-qual'],
+          },
+          {
+            user: { id: '910000000000000004', username: 'va_insta_non_qual', global_name: 'Sami Refusé', avatar: null },
+            roles: ['r-insta', 'r-non-qual'],
+          },
+        ],
+      },
+    ];
+
+    const adminLogin = await loginViaWorkerOAuth(mock, env, 'admin', {
+      id: env.INITIAL_ADMIN_DISCORD_ID!,
+      username: 'super_admin',
+      global_name: 'Super Admin',
+      avatar: null,
+    });
+    const parrainLogin = await loginViaWorkerOAuth(mock, env, 'parrain', {
+      id: '200000000000000810',
+      username: 'parrain_six_roles',
+      global_name: 'Parrain Six Rôles',
+      avatar: null,
+    });
+
+    // Parrain verrouille sa spécialité CHATTEUR
+    await app.fetch(
+      new Request(`${WORKER_ORIGIN}/api/parrain/specialty`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: `pawako_session=${parrainLogin.sessionCookie}`,
+          Origin: FRONTEND_ORIGIN,
+        },
+        body: JSON.stringify({ vaType: 'CHATTEUR' }),
+      }),
+      env
+    );
+
+    const autoRes = await app.fetch(
+      new Request(`${WORKER_ORIGIN}/api/discord/bot/auto-configure`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: `pawako_session=${adminLogin.sessionCookie}`,
+          Origin: FRONTEND_ORIGIN,
+        },
+        body: JSON.stringify({ syncMembers: true }),
+      }),
+      env
+    );
+    assert.equal(autoRes.status, 200);
+    const autoJson = (await autoRes.json()) as any;
+    assert.equal(autoJson.ok, true);
+    assert.ok(autoJson.membersSynced >= 4);
+
+    // 3. Vérifier l'état exact persisté + rattachement au parrain pour tester le dashboard parrain
+    const repo = createRepo(env);
+    const parrainRef = await repo.getReferrerByDiscordUserId('200000000000000810');
+    assert.ok(parrainRef);
+
+    const nora = await repo.getCandidateByDiscordUserId('910000000000000001');
+    const lina = await repo.getCandidateByDiscordUserId('910000000000000002');
+    const marc = await repo.getCandidateByDiscordUserId('910000000000000003');
+    const sami = await repo.getCandidateByDiscordUserId('910000000000000004');
+    assert.ok(nora && lina && marc && sami);
+
+    assert.equal(nora.vaType, 'CHATTEUR');
+    assert.equal(nora.recruitmentStage, 'EN_ATTENTE_QUALIFICATION');
+    assert.equal(nora.status, 'EN_ATTENTE');
+
+    assert.equal(lina.vaType, 'INSTAGRAM');
+    assert.equal(lina.recruitmentStage, 'EN_ATTENTE_RETOUR');
+    assert.equal(lina.status, 'EN_ATTENTE');
+
+    assert.equal(marc.vaType, 'CHATTEUR');
+    assert.equal(marc.recruitmentStage, 'QUALIFIE');
+    assert.equal(marc.adminStatus, 'ACCEPTE');
+    assert.equal(marc.status, 'ACCEPTE');
+
+    assert.equal(sami.vaType, 'INSTAGRAM');
+    assert.equal(sami.recruitmentStage, 'NON_QUALIFIE');
+    assert.equal(sami.adminStatus, 'REFUSE');
+    assert.equal(sami.operationalStatus, 'INACTIF');
+    assert.equal(sami.status, 'REFUSE');
+
+    // Rattacher Nora (CHATTEUR) et Lina (INSTAGRAM) au parrain pour vérifier privacy + recruitmentStage
+    await repo.reassignReferrer(nora.id, {
+      newReferrerId: parrainRef.id,
+      reason: 'Test attribution',
+      actorUserId: env.INITIAL_ADMIN_DISCORD_ID!,
+      actorName: 'Super Admin',
+    });
+    await repo.reassignReferrer(lina.id, {
+      newReferrerId: parrainRef.id,
+      reason: 'Test attribution',
+      actorUserId: env.INITIAL_ADMIN_DISCORD_ID!,
+      actorName: 'Super Admin',
+    });
+
+    // 4. Filtrage /api/candidates?recruitmentStage=... et KPIs /api/stats/overview
+    const attQualRes = await app.fetch(
+      new Request(`${WORKER_ORIGIN}/api/candidates?recruitmentStage=EN_ATTENTE_QUALIFICATION`, {
+        headers: { Cookie: `pawako_session=${adminLogin.sessionCookie}`, Origin: FRONTEND_ORIGIN },
+      }),
+      env
+    );
+    assert.equal(attQualRes.status, 200);
+    const attQualJson = (await attQualRes.json()) as any;
+    assert.equal(attQualJson.candidates.length, 1);
+    assert.equal(attQualJson.candidates[0].id, nora.id);
+
+    const overviewRes = await app.fetch(
+      new Request(`${WORKER_ORIGIN}/api/stats/overview`, {
+        headers: { Cookie: `pawako_session=${adminLogin.sessionCookie}`, Origin: FRONTEND_ORIGIN },
+      }),
+      env
+    );
+    assert.equal(overviewRes.status, 200);
+    const overviewJson = (await overviewRes.json()) as any;
+    assert.equal(overviewJson.kpis.enAttenteQualification, 1);
+    assert.equal(overviewJson.kpis.enAttenteRetour, 1);
+    assert.equal(overviewJson.kpis.qualifies, 1);
+    assert.equal(overviewJson.kpis.nonQualifies, 1);
+
+    // 5. Parrain dashboard : voit Nora avec recruitmentStage, ne voit PAS Lina (INSTAGRAM), et refusalReason reste masqué
+    const parrainDashRes = await app.fetch(
+      new Request(`${WORKER_ORIGIN}/api/parrain/dashboard`, {
+        headers: { Cookie: `pawako_session=${parrainLogin.sessionCookie}`, Origin: FRONTEND_ORIGIN },
+      }),
+      env
+    );
+    assert.equal(parrainDashRes.status, 200);
+    const parrainDashJson = (await parrainDashRes.json()) as any;
+    assert.equal(parrainDashJson.candidates.length, 1);
+    assert.equal(parrainDashJson.candidates[0].id, nora.id);
+    assert.equal(parrainDashJson.candidates[0].recruitmentStage, 'EN_ATTENTE_QUALIFICATION');
+    assert.equal(parrainDashJson.metrics.enAttenteQualification, 1);
+
+    const parrainSanitizedSami = toParrainCandidateView({
+      ...sami,
+      refusalReason: 'Motif confidentiel interne',
+      decisionByName: 'Admin Secret',
+      anomalyReason: 'Note interne',
+    } as Candidate);
+    assert.equal(parrainSanitizedSami.recruitmentStage, 'NON_QUALIFIE');
+    assert.equal(parrainSanitizedSami.refusalReason, null);
+    assert.equal((parrainSanitizedSami as any).decisionByName ?? null, null);
+    assert.equal(parrainSanitizedSami.anomalyReason, null);
+
+    // 6. Anomalies sur combinaisons contradictoires : VA Chatting + VA Instagram, puis Qualifié + Non qualifié
+    const comboSpecialtySync = await repo.processDiscordGatewayEvent({
+      eventId: 'evt-combo-specialty-1',
+      eventType: 'MEMBER_SYNC',
+      guildId: GUILD_IDS.RECRUTEMENT,
+      user: {
+        id: nora.discordUserId,
+        username: nora.username,
+        global_name: nora.displayName,
+      },
+      roles: ['r-chatting', 'r-insta', 'r-att-qual'],
+    });
+    assert.equal(comboSpecialtySync.candidate?.hasAnomaly, true);
+    assert.match(comboSpecialtySync.candidate?.anomalyReason || '', /VA Chatting et VA Instagram/i);
+
+    const comboStageSync = await repo.processDiscordGatewayEvent({
+      eventId: 'evt-combo-stage-1',
+      eventType: 'MEMBER_SYNC',
+      guildId: GUILD_IDS.RECRUTEMENT,
+      user: {
+        id: marc.discordUserId,
+        username: marc.username,
+        global_name: marc.displayName,
+      },
+      roles: ['r-chatting', 'r-qual', 'r-non-qual'],
+    });
+    assert.equal(comboStageSync.candidate?.hasAnomaly, true);
+    assert.match(comboStageSync.candidate?.anomalyReason || '', /Qualifié et Non qualifié/i);
   });
 });
 

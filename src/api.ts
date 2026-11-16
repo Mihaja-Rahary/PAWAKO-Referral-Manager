@@ -3,6 +3,7 @@ import {
   CandidateStatus,
   AdminStatus,
   OperationalStatus,
+  RecruitmentStage,
   OverviewStatistics,
   Referrer,
   ReferrerStatus,
@@ -181,6 +182,7 @@ export const api = {
     adminStatus?: AdminStatus | 'ALL';
     operationalStatus?: OperationalStatus | 'ALL';
     status?: CandidateStatus | 'ALL';
+    recruitmentStage?: RecruitmentStage | 'ALL';
     server?: string;
     attributionStatus?: string;
     referrerId?: string;
@@ -200,6 +202,9 @@ export const api = {
     if (params?.adminStatus && params.adminStatus !== 'ALL') query.set('adminStatus', params.adminStatus);
     if (params?.operationalStatus && params.operationalStatus !== 'ALL') query.set('operationalStatus', params.operationalStatus);
     if (params?.status && params.status !== 'ALL') query.set('status', params.status);
+    if (params?.recruitmentStage && params.recruitmentStage !== 'ALL') {
+      query.set('recruitmentStage', params.recruitmentStage);
+    }
     if (params?.server && params.server !== 'ALL') query.set('server', params.server);
     if (params?.attributionStatus && params.attributionStatus !== 'ALL') query.set('attributionStatus', params.attributionStatus);
     if (params?.referrerId) query.set('referrerId', params.referrerId);
@@ -238,6 +243,7 @@ export const api = {
       newAdminStatus?: AdminStatus;
       newOperationalStatus?: OperationalStatus;
       newStatus?: CandidateStatus;
+      newRecruitmentStage?: RecruitmentStage | null;
       refusalReason?: string;
       notes: string;
     }
@@ -431,6 +437,10 @@ export const api = {
     metrics: {
       totalFilleuls: number;
       enAttente: number;
+      enAttenteQualification?: number;
+      enAttenteRetour?: number;
+      qualifies?: number;
+      nonQualifies?: number;
       acceptes: number;
       refuses: number;
       enFormation: number;

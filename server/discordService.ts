@@ -221,46 +221,94 @@ export class DiscordService {
         }
       }
 
-      // Règle 1 : Rôle contradictoire (ex: Formation et Production simultanées)
       const hasFormation = detectedPawakoRoles.includes('EN_FORMATION') || detectedPawakoRoles.includes('EN_SIMULATION');
       const hasProduction = detectedPawakoRoles.includes('VA_PRODUCTION');
-      if (hasFormation && hasProduction) {
+      const hasVaChatting = detectedPawakoRoles.includes('VA_CHATTING');
+      const hasVaInstagram = detectedPawakoRoles.includes('VA_INSTAGRAM');
+      const hasPositiveQualification =
+        detectedPawakoRoles.includes('QUALIFIE') || detectedPawakoRoles.includes('CANDIDAT_ACCEPTE');
+      const hasNegativeQualification =
+        detectedPawakoRoles.includes('NON_QUALIFIE') || detectedPawakoRoles.includes('CANDIDAT_REFUSE');
+
+      if (hasVaChatting && hasVaInstagram) {
+        anomalyDetected =
+          'Combinaison de rôles contradictoire sur Recrutement : VA Chatting et VA Instagram attribués simultanément.';
+        db.flagCandidateAnomaly(candidate.id, anomalyDetected);
+      } else if (hasPositiveQualification && hasNegativeQualification) {
+        anomalyDetected =
+          'Combinaison de rôles contradictoire sur Recrutement : Qualifié et Non qualifié attribués simultanément.';
+        db.flagCandidateAnomaly(candidate.id, anomalyDetected);
+      } else if (hasFormation && hasProduction) {
         anomalyDetected = 'Combinaison de rôles contradictoire détectée sur Discord : rôles de Formation et de Production simultanément attribués.';
         db.flagCandidateAnomaly(candidate.id, anomalyDetected);
-      }
-
-      // Règle 2 : Incompatibilité avec l'activité du candidat
-      if (candidate.vaType === 'INSTAGRAM' && (detectedPawakoRoles.includes('EN_FORMATION') || detectedPawakoRoles.includes('EN_SIMULATION') || detectedPawakoRoles.includes('VA_VALIDE'))) {
+      } else if (
+        hasVaInstagram &&
+        !hasVaChatting &&
+        ['FORMATION', 'SIMULATION', 'VALIDE'].includes(candidate.operationalStatus)
+      ) {
+        anomalyDetected =
+          'Incompatibilité : rôle VA Instagram attribué à un candidat déjà en Formation, Simulation ou Validation.';
+        db.flagCandidateAnomaly(candidate.id, anomalyDetected);
+      } else if (
+        (candidate.vaType === 'INSTAGRAM' || (hasVaInstagram && !hasVaChatting)) &&
+        (detectedPawakoRoles.includes('EN_FORMATION') || detectedPawakoRoles.includes('EN_SIMULATION') || detectedPawakoRoles.includes('VA_VALIDE'))
+      ) {
         anomalyDetected = 'Incompatibilité d activité : un candidat VA Instagram ne doit jamais posséder de rôles de Formation, Simulation ou Validation.';
         db.flagCandidateAnomaly(candidate.id, anomalyDetected);
       }
 
-      // Règle 3 : Un candidat déjà REFUSÉ ne doit JAMAIS redevenir automatiquement accepté ou en formation par rôle Discord
       if (candidate.adminStatus === 'REFUSE') {
-        if (detectedPawakoRoles.some(r => r === 'CANDIDAT_ACCEPTE' || r === 'EN_FORMATION' || r === 'EN_SIMULATION' || r === 'VA_VALIDE' || r === 'VA_PRODUCTION')) {
-          anomalyDetected = 'Rôle d acceptation/formation détecté sur Discord pour un candidat classé REFUSÉ. Aucune réactivation automatique autorisée sans décision manuelle.';
+        if (detectedPawakoRoles.some(r => ['QUALIFIE', 'CANDIDAT_ACCEPTE', 'EN_FORMATION', 'EN_SIMULATION', 'VA_VALIDE', 'VA_PRODUCTION'].includes(r))) {
+          anomalyDetected = 'Rôle d acceptation/qualification/formation détecté sur Discord pour un candidat classé REFUSÉ. Aucune réactivation automatique autorisée sans décision manuelle.';
           db.flagCandidateAnomaly(candidate.id, anomalyDetected);
         }
       } else if (!anomalyDetected) {
+        if (hasVaInstagram && !hasVaChatting && candidate.vaType !== 'INSTAGRAM') {
+          db.updateCandidateVAType({
+            candidateId: candidate.id,
+            newVaType: 'INSTAGRAM',
+            reason: 'Spécialité synchronisée via Discord (VA Instagram)',
+            authorUserId: 'JARVIS_BOT',
+            authorName: 'Bot JARVIS',
+          });
+          candidate = db.getCandidateById(candidate.id) || candidate;
+        } else if (hasVaChatting && !hasVaInstagram && candidate.vaType !== 'CHATTEUR') {
+          db.updateCandidateVAType({
+            candidateId: candidate.id,
+            newVaType: 'CHATTEUR',
+            reason: 'Spécialité synchronisée via Discord (VA Chatting)',
+            authorUserId: 'JARVIS_BOT',
+            authorName: 'Bot JARVIS',
+          });
+          candidate = db.getCandidateById(candidate.id) || candidate;
+        }
+
         // Appliquer la transition autorisée selon la hiérarchie de priorité
-        if (detectedPawakoRoles.includes('CANDIDAT_REFUSE')) {
+        if (detectedPawakoRoles.includes('NON_QUALIFIE') || detectedPawakoRoles.includes('CANDIDAT_REFUSE')) {
+          const isNonQualifie = detectedPawakoRoles.includes('NON_QUALIFIE');
           db.updateCandidateStatus({
             candidateId: candidate.id,
             newAdminStatus: 'REFUSE',
             newOperationalStatus: 'INACTIF',
-            refusalReason: 'Refus notifié automatiquement via l attribution du rôle Discord Candidat Refusé',
+            newRecruitmentStage: 'NON_QUALIFIE',
+            refusalReason: isNonQualifie
+              ? 'Disqualification synchronisée via le rôle Discord Non qualifié'
+              : 'Refus notifié automatiquement via l attribution du rôle Discord Candidat Refusé',
             authorUserId: 'JARVIS_BOT',
             authorName: 'Bot JARVIS',
             authorSource: 'DISCORD_SYNC',
-            notes: 'Synchronisation automatique du rôle Discord CANDIDAT_REFUSE',
+            notes: isNonQualifie
+              ? 'Synchronisation automatique du rôle Discord NON_QUALIFIE'
+              : 'Synchronisation automatique du rôle Discord CANDIDAT_REFUSE',
           });
-          resultMessage += ' Statut actualisé : REFUSÉ.';
+          resultMessage += isNonQualifie ? ' Statut actualisé : NON QUALIFIÉ.' : ' Statut actualisé : REFUSÉ.';
         } else if (detectedPawakoRoles.includes('VA_PRODUCTION')) {
           const targetServer: DiscordServerType = candidate.vaType === 'INSTAGRAM' ? 'PRODUCTION_INSTAGRAM' : 'PRODUCTION_CHATTING';
           db.updateCandidateStatus({
             candidateId: candidate.id,
             newAdminStatus: 'ACCEPTE',
             newOperationalStatus: 'PRODUCTION',
+            newRecruitmentStage: candidate.recruitmentStage || 'QUALIFIE',
             authorUserId: 'JARVIS_BOT',
             authorName: 'Bot JARVIS',
             authorSource: 'DISCORD_SYNC',
@@ -272,6 +320,7 @@ export class DiscordService {
             candidateId: candidate.id,
             newAdminStatus: 'ACCEPTE',
             newOperationalStatus: 'VALIDE',
+            newRecruitmentStage: candidate.recruitmentStage || 'QUALIFIE',
             authorUserId: 'JARVIS_BOT',
             authorName: 'Bot JARVIS',
             authorSource: 'DISCORD_SYNC',
@@ -283,6 +332,7 @@ export class DiscordService {
             candidateId: candidate.id,
             newAdminStatus: 'ACCEPTE',
             newOperationalStatus: 'SIMULATION',
+            newRecruitmentStage: candidate.recruitmentStage || 'QUALIFIE',
             authorUserId: 'JARVIS_BOT',
             authorName: 'Bot JARVIS',
             authorSource: 'DISCORD_SYNC',
@@ -294,23 +344,56 @@ export class DiscordService {
             candidateId: candidate.id,
             newAdminStatus: 'ACCEPTE',
             newOperationalStatus: 'FORMATION',
+            newRecruitmentStage: candidate.recruitmentStage || 'QUALIFIE',
             authorUserId: 'JARVIS_BOT',
             authorName: 'Bot JARVIS',
             authorSource: 'DISCORD_SYNC',
             notes: 'Entrée en formation via le rôle Discord EN_FORMATION',
           });
           resultMessage += ' Statut actualisé : FORMATION.';
-        } else if (detectedPawakoRoles.includes('CANDIDAT_ACCEPTE')) {
+        } else if (detectedPawakoRoles.includes('QUALIFIE') || detectedPawakoRoles.includes('CANDIDAT_ACCEPTE')) {
+          const isQualifie = detectedPawakoRoles.includes('QUALIFIE');
           db.updateCandidateStatus({
             candidateId: candidate.id,
             newAdminStatus: 'ACCEPTE',
             newOperationalStatus: candidate.operationalStatus === 'INACTIF' ? 'RECRUTEMENT' : candidate.operationalStatus,
+            newRecruitmentStage: 'QUALIFIE',
             authorUserId: 'JARVIS_BOT',
             authorName: 'Bot JARVIS',
             authorSource: 'DISCORD_SYNC',
-            notes: 'Acceptation de la candidature via le rôle Discord CANDIDAT_ACCEPTE',
+            notes: isQualifie
+              ? 'Qualification validée via le rôle Discord Qualifié'
+              : 'Acceptation de la candidature via le rôle Discord CANDIDAT_ACCEPTE',
           });
-          resultMessage += ' Statut administratif actualisé : ACCEPTÉ.';
+          resultMessage += isQualifie ? ' Statut actualisé : QUALIFIÉ.' : ' Statut administratif actualisé : ACCEPTÉ.';
+        } else if (detectedPawakoRoles.includes('EN_ATTENTE_RETOUR')) {
+          if (candidate.operationalStatus === 'RECRUTEMENT' && candidate.adminStatus === 'EN_ATTENTE') {
+            db.updateCandidateStatus({
+              candidateId: candidate.id,
+              newAdminStatus: 'EN_ATTENTE',
+              newOperationalStatus: 'RECRUTEMENT',
+              newRecruitmentStage: 'EN_ATTENTE_RETOUR',
+              authorUserId: 'JARVIS_BOT',
+              authorName: 'Bot JARVIS',
+              authorSource: 'DISCORD_SYNC',
+              notes: 'Relance 24h+ sans réponse détectée via Discord (En attente d’un retour)',
+            });
+            resultMessage += ' Phase recrutement : En attente d’un retour (24h+).';
+          }
+        } else if (detectedPawakoRoles.includes('EN_ATTENTE_QUALIFICATION')) {
+          if (candidate.operationalStatus === 'RECRUTEMENT' && candidate.adminStatus === 'EN_ATTENTE') {
+            db.updateCandidateStatus({
+              candidateId: candidate.id,
+              newAdminStatus: 'EN_ATTENTE',
+              newOperationalStatus: 'RECRUTEMENT',
+              newRecruitmentStage: 'EN_ATTENTE_QUALIFICATION',
+              authorUserId: 'JARVIS_BOT',
+              authorName: 'Bot JARVIS',
+              authorSource: 'DISCORD_SYNC',
+              notes: 'Formulaire non complété détecté via Discord (En attente de qualification)',
+            });
+            resultMessage += ' Phase recrutement : En attente de qualification.';
+          }
         }
       }
 

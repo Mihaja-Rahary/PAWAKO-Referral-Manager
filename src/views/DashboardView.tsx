@@ -13,11 +13,17 @@ import {
   MessageSquare,
   Instagram,
   Trophy,
+  Clock,
+  FileEdit,
+  XCircle,
 } from 'lucide-react';
 
 interface Props {
   stats: OverviewStatistics | null;
-  onNavigateToCandidates: (statusFilter?: string, extraParams?: { vaType?: string; hasAnomaly?: boolean }) => void;
+  onNavigateToCandidates: (
+    statusFilter?: string,
+    extraParams?: { vaType?: string; recruitmentStage?: string; hasAnomaly?: boolean }
+  ) => void;
   onNavigateToReferrers: () => void;
 }
 
@@ -264,6 +270,109 @@ export const DashboardView: React.FC<Props> = ({
             {kpis.refuses} refusés · {kpis.abandonnes} abandons
           </div>
         </button>
+      </section>
+
+      {/* Serveur Recrutement : Phases & Spécialités (6 rôles Discord) */}
+      <section className="bg-white dark:bg-[#111118] border border-slate-200 dark:border-white/10 rounded-2xl p-5 sm:p-6 space-y-4 transition-colors">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div>
+            <div className="text-[11px] font-bold uppercase tracking-[0.12em] text-indigo-600 dark:text-indigo-400">
+              Serveur Recrutement · 6 Rôles Discord
+            </div>
+            <h3 className="text-base font-extrabold text-slate-950 dark:text-white mt-0.5">
+              Qualification &amp; Spécialités à l&apos;entrée
+            </h3>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            <button
+              type="button"
+              onClick={() => onNavigateToCandidates(undefined, { vaType: 'CHATTEUR' })}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-indigo-200 dark:border-indigo-500/30 bg-indigo-50/70 dark:bg-indigo-500/10 text-indigo-700 dark:text-indigo-300 font-bold hover:brightness-95 transition-all cursor-pointer"
+            >
+              <MessageSquare className="w-3.5 h-3.5" />
+              <span>VA Chatting ({kpis.totalChatteurs})</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => onNavigateToCandidates(undefined, { vaType: 'INSTAGRAM' })}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-orange-200 dark:border-[#FA4616]/35 bg-orange-50/70 dark:bg-[#FA4616]/10 text-[#d9380d] dark:text-orange-300 font-bold hover:brightness-95 transition-all cursor-pointer"
+            >
+              <Instagram className="w-3.5 h-3.5" />
+              <span>VA Instagram ({kpis.totalInstagram})</span>
+            </button>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
+          <button
+            type="button"
+            onClick={() => onNavigateToCandidates(undefined, { recruitmentStage: 'EN_ATTENTE_QUALIFICATION' })}
+            className="text-left p-4 rounded-xl bg-sky-50/60 dark:bg-sky-500/10 border border-sky-200/80 dark:border-sky-500/25 hover:border-sky-400 dark:hover:border-sky-400/60 transition-all cursor-pointer space-y-1.5"
+          >
+            <div className="flex items-center justify-between text-sky-700 dark:text-sky-300 font-bold">
+              <span>En attente de qualification</span>
+              <FileEdit className="w-4 h-4 shrink-0" />
+            </div>
+            <div className="text-2xl font-extrabold font-mono tabular-nums text-sky-900 dark:text-sky-100">
+              {kpis.enAttenteQualification ?? 0}
+            </div>
+            <div className="text-[11px] text-sky-700/80 dark:text-sky-300/80">
+              Formulaire non encore complété
+            </div>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => onNavigateToCandidates(undefined, { recruitmentStage: 'EN_ATTENTE_RETOUR' })}
+            className="text-left p-4 rounded-xl bg-amber-50/60 dark:bg-amber-500/10 border border-amber-200/80 dark:border-amber-500/25 hover:border-amber-400 dark:hover:border-amber-400/60 transition-all cursor-pointer space-y-1.5"
+          >
+            <div className="flex items-center justify-between text-amber-800 dark:text-amber-300 font-bold">
+              <span>En attente d&apos;un retour</span>
+              <Clock className="w-4 h-4 shrink-0" />
+            </div>
+            <div className="text-2xl font-extrabold font-mono tabular-nums text-amber-950 dark:text-amber-100">
+              {kpis.enAttenteRetour ?? 0}
+            </div>
+            <div className="text-[11px] text-amber-800/80 dark:text-amber-300/80">
+              Sans réponse aux relances (24h+)
+            </div>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => onNavigateToCandidates(undefined, { recruitmentStage: 'QUALIFIE' })}
+            className="text-left p-4 rounded-xl bg-emerald-50/60 dark:bg-emerald-500/10 border border-emerald-200/80 dark:border-emerald-500/25 hover:border-emerald-400 dark:hover:border-emerald-400/60 transition-all cursor-pointer space-y-1.5"
+          >
+            <div className="flex items-center justify-between text-emerald-700 dark:text-emerald-300 font-bold">
+              <span>Qualifiés</span>
+              <CheckCircle2 className="w-4 h-4 shrink-0" />
+            </div>
+            <div className="text-2xl font-extrabold font-mono tabular-nums text-emerald-900 dark:text-emerald-100">
+              {kpis.qualifies ?? 0}
+            </div>
+            <div className="text-[11px] text-emerald-700/80 dark:text-emerald-300/80">
+              Candidats retenus au recrutement
+            </div>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => onNavigateToCandidates(undefined, { recruitmentStage: 'NON_QUALIFIE' })}
+            className="text-left p-4 rounded-xl bg-rose-50/60 dark:bg-rose-500/10 border border-rose-200/80 dark:border-rose-500/25 hover:border-rose-400 dark:hover:border-rose-400/60 transition-all cursor-pointer space-y-1.5"
+          >
+            <div className="flex items-center justify-between text-rose-700 dark:text-rose-300 font-bold">
+              <span>Non qualifiés</span>
+              <XCircle className="w-4 h-4 shrink-0" />
+            </div>
+            <div className="text-2xl font-extrabold font-mono tabular-nums text-rose-900 dark:text-rose-100">
+              {kpis.nonQualifies ?? 0}
+            </div>
+            <div className="text-[11px] text-rose-700/80 dark:text-rose-300/80">
+              Non retenus après évaluation
+            </div>
+          </button>
+        </div>
       </section>
 
       {/* Visual Analytics Row */}

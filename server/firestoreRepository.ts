@@ -39,6 +39,7 @@ import {
   AdminStatus,
   OperationalStatus,
   CandidateStatus,
+  RecruitmentStage,
   VAType,
   DiscordServerType,
   PawakoRoleType,
@@ -101,9 +102,25 @@ export const OFFICIAL_DISCORD_SERVERS: DiscordServerInfo[] = [
 ];
 
 export const DEFAULT_ROLE_MAPPINGS: DiscordRoleMapping[] = [
-  { serverId: 'RECRUTEMENT', roleType: 'CANDIDAT', discordRoleId: '', roleName: 'Candidat (En attente)' },
-  { serverId: 'RECRUTEMENT', roleType: 'CANDIDAT_ACCEPTE', discordRoleId: '', roleName: 'Candidat Accepté' },
-  { serverId: 'RECRUTEMENT', roleType: 'CANDIDAT_REFUSE', discordRoleId: '', roleName: 'Candidat Refusé' },
+  { serverId: 'RECRUTEMENT', roleType: 'VA_CHATTING', discordRoleId: '', roleName: 'VA Chatting' },
+  { serverId: 'RECRUTEMENT', roleType: 'VA_INSTAGRAM', discordRoleId: '', roleName: 'VA Instagram' },
+  {
+    serverId: 'RECRUTEMENT',
+    roleType: 'EN_ATTENTE_QUALIFICATION',
+    discordRoleId: '',
+    roleName: 'En attente de qualification',
+  },
+  {
+    serverId: 'RECRUTEMENT',
+    roleType: 'EN_ATTENTE_RETOUR',
+    discordRoleId: '',
+    roleName: 'En attente d’un retour',
+  },
+  { serverId: 'RECRUTEMENT', roleType: 'QUALIFIE', discordRoleId: '', roleName: 'Qualifié' },
+  { serverId: 'RECRUTEMENT', roleType: 'NON_QUALIFIE', discordRoleId: '', roleName: 'Non qualifié' },
+  { serverId: 'RECRUTEMENT', roleType: 'CANDIDAT', discordRoleId: '', roleName: 'Candidat (Legacy)' },
+  { serverId: 'RECRUTEMENT', roleType: 'CANDIDAT_ACCEPTE', discordRoleId: '', roleName: 'Candidat Accepté (Legacy)' },
+  { serverId: 'RECRUTEMENT', roleType: 'CANDIDAT_REFUSE', discordRoleId: '', roleName: 'Candidat Refusé (Legacy)' },
   { serverId: 'FORMATION', roleType: 'EN_FORMATION', discordRoleId: '', roleName: 'En Formation' },
   { serverId: 'FORMATION', roleType: 'EN_SIMULATION', discordRoleId: '', roleName: 'En Simulation' },
   { serverId: 'FORMATION', roleType: 'VA_VALIDE', discordRoleId: '', roleName: 'VA Validé' },
@@ -2480,6 +2497,7 @@ export class FirestoreRepository {
     adminStatus?: AdminStatus | 'ALL';
     operationalStatus?: OperationalStatus | 'ALL';
     status?: CandidateStatus | 'ALL';
+    recruitmentStage?: RecruitmentStage | 'ALL';
     server?: string;
     attributionStatus?: string;
     referrerId?: string;
@@ -2529,6 +2547,10 @@ export class FirestoreRepository {
 
     if (options?.status && options.status !== 'ALL') {
       list = list.filter(c => c.status === options.status);
+    }
+
+    if (options?.recruitmentStage && options.recruitmentStage !== 'ALL') {
+      list = list.filter(c => c.recruitmentStage === options.recruitmentStage);
     }
 
     if (options?.attributionStatus && options.attributionStatus !== 'ALL') {
@@ -2645,6 +2667,7 @@ export class FirestoreRepository {
     displayName?: string;
     avatar?: string | null;
     vaType: VAType;
+    recruitmentStage?: RecruitmentStage | null;
     inviteCodeUsed?: string;
     originServer?: DiscordServerType;
     actorUserId?: string;
@@ -2680,6 +2703,7 @@ export class FirestoreRepository {
       adminStatus: 'EN_ATTENTE',
       operationalStatus: 'RECRUTEMENT',
       status: 'EN_ATTENTE',
+      recruitmentStage: params.recruitmentStage ?? null,
       referrerId: referrer?.id || null,
       referrerDiscordUserId: referrer?.discordUserId || null,
       referrerName: referrer?.discordDisplayName || null,
@@ -2762,6 +2786,7 @@ export class FirestoreRepository {
       newAdminStatus?: AdminStatus;
       newOperationalStatus?: OperationalStatus;
       newStatus?: CandidateStatus;
+      newRecruitmentStage?: RecruitmentStage | null;
       notes: string;
       refusalReason?: string;
       actorUserId: string;
@@ -2798,6 +2823,20 @@ export class FirestoreRepository {
     }
 
     candidate.status = deriveCandidateStatus(candidate.adminStatus, candidate.operationalStatus);
+
+    if (params.newRecruitmentStage !== undefined) {
+      candidate.recruitmentStage = params.newRecruitmentStage;
+    } else if (candidate.adminStatus === 'REFUSE') {
+      candidate.recruitmentStage = 'NON_QUALIFIE';
+    } else if (
+      candidate.adminStatus === 'ACCEPTE' &&
+      (!candidate.recruitmentStage ||
+        candidate.recruitmentStage === 'EN_ATTENTE_QUALIFICATION' ||
+        candidate.recruitmentStage === 'EN_ATTENTE_RETOUR' ||
+        candidate.recruitmentStage === 'NON_QUALIFIE')
+    ) {
+      candidate.recruitmentStage = 'QUALIFIE';
+    }
 
     if (candidate.operationalStatus === 'FORMATION' && !candidate.formationDate) {
       candidate.formationDate = now;
@@ -3037,18 +3076,24 @@ export class FirestoreRepository {
   }
 
   async getRoleMappings(): Promise<DiscordRoleMapping[]> {
-    let mappings = await this.client.listDocuments<DiscordRoleMapping>('pawako_discord_role_mappings');
-    if (mappings.length === 0) {
-      mappings = DEFAULT_ROLE_MAPPINGS;
+    const existing = await this.client.listDocuments<DiscordRoleMapping>('pawako_discord_role_mappings');
+    const cleanExisting = existing.map(m => stripFirestoreMeta(m));
+    const existingKeys = new Set(cleanExisting.map(m => `${m.serverId}_${m.roleType}`));
+    const missingDefaults = DEFAULT_ROLE_MAPPINGS.filter(
+      def => !existingKeys.has(`${def.serverId}_${def.roleType}`)
+    );
+
+    if (missingDefaults.length > 0) {
       await this.client.batchSet(
-        mappings.map(m => ({
+        missingDefaults.map(m => ({
           collection: 'pawako_discord_role_mappings',
           docId: `${m.serverId}_${m.roleType}`,
           data: m,
         }))
       );
+      return [...cleanExisting, ...missingDefaults];
     }
-    return mappings.map(m => stripFirestoreMeta(m));
+    return cleanExisting;
   }
 
   async updateRoleMappings(
@@ -3703,6 +3748,43 @@ export class FirestoreRepository {
     let resultMessage = '';
     let anomalyDetected: string | null = null;
 
+    const currentRoles = Array.isArray(params.roles) ? params.roles : [];
+    const roleMappings = await this.getRoleMappings();
+    const serverMappings = roleMappings.filter(m => m.serverId === serverType && m.discordRoleId);
+    const detectedPawakoRoles: PawakoRoleType[] = [];
+    for (const rId of currentRoles) {
+      const match = serverMappings.find(m => m.discordRoleId === rId);
+      if (match && !detectedPawakoRoles.includes(match.roleType)) {
+        detectedPawakoRoles.push(match.roleType);
+      }
+    }
+
+    const inferVaTypeFromContext = (): VAType => {
+      if (serverType === 'PRODUCTION_INSTAGRAM') return 'INSTAGRAM';
+      if (serverType === 'PRODUCTION_CHATTING') return 'CHATTEUR';
+      const hasInsta = detectedPawakoRoles.includes('VA_INSTAGRAM');
+      const hasChat = detectedPawakoRoles.includes('VA_CHATTING');
+      if (hasInsta && !hasChat) return 'INSTAGRAM';
+      if (hasChat && !hasInsta) return 'CHATTEUR';
+      return params.vaType || 'CHATTEUR';
+    };
+
+    const inferInitialStageFromRoles = (): RecruitmentStage | null => {
+      if (detectedPawakoRoles.includes('NON_QUALIFIE') || detectedPawakoRoles.includes('CANDIDAT_REFUSE')) {
+        return 'NON_QUALIFIE';
+      }
+      if (detectedPawakoRoles.includes('QUALIFIE') || detectedPawakoRoles.includes('CANDIDAT_ACCEPTE')) {
+        return 'QUALIFIE';
+      }
+      if (detectedPawakoRoles.includes('EN_ATTENTE_RETOUR')) {
+        return 'EN_ATTENTE_RETOUR';
+      }
+      if (detectedPawakoRoles.includes('EN_ATTENTE_QUALIFICATION')) {
+        return 'EN_ATTENTE_QUALIFICATION';
+      }
+      return null;
+    };
+
     // Mise à jour serveur + compteur
     const targetServerDoc = servers.find(s => s.id === serverType);
     const updateServerSync = async (delta: number) => {
@@ -3718,14 +3800,13 @@ export class FirestoreRepository {
 
     if (params.eventType === 'GUILD_MEMBER_ADD') {
       if (!candidate) {
-        const inferredVaType: VAType =
-          serverType === 'PRODUCTION_INSTAGRAM' ? 'INSTAGRAM' : params.vaType || 'CHATTEUR';
         candidate = await this.createCandidate({
           discordUserId,
           username,
           displayName,
           avatar: avatarUrl,
-          vaType: inferredVaType,
+          vaType: inferVaTypeFromContext(),
+          recruitmentStage: inferInitialStageFromRoles(),
           inviteCodeUsed: cleanInviteCode || undefined,
           originServer: serverType,
         });
@@ -3795,7 +3876,7 @@ export class FirestoreRepository {
         serverId: serverType,
         joinedAt: now,
         leftAt: null,
-        roles: params.roles || candidate.discordRoles || [],
+        roles: currentRoles.length > 0 ? currentRoles : candidate.discordRoles || [],
         nickname: displayName,
       };
       await this.client.setDocument('pawako_discord_memberships', membership.id, membership);
@@ -3848,30 +3929,17 @@ export class FirestoreRepository {
     if (
       params.eventType === 'GUILD_MEMBER_UPDATE' ||
       params.eventType === 'MEMBER_SYNC' ||
-      (params.eventType === 'GUILD_MEMBER_ADD' && Array.isArray(params.roles) && params.roles.length > 0)
+      (params.eventType === 'GUILD_MEMBER_ADD' && currentRoles.length > 0)
     ) {
-      const roleMappings = await this.getRoleMappings();
-      const serverMappings = roleMappings.filter(m => m.serverId === serverType && m.discordRoleId);
-      const currentRoles = Array.isArray(params.roles) ? params.roles : [];
-
-      const detectedPawakoRoles: PawakoRoleType[] = [];
-      for (const rId of currentRoles) {
-        const match = serverMappings.find(m => m.discordRoleId === rId);
-        if (match && !detectedPawakoRoles.includes(match.roleType)) {
-          detectedPawakoRoles.push(match.roleType);
-        }
-      }
-
       // Lors d'un MEMBER_SYNC initial, créer le dossier si un rôle PAWAKO mappé existe et que le candidat manque
       if (!candidate && params.eventType === 'MEMBER_SYNC' && detectedPawakoRoles.length > 0) {
-        const inferredVaType: VAType =
-          serverType === 'PRODUCTION_INSTAGRAM' ? 'INSTAGRAM' : params.vaType || 'CHATTEUR';
         candidate = await this.createCandidate({
           discordUserId,
           username,
           displayName,
           avatar: avatarUrl,
-          vaType: inferredVaType,
+          vaType: inferVaTypeFromContext(),
+          recruitmentStage: inferInitialStageFromRoles(),
           originServer: serverType,
         });
       }
@@ -3896,12 +3964,31 @@ export class FirestoreRepository {
         const hasFormation =
           detectedPawakoRoles.includes('EN_FORMATION') || detectedPawakoRoles.includes('EN_SIMULATION');
         const hasProduction = detectedPawakoRoles.includes('VA_PRODUCTION');
+        const hasVaChatting = detectedPawakoRoles.includes('VA_CHATTING');
+        const hasVaInstagram = detectedPawakoRoles.includes('VA_INSTAGRAM');
+        const hasPositiveQualification =
+          detectedPawakoRoles.includes('QUALIFIE') || detectedPawakoRoles.includes('CANDIDAT_ACCEPTE');
+        const hasNegativeQualification =
+          detectedPawakoRoles.includes('NON_QUALIFIE') || detectedPawakoRoles.includes('CANDIDAT_REFUSE');
 
-        if (hasFormation && hasProduction) {
+        if (hasVaChatting && hasVaInstagram) {
+          anomalyDetected =
+            'Combinaison de rôles contradictoire sur Recrutement : VA Chatting et VA Instagram attribués simultanément.';
+        } else if (hasPositiveQualification && hasNegativeQualification) {
+          anomalyDetected =
+            'Combinaison de rôles contradictoire sur Recrutement : Qualifié et Non qualifié attribués simultanément.';
+        } else if (hasFormation && hasProduction) {
           anomalyDetected =
             'Combinaison de rôles contradictoire détectée sur Discord : Formation/Simulation et Production simultanées.';
         } else if (
-          candidate.vaType === 'INSTAGRAM' &&
+          hasVaInstagram &&
+          !hasVaChatting &&
+          ['FORMATION', 'SIMULATION', 'VALIDE'].includes(candidate.operationalStatus)
+        ) {
+          anomalyDetected =
+            "Incompatibilité : rôle Discord VA Instagram détecté pour un candidat déjà en Formation, Simulation ou Validation.";
+        } else if (
+          (candidate.vaType === 'INSTAGRAM' || (hasVaInstagram && !hasVaChatting)) &&
           (detectedPawakoRoles.includes('EN_FORMATION') ||
             detectedPawakoRoles.includes('EN_SIMULATION') ||
             detectedPawakoRoles.includes('VA_VALIDE'))
@@ -3911,11 +3998,11 @@ export class FirestoreRepository {
         } else if (
           candidate.adminStatus === 'REFUSE' &&
           detectedPawakoRoles.some(r =>
-            ['CANDIDAT_ACCEPTE', 'EN_FORMATION', 'EN_SIMULATION', 'VA_VALIDE', 'VA_PRODUCTION'].includes(r)
+            ['QUALIFIE', 'CANDIDAT_ACCEPTE', 'EN_FORMATION', 'EN_SIMULATION', 'VA_VALIDE', 'VA_PRODUCTION'].includes(r)
           )
         ) {
           anomalyDetected =
-            'Rôle d acceptation/formation/production détecté sur Discord pour un candidat REFUSÉ. Réactivation automatique bloquée.';
+            'Rôle d acceptation/qualification/formation/production détecté sur Discord pour un candidat REFUSÉ. Réactivation automatique bloquée.';
         }
 
         if (anomalyDetected) {
@@ -3923,21 +4010,72 @@ export class FirestoreRepository {
           candidate.anomalyReason = anomalyDetected;
           await this.client.setDocument('pawako_candidates', candidate.id, stripFirestoreMeta(candidate));
         } else {
+          // Synchronisation de la spécialité (VA Chatting / VA Instagram) sur Recrutement
+          if (hasVaInstagram && !hasVaChatting && candidate.vaType !== 'INSTAGRAM') {
+            const oldVaType = candidate.vaType;
+            candidate.vaType = 'INSTAGRAM';
+            await this.logStatusHistory({
+              candidateId: candidate.id,
+              fromStatus: candidate.status,
+              toStatus: candidate.status,
+              fromAdminStatus: candidate.adminStatus,
+              toAdminStatus: candidate.adminStatus,
+              fromOperationalStatus: candidate.operationalStatus,
+              toOperationalStatus: candidate.operationalStatus,
+              fromServer: candidate.currentServer,
+              toServer: candidate.currentServer,
+              authorUserId: 'BOT_JARVIS',
+              authorName: 'Bot JARVIS',
+              authorSource: 'DISCORD_SYNC',
+              reason: `Spécialité synchronisée via Discord (${oldVaType} -> INSTAGRAM) : rôle VA Instagram.`,
+              isConfidential: false,
+            });
+            resultMessage += ' Spécialité mise à jour : VA Instagram.';
+          } else if (hasVaChatting && !hasVaInstagram && candidate.vaType !== 'CHATTEUR') {
+            const oldVaType = candidate.vaType;
+            candidate.vaType = 'CHATTEUR';
+            await this.logStatusHistory({
+              candidateId: candidate.id,
+              fromStatus: candidate.status,
+              toStatus: candidate.status,
+              fromAdminStatus: candidate.adminStatus,
+              toAdminStatus: candidate.adminStatus,
+              fromOperationalStatus: candidate.operationalStatus,
+              toOperationalStatus: candidate.operationalStatus,
+              fromServer: candidate.currentServer,
+              toServer: candidate.currentServer,
+              authorUserId: 'BOT_JARVIS',
+              authorName: 'Bot JARVIS',
+              authorSource: 'DISCORD_SYNC',
+              reason: `Spécialité synchronisée via Discord (${oldVaType} -> CHATTEUR) : rôle VA Chatting.`,
+              isConfidential: false,
+            });
+            resultMessage += ' Spécialité mise à jour : VA Chatting.';
+          }
+
           // Appliquer la hiérarchie de transition Discord autorisée
           await this.client.setDocument('pawako_candidates', candidate.id, stripFirestoreMeta(candidate));
 
-          if (detectedPawakoRoles.includes('CANDIDAT_REFUSE')) {
-            candidate = await this.updateCandidateStatus(candidate.id, {
-              newAdminStatus: 'REFUSE',
-              newOperationalStatus: 'INACTIF',
-              refusalReason: 'Refus synchronisé via le rôle Discord CANDIDAT_REFUSE',
-              notes: 'Synchronisation automatique du rôle Discord CANDIDAT_REFUSE',
-              actorUserId: 'BOT_JARVIS',
-              actorName: 'Bot JARVIS',
-              actorSource: 'DISCORD_SYNC',
-              isConfidential: true,
-            });
-            resultMessage += ' Statut actualisé : REFUSÉ.';
+          if (detectedPawakoRoles.includes('NON_QUALIFIE') || detectedPawakoRoles.includes('CANDIDAT_REFUSE')) {
+            const isNonQualifie = detectedPawakoRoles.includes('NON_QUALIFIE');
+            if (candidate.adminStatus !== 'REFUSE' || candidate.recruitmentStage !== 'NON_QUALIFIE') {
+              candidate = await this.updateCandidateStatus(candidate.id, {
+                newAdminStatus: 'REFUSE',
+                newOperationalStatus: 'INACTIF',
+                newRecruitmentStage: 'NON_QUALIFIE',
+                refusalReason: isNonQualifie
+                  ? 'Disqualification synchronisée via le rôle Discord Non qualifié'
+                  : 'Refus synchronisé via le rôle Discord CANDIDAT_REFUSE',
+                notes: isNonQualifie
+                  ? 'Synchronisation automatique du rôle Discord Non qualifié'
+                  : 'Synchronisation automatique du rôle Discord CANDIDAT_REFUSE',
+                actorUserId: 'BOT_JARVIS',
+                actorName: 'Bot JARVIS',
+                actorSource: 'DISCORD_SYNC',
+                isConfidential: true,
+              });
+            }
+            resultMessage += isNonQualifie ? ' Statut actualisé : NON QUALIFIÉ.' : ' Statut actualisé : REFUSÉ.';
           } else if (detectedPawakoRoles.includes('VA_PRODUCTION')) {
             const expectedProdServer: DiscordServerType =
               candidate.vaType === 'INSTAGRAM' ? 'PRODUCTION_INSTAGRAM' : 'PRODUCTION_CHATTING';
@@ -3945,56 +4083,111 @@ export class FirestoreRepository {
               candidate.currentServer = expectedProdServer;
               await this.client.setDocument('pawako_candidates', candidate.id, stripFirestoreMeta(candidate));
             }
-            candidate = await this.updateCandidateStatus(candidate.id, {
-              newAdminStatus: 'ACCEPTE',
-              newOperationalStatus: 'PRODUCTION',
-              notes: `Passage en production via le rôle Discord VA_PRODUCTION sur ${serverType}`,
-              actorUserId: 'BOT_JARVIS',
-              actorName: 'Bot JARVIS',
-              actorSource: 'DISCORD_SYNC',
-            });
+            if (candidate.operationalStatus !== 'PRODUCTION' || candidate.adminStatus !== 'ACCEPTE') {
+              candidate = await this.updateCandidateStatus(candidate.id, {
+                newAdminStatus: 'ACCEPTE',
+                newOperationalStatus: 'PRODUCTION',
+                newRecruitmentStage: candidate.recruitmentStage || 'QUALIFIE',
+                notes: `Passage en production via le rôle Discord VA_PRODUCTION sur ${serverType}`,
+                actorUserId: 'BOT_JARVIS',
+                actorName: 'Bot JARVIS',
+                actorSource: 'DISCORD_SYNC',
+              });
+            }
             resultMessage += ` Statut actualisé : PRODUCTION (${candidate?.vaType}).`;
           } else if (candidate.vaType === 'CHATTEUR' && detectedPawakoRoles.includes('VA_VALIDE')) {
-            candidate = await this.updateCandidateStatus(candidate.id, {
-              newAdminStatus: 'ACCEPTE',
-              newOperationalStatus: 'VALIDE',
-              notes: 'Validation du candidat via le rôle Discord VA_VALIDE',
-              actorUserId: 'BOT_JARVIS',
-              actorName: 'Bot JARVIS',
-              actorSource: 'DISCORD_SYNC',
-            });
+            if (candidate.operationalStatus !== 'VALIDE' || candidate.adminStatus !== 'ACCEPTE') {
+              candidate = await this.updateCandidateStatus(candidate.id, {
+                newAdminStatus: 'ACCEPTE',
+                newOperationalStatus: 'VALIDE',
+                newRecruitmentStage: candidate.recruitmentStage || 'QUALIFIE',
+                notes: 'Validation du candidat via le rôle Discord VA_VALIDE',
+                actorUserId: 'BOT_JARVIS',
+                actorName: 'Bot JARVIS',
+                actorSource: 'DISCORD_SYNC',
+              });
+            }
             resultMessage += ' Statut actualisé : VALIDÉ.';
           } else if (candidate.vaType === 'CHATTEUR' && detectedPawakoRoles.includes('EN_SIMULATION')) {
-            candidate = await this.updateCandidateStatus(candidate.id, {
-              newAdminStatus: 'ACCEPTE',
-              newOperationalStatus: 'SIMULATION',
-              notes: 'Passage en simulation via le rôle Discord EN_SIMULATION',
-              actorUserId: 'BOT_JARVIS',
-              actorName: 'Bot JARVIS',
-              actorSource: 'DISCORD_SYNC',
-            });
+            if (candidate.operationalStatus !== 'SIMULATION' || candidate.adminStatus !== 'ACCEPTE') {
+              candidate = await this.updateCandidateStatus(candidate.id, {
+                newAdminStatus: 'ACCEPTE',
+                newOperationalStatus: 'SIMULATION',
+                newRecruitmentStage: candidate.recruitmentStage || 'QUALIFIE',
+                notes: 'Passage en simulation via le rôle Discord EN_SIMULATION',
+                actorUserId: 'BOT_JARVIS',
+                actorName: 'Bot JARVIS',
+                actorSource: 'DISCORD_SYNC',
+              });
+            }
             resultMessage += ' Statut actualisé : SIMULATION.';
           } else if (candidate.vaType === 'CHATTEUR' && detectedPawakoRoles.includes('EN_FORMATION')) {
-            candidate = await this.updateCandidateStatus(candidate.id, {
-              newAdminStatus: 'ACCEPTE',
-              newOperationalStatus: 'FORMATION',
-              notes: 'Entrée en formation via le rôle Discord EN_FORMATION',
-              actorUserId: 'BOT_JARVIS',
-              actorName: 'Bot JARVIS',
-              actorSource: 'DISCORD_SYNC',
-            });
+            if (candidate.operationalStatus !== 'FORMATION' || candidate.adminStatus !== 'ACCEPTE') {
+              candidate = await this.updateCandidateStatus(candidate.id, {
+                newAdminStatus: 'ACCEPTE',
+                newOperationalStatus: 'FORMATION',
+                newRecruitmentStage: candidate.recruitmentStage || 'QUALIFIE',
+                notes: 'Entrée en formation via le rôle Discord EN_FORMATION',
+                actorUserId: 'BOT_JARVIS',
+                actorName: 'Bot JARVIS',
+                actorSource: 'DISCORD_SYNC',
+              });
+            }
             resultMessage += ' Statut actualisé : FORMATION.';
-          } else if (detectedPawakoRoles.includes('CANDIDAT_ACCEPTE')) {
-            candidate = await this.updateCandidateStatus(candidate.id, {
-              newAdminStatus: 'ACCEPTE',
-              newOperationalStatus:
-                candidate.operationalStatus === 'INACTIF' ? 'RECRUTEMENT' : candidate.operationalStatus,
-              notes: 'Acceptation de la candidature via le rôle Discord CANDIDAT_ACCEPTE',
-              actorUserId: 'BOT_JARVIS',
-              actorName: 'Bot JARVIS',
-              actorSource: 'DISCORD_SYNC',
-            });
-            resultMessage += ' Statut administratif actualisé : ACCEPTÉ.';
+          } else if (detectedPawakoRoles.includes('QUALIFIE') || detectedPawakoRoles.includes('CANDIDAT_ACCEPTE')) {
+            const isQualifie = detectedPawakoRoles.includes('QUALIFIE');
+            const targetOp: OperationalStatus =
+              candidate.operationalStatus === 'INACTIF' ? 'RECRUTEMENT' : candidate.operationalStatus;
+            if (candidate.adminStatus !== 'ACCEPTE' || candidate.recruitmentStage !== 'QUALIFIE') {
+              candidate = await this.updateCandidateStatus(candidate.id, {
+                newAdminStatus: 'ACCEPTE',
+                newOperationalStatus: targetOp,
+                newRecruitmentStage: 'QUALIFIE',
+                notes: isQualifie
+                  ? 'Qualification validée via le rôle Discord Qualifié'
+                  : 'Acceptation de la candidature via le rôle Discord CANDIDAT_ACCEPTE',
+                actorUserId: 'BOT_JARVIS',
+                actorName: 'Bot JARVIS',
+                actorSource: 'DISCORD_SYNC',
+              });
+            }
+            resultMessage += isQualifie
+              ? ' Statut actualisé : QUALIFIÉ.'
+              : ' Statut administratif actualisé : ACCEPTÉ.';
+          } else if (detectedPawakoRoles.includes('EN_ATTENTE_RETOUR')) {
+            if (
+              candidate.operationalStatus === 'RECRUTEMENT' &&
+              candidate.adminStatus === 'EN_ATTENTE' &&
+              candidate.recruitmentStage !== 'EN_ATTENTE_RETOUR'
+            ) {
+              candidate = await this.updateCandidateStatus(candidate.id, {
+                newAdminStatus: 'EN_ATTENTE',
+                newOperationalStatus: 'RECRUTEMENT',
+                newRecruitmentStage: 'EN_ATTENTE_RETOUR',
+                notes: "Relance 24h+ sans réponse détectée via le rôle Discord En attente d’un retour",
+                actorUserId: 'BOT_JARVIS',
+                actorName: 'Bot JARVIS',
+                actorSource: 'DISCORD_SYNC',
+              });
+              resultMessage += ' Phase recrutement : En attente d’un retour (24h+).';
+            }
+          } else if (detectedPawakoRoles.includes('EN_ATTENTE_QUALIFICATION')) {
+            if (
+              candidate.operationalStatus === 'RECRUTEMENT' &&
+              candidate.adminStatus === 'EN_ATTENTE' &&
+              candidate.recruitmentStage !== 'EN_ATTENTE_QUALIFICATION'
+            ) {
+              candidate = await this.updateCandidateStatus(candidate.id, {
+                newAdminStatus: 'EN_ATTENTE',
+                newOperationalStatus: 'RECRUTEMENT',
+                newRecruitmentStage: 'EN_ATTENTE_QUALIFICATION',
+                notes: 'Formulaire non complété détecté via le rôle Discord En attente de qualification',
+                actorUserId: 'BOT_JARVIS',
+                actorName: 'Bot JARVIS',
+                actorSource: 'DISCORD_SYNC',
+              });
+              resultMessage += ' Phase recrutement : En attente de qualification.';
+            }
           }
         }
       }
@@ -4180,6 +4373,12 @@ export class FirestoreRepository {
     const totalInstagram = candidates.filter(c => c.vaType === 'INSTAGRAM').length;
 
     const enAttente = candidates.filter(c => c.adminStatus === 'EN_ATTENTE').length;
+    const enAttenteQualification = candidates.filter(
+      c => c.recruitmentStage === 'EN_ATTENTE_QUALIFICATION'
+    ).length;
+    const enAttenteRetour = candidates.filter(c => c.recruitmentStage === 'EN_ATTENTE_RETOUR').length;
+    const qualifies = candidates.filter(c => c.recruitmentStage === 'QUALIFIE').length;
+    const nonQualifies = candidates.filter(c => c.recruitmentStage === 'NON_QUALIFIE').length;
     const acceptes = candidates.filter(c => c.adminStatus === 'ACCEPTE').length;
     const refuses = candidates.filter(c => c.adminStatus === 'REFUSE').length;
     const abandonnes = candidates.filter(c => c.adminStatus === 'ABANDONNE').length;
@@ -4214,6 +4413,10 @@ export class FirestoreRepository {
         totalChatteurs,
         totalInstagram,
         enAttente,
+        enAttenteQualification,
+        enAttenteRetour,
+        qualifies,
+        nonQualifies,
         acceptes,
         enFormation,
         enSimulation,
@@ -4331,6 +4534,12 @@ export class FirestoreRepository {
 
     const totalFilleuls = sanitizedCandidates.length;
     const enAttente = sanitizedCandidates.filter(c => c.adminStatus === 'EN_ATTENTE').length;
+    const enAttenteQualification = sanitizedCandidates.filter(
+      c => c.recruitmentStage === 'EN_ATTENTE_QUALIFICATION'
+    ).length;
+    const enAttenteRetour = sanitizedCandidates.filter(c => c.recruitmentStage === 'EN_ATTENTE_RETOUR').length;
+    const qualifies = sanitizedCandidates.filter(c => c.recruitmentStage === 'QUALIFIE').length;
+    const nonQualifies = sanitizedCandidates.filter(c => c.recruitmentStage === 'NON_QUALIFIE').length;
     const acceptes = sanitizedCandidates.filter(c => c.adminStatus === 'ACCEPTE').length;
     const refuses = sanitizedCandidates.filter(c => c.adminStatus === 'REFUSE').length;
     const enFormation = sanitizedCandidates.filter(c => c.operationalStatus === 'FORMATION').length;
@@ -4344,6 +4553,10 @@ export class FirestoreRepository {
       metrics: {
         totalFilleuls,
         enAttente,
+        enAttenteQualification,
+        enAttenteRetour,
+        qualifies,
+        nonQualifies,
         acceptes,
         refuses,
         enFormation,

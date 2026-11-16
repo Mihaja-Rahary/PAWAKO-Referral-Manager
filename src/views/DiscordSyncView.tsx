@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import {
   DiscordBotDiscoveryResult,
+  DiscordRoleMapping,
   DiscordServerInfo,
   DiscordServerType,
+  PawakoRoleType,
   UserRole,
 } from '../types';
 import { api } from '../api';
@@ -19,6 +21,7 @@ import {
   AlertCircle,
   CheckCircle2,
   Hash,
+  ShieldCheck,
 } from 'lucide-react';
 
 interface Props {
@@ -35,6 +38,7 @@ export const DiscordSyncView: React.FC<Props> = ({
   currentUserRole = 'ADMINISTRATEUR',
 }) => {
   const [servers, setServers] = useState<DiscordServerInfo[]>(initialServers || []);
+  const [roleMappings, setRoleMappings] = useState<DiscordRoleMapping[]>([]);
   const [discovery, setDiscovery] = useState<DiscordBotDiscoveryResult | null>(null);
   const [discoveryError, setDiscoveryError] = useState<{ status?: number; message: string } | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -46,6 +50,50 @@ export const DiscordSyncView: React.FC<Props> = ({
   const [copiedPayload, setCopiedPayload] = useState(false);
 
   const isAdmin = currentUserRole === 'ADMINISTRATEUR';
+
+  const recruitmentRolesSpec: Array<{
+    roleType: PawakoRoleType;
+    title: string;
+    description: string;
+    accent: string;
+  }> = [
+    {
+      roleType: 'VA_CHATTING',
+      title: 'VA Chatting',
+      description: 'Différencie les candidats ayant choisi le pôle VA Chatting',
+      accent: 'border-indigo-200 dark:border-indigo-500/30 bg-indigo-50/50 dark:bg-indigo-500/10',
+    },
+    {
+      roleType: 'VA_INSTAGRAM',
+      title: 'VA Instagram',
+      description: 'Différencie les candidats ayant choisi le pôle VA Instagram',
+      accent: 'border-orange-200 dark:border-[#FA4616]/30 bg-orange-50/50 dark:bg-[#FA4616]/10',
+    },
+    {
+      roleType: 'EN_ATTENTE_QUALIFICATION',
+      title: 'En attente de qualification',
+      description: 'Candidats n’ayant pas encore complété le formulaire',
+      accent: 'border-sky-200 dark:border-sky-500/30 bg-sky-50/50 dark:bg-sky-500/10',
+    },
+    {
+      roleType: 'EN_ATTENTE_RETOUR',
+      title: 'En attente d’un retour',
+      description: 'Sans réponse aux relances depuis plus de 24h',
+      accent: 'border-amber-200 dark:border-amber-500/30 bg-amber-50/50 dark:bg-amber-500/10',
+    },
+    {
+      roleType: 'QUALIFIE',
+      title: 'Qualifié',
+      description: 'Candidature qualifiée pour intégrer le parcours',
+      accent: 'border-emerald-200 dark:border-emerald-500/30 bg-emerald-50/50 dark:bg-emerald-500/10',
+    },
+    {
+      roleType: 'NON_QUALIFIE',
+      title: 'Non qualifié',
+      description: 'Candidature non retenue lors de la qualification',
+      accent: 'border-rose-200 dark:border-rose-500/30 bg-rose-50/50 dark:bg-rose-500/10',
+    },
+  ];
 
   useEffect(() => {
     if (initialServers && initialServers.length > 0) {
@@ -74,8 +122,12 @@ export const DiscordSyncView: React.FC<Props> = ({
   const fetchServers = async () => {
     try {
       setIsLoading(true);
-      const srvRes = await api.getDiscordServers();
+      const [srvRes, mapRes] = await Promise.all([
+        api.getDiscordServers(),
+        api.getRoleMappings().catch(() => ({ mappings: [] })),
+      ]);
       setServers(srvRes.servers);
+      setRoleMappings(mapRes.mappings || []);
     } catch (err) {
       console.error('Failed to load Discord servers info:', err);
     } finally {
@@ -84,9 +136,7 @@ export const DiscordSyncView: React.FC<Props> = ({
   };
 
   useEffect(() => {
-    if (!(initialServers && initialServers.length > 0 && refreshTrigger === 0)) {
-      fetchServers();
-    }
+    fetchServers();
     fetchDiscovery();
   }, [refreshTrigger]);
 
@@ -116,6 +166,9 @@ export const DiscordSyncView: React.FC<Props> = ({
       });
       setDiscovery(res.discovery);
       setServers(res.servers);
+      if (Array.isArray(res.mappings)) {
+        setRoleMappings(res.mappings);
+      }
       const parts = [
         `${res.serversUpdated} serveur(s) relié(s)`,
         `${res.rolesMapped} rôle(s) identifié(s)`,
@@ -529,6 +582,75 @@ export const DiscordSyncView: React.FC<Props> = ({
             })}
           </div>
         )}
+      </div>
+
+      {/* 6 Recruitment Server Roles Overview */}
+      <div className="bg-white dark:bg-[#100b1a] border border-slate-200 dark:border-[#241a38] rounded-xl p-5 space-y-4 shadow-xs transition-colors">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <div>
+            <h3 className="font-bold text-slate-900 dark:text-[#f4f1fa] text-sm flex items-center gap-2">
+              <ShieldCheck className="w-4 h-4 text-violet-600 dark:text-violet-400" />
+              Rôles du Serveur Recrutement (6 rôles)
+            </h3>
+            <p className="text-xs text-slate-500 dark:text-[#9d93b8] mt-0.5">
+              Chaque rôle Discord du serveur Recrutement est synchronisé en temps réel vers le pôle et la phase du candidat.
+            </p>
+          </div>
+          <span className="text-[11px] font-mono font-semibold text-slate-600 dark:text-[#d8d0eb] shrink-0">
+            {
+              recruitmentRolesSpec.filter(spec =>
+                Boolean(
+                  roleMappings.find(
+                    m => m.serverId === 'RECRUTEMENT' && m.roleType === spec.roleType && m.discordRoleId
+                  )?.discordRoleId
+                )
+              ).length
+            }
+            /6 mappés
+          </span>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          {recruitmentRolesSpec.map(spec => {
+            const mapped = roleMappings.find(
+              m => m.serverId === 'RECRUTEMENT' && m.roleType === spec.roleType
+            );
+            const recGuildId = discovery?.matchedServers?.RECRUTEMENT;
+            const recGuild = recGuildId ? discovery?.guilds.find(g => g.id === recGuildId) : undefined;
+            const suggested = recGuild?.suggestedRoleMappings?.[spec.roleType];
+            const isMapped = Boolean(mapped?.discordRoleId);
+
+            return (
+              <div
+                key={spec.roleType}
+                className={`p-3.5 rounded-xl border space-y-1.5 text-xs ${spec.accent}`}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-bold text-slate-900 dark:text-[#f4f1fa]">{spec.title}</span>
+                  <span
+                    className={`text-[10px] font-semibold px-2 py-0.5 rounded-md ${
+                      isMapped
+                        ? 'bg-emerald-100 dark:bg-emerald-500/20 text-emerald-800 dark:text-emerald-200'
+                        : 'bg-slate-200/80 dark:bg-white/10 text-slate-600 dark:text-slate-300'
+                    }`}
+                  >
+                    {isMapped ? 'Mappé' : suggested ? 'Détecté' : 'À configurer'}
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-600 dark:text-[#b4aacb] leading-snug">
+                  {spec.description}
+                </p>
+                <div className="text-[10px] font-mono text-slate-500 dark:text-[#9d93b8] truncate pt-0.5">
+                  {isMapped
+                    ? `${mapped?.roleName || spec.title} (${mapped?.discordRoleId})`
+                    : suggested
+                      ? `Suggestion bot : ${suggested.roleName} (${suggested.roleId})`
+                      : `Clé : ${spec.roleType}`}
+                </div>
+              </div>
+            );
+          })}
+        </div>
       </div>
 
       {/* Webhook Endpoint Reference */}

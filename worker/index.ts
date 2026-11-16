@@ -21,6 +21,7 @@ import {
   DiscordServerType,
   OperationalStatus,
   PawakoRoleType,
+  RecruitmentStage,
   ReferrerStatus,
   User,
   UserRole,
@@ -415,6 +416,7 @@ export interface ParrainCandidateView {
   adminStatus: AdminStatus;
   operationalStatus: OperationalStatus;
   status: CandidateStatus;
+  recruitmentStage?: RecruitmentStage | null;
   currentServer: DiscordServerType | 'AUCUN';
   arrivalDate: string;
   refusalReason: null;
@@ -435,6 +437,7 @@ export function toParrainCandidateView(c: Candidate): ParrainCandidateView {
     adminStatus: c.adminStatus,
     operationalStatus: c.operationalStatus,
     status: c.status,
+    recruitmentStage: c.recruitmentStage || null,
     currentServer: c.currentServer,
     arrivalDate: c.arrivalDate,
     refusalReason: null, // Confidentialité stricte : les motifs de refus internes ne sont jamais exposés aux parrains
@@ -1711,6 +1714,7 @@ app.get('/api/candidates', async c => {
   const adminStatus = c.req.query('adminStatus') as AdminStatus | 'ALL' | undefined;
   const operationalStatus = c.req.query('operationalStatus') as OperationalStatus | 'ALL' | undefined;
   const status = c.req.query('status') as CandidateStatus | 'ALL' | undefined;
+  const recruitmentStage = c.req.query('recruitmentStage') as RecruitmentStage | 'ALL' | undefined;
   const attributionStatus = c.req.query('attributionStatus');
   const referrerId = isParrainOnly ? undefined : c.req.query('referrerId');
   const server = c.req.query('server');
@@ -1740,6 +1744,7 @@ app.get('/api/candidates', async c => {
     adminStatus,
     operationalStatus,
     status,
+    recruitmentStage,
     attributionStatus,
     referrerId,
     server,
@@ -1880,11 +1885,19 @@ app.patch('/api/candidates/:id/status', async c => {
   }
 
   const body = await c.req.json();
-  const { newAdminStatus, newOperationalStatus, newStatus, notes, refusalReason, isConfidential } = body;
+  const {
+    newAdminStatus,
+    newOperationalStatus,
+    newStatus,
+    newRecruitmentStage,
+    notes,
+    refusalReason,
+    isConfidential,
+  } = body;
 
-  if (!newAdminStatus && !newOperationalStatus && !newStatus) {
+  if (!newAdminStatus && !newOperationalStatus && !newStatus && newRecruitmentStage === undefined) {
     return c.json(
-      { error: 'Un nouveau statut (newStatus, newAdminStatus ou newOperationalStatus) est requis.' },
+      { error: 'Un nouveau statut (newStatus, newAdminStatus, newOperationalStatus ou newRecruitmentStage) est requis.' },
       400
     );
   }
@@ -1903,6 +1916,7 @@ app.patch('/api/candidates/:id/status', async c => {
       newAdminStatus,
       newOperationalStatus,
       newStatus,
+      newRecruitmentStage,
       notes: effectiveNotes,
       refusalReason,
       isConfidential: Boolean(isConfidential),

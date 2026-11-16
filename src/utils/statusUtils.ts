@@ -1,4 +1,13 @@
-import { CandidateStatus, AdminStatus, OperationalStatus, DiscordServerType, VAType, AttributionStatus, PawakoRoleType } from '../types';
+import {
+  CandidateStatus,
+  AdminStatus,
+  OperationalStatus,
+  RecruitmentStage,
+  DiscordServerType,
+  VAType,
+  AttributionStatus,
+  PawakoRoleType,
+} from '../types';
 
 export function getStatusLabel(status: CandidateStatus): string {
   switch (status) {
@@ -20,6 +29,58 @@ export function getStatusLabel(status: CandidateStatus): string {
       return 'Abandonné';
     default:
       return status;
+  }
+}
+
+export function getRecruitmentStageLabel(stage?: RecruitmentStage | null): string {
+  switch (stage) {
+    case 'EN_ATTENTE_QUALIFICATION':
+      return 'Attente qualification (formulaire)';
+    case 'EN_ATTENTE_RETOUR':
+      return 'Attente retour (24h+)';
+    case 'QUALIFIE':
+      return 'Qualifié';
+    case 'NON_QUALIFIE':
+      return 'Non qualifié';
+    default:
+      return 'Non renseigné';
+  }
+}
+
+export function getRecruitmentStageBadgeClasses(
+  stage?: RecruitmentStage | null
+): { text: string; dot: string; bg: string } {
+  switch (stage) {
+    case 'EN_ATTENTE_QUALIFICATION':
+      return {
+        text: 'text-sky-700 dark:text-sky-300',
+        dot: 'bg-sky-500 dark:bg-sky-400',
+        bg: 'bg-sky-50/70 dark:bg-sky-950/30 border-sky-200 dark:border-sky-800/50',
+      };
+    case 'EN_ATTENTE_RETOUR':
+      return {
+        text: 'text-amber-700 dark:text-amber-300',
+        dot: 'bg-amber-500 dark:bg-amber-400',
+        bg: 'bg-amber-50/70 dark:bg-amber-950/30 border-amber-200 dark:border-amber-800/50',
+      };
+    case 'QUALIFIE':
+      return {
+        text: 'text-emerald-700 dark:text-emerald-300',
+        dot: 'bg-emerald-500 dark:bg-emerald-400',
+        bg: 'bg-emerald-50/70 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-800/50',
+      };
+    case 'NON_QUALIFIE':
+      return {
+        text: 'text-rose-700 dark:text-rose-300',
+        dot: 'bg-rose-500 dark:bg-rose-400',
+        bg: 'bg-rose-50/70 dark:bg-rose-950/30 border-rose-200 dark:border-rose-800/50',
+      };
+    default:
+      return {
+        text: 'text-slate-600 dark:text-[#d8d0eb]',
+        dot: 'bg-slate-400 dark:bg-[#9d93b8]',
+        bg: 'bg-slate-50 dark:bg-[#171026] border-slate-200 dark:border-[#241a38]',
+      };
   }
 }
 
@@ -139,10 +200,22 @@ export function getVaTypeLabel(vaType: VAType): string {
 
 export function getPawakoRoleLabel(role: PawakoRoleType): string {
   switch (role) {
+    case 'VA_CHATTING':
+      return 'VA Chatting (Choix Chatting)';
+    case 'VA_INSTAGRAM':
+      return 'VA Instagram (Choix Instagram)';
+    case 'EN_ATTENTE_QUALIFICATION':
+      return 'En attente de qualification (Formulaire non complété)';
+    case 'EN_ATTENTE_RETOUR':
+      return 'En attente d’un retour (Sans réponse depuis 24h)';
+    case 'QUALIFIE':
+      return 'Qualifié';
+    case 'NON_QUALIFIE':
+      return 'Non qualifié';
     case 'CANDIDAT':
-      return 'Candidat (Recrutement)';
+      return 'Candidat générique (Legacy)';
     case 'CANDIDAT_ACCEPTE':
-      return 'Candidat Accepté';
+      return 'Candidat Accepté (Legacy)';
     case 'EN_FORMATION':
       return 'En Formation (Chatting)';
     case 'EN_SIMULATION':
@@ -152,7 +225,7 @@ export function getPawakoRoleLabel(role: PawakoRoleType): string {
     case 'VA_PRODUCTION':
       return 'VA en Production';
     case 'CANDIDAT_REFUSE':
-      return 'Candidat Refusé';
+      return 'Candidat Refusé (Legacy)';
     default:
       return role;
   }

@@ -36,8 +36,21 @@ export type DiscordServerType =
 
 export type AttributionStatus = 'CONFIRMED' | 'UNCERTAIN' | 'MANUAL_REASSIGNED';
 
+// Étape détaillée sur le Serveur Recrutement (alignée sur les 6 rôles Discord Recrutement)
+export type RecruitmentStage =
+  | 'EN_ATTENTE_QUALIFICATION'
+  | 'EN_ATTENTE_RETOUR'
+  | 'QUALIFIE'
+  | 'NON_QUALIFIE';
+
 // Rôles Discord PAWAKO configurables
 export type PawakoRoleType =
+  | 'VA_CHATTING'
+  | 'VA_INSTAGRAM'
+  | 'EN_ATTENTE_QUALIFICATION'
+  | 'EN_ATTENTE_RETOUR'
+  | 'QUALIFIE'
+  | 'NON_QUALIFIE'
   | 'CANDIDAT'
   | 'CANDIDAT_ACCEPTE'
   | 'EN_FORMATION'
@@ -172,6 +185,7 @@ export interface Candidate {
   adminStatus: AdminStatus; // Statut administratif : En attente, Accepté, Refusé, Abandonné
   operationalStatus: OperationalStatus; // Statut opérationnel : Recrutement, Formation, Simulation, Validé, Production, Inactif
   status: CandidateStatus;
+  recruitmentStage?: RecruitmentStage | null; // Phase exacte sur le Serveur Recrutement
   referrerId: string | null;
   referrerDiscordUserId: string | null;
   referrerName: string | null;
@@ -329,6 +343,10 @@ export interface OverviewStatistics {
     totalChatteurs: number;
     totalInstagram: number;
     enAttente: number;
+    enAttenteQualification?: number;
+    enAttenteRetour?: number;
+    qualifies?: number;
+    nonQualifies?: number;
     acceptes: number;
     enFormation: number;
     enSimulation: number;

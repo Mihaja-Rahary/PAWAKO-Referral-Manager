@@ -9,6 +9,7 @@ import {
   CandidateStatus,
   AdminStatus,
   OperationalStatus,
+  RecruitmentStage,
   VAType,
 } from './types';
 import { Sidebar, NavigationTab } from './components/Sidebar';
@@ -77,6 +78,7 @@ export default function App() {
   // Status and shortcut filters from dashboard & referrers
   const [candidateStatusFilter, setCandidateStatusFilter] = useState<string | undefined>(undefined);
   const [candidateVaTypeFilter, setCandidateVaTypeFilter] = useState<string | undefined>(undefined);
+  const [candidateRecruitmentStageFilter, setCandidateRecruitmentStageFilter] = useState<string | undefined>(undefined);
   const [candidateAnomalyFilter, setCandidateAnomalyFilter] = useState<boolean | undefined>(undefined);
   const [candidateReferrerFilter, setCandidateReferrerFilter] = useState<string | undefined>(undefined);
 
@@ -251,6 +253,7 @@ export default function App() {
     newAdminStatus?: AdminStatus;
     newOperationalStatus?: OperationalStatus;
     newStatus?: CandidateStatus;
+    newRecruitmentStage?: RecruitmentStage | null;
     refusalReason?: string;
     notes: string;
   }) => {
@@ -514,6 +517,7 @@ export default function App() {
           setActiveTab(tab);
           setCandidateStatusFilter(undefined);
           setCandidateVaTypeFilter(undefined);
+          setCandidateRecruitmentStageFilter(undefined);
           setCandidateAnomalyFilter(undefined);
           setCandidateReferrerFilter(undefined);
         }}
@@ -564,6 +568,7 @@ export default function App() {
                 onNavigateToCandidates={(filterStatus, extraParams) => {
                   setCandidateStatusFilter(filterStatus);
                   setCandidateVaTypeFilter(extraParams?.vaType);
+                  setCandidateRecruitmentStageFilter(extraParams?.recruitmentStage);
                   setCandidateAnomalyFilter(extraParams?.hasAnomaly);
                   setCandidateReferrerFilter(undefined);
                   setActiveTab('candidates');
@@ -578,6 +583,7 @@ export default function App() {
                 referrers={referrers}
                 initialStatusFilter={candidateStatusFilter}
                 initialVaTypeFilter={candidateVaTypeFilter}
+                initialRecruitmentStageFilter={candidateRecruitmentStageFilter}
                 initialAnomalyFilter={candidateAnomalyFilter}
                 initialReferrerIdFilter={candidateReferrerFilter}
                 onClearReferrerFilter={() => setCandidateReferrerFilter(undefined)}
@@ -595,6 +601,7 @@ export default function App() {
                 onSelectReferrerFilter={referrerId => {
                   setCandidateStatusFilter(undefined);
                   setCandidateVaTypeFilter(undefined);
+                  setCandidateRecruitmentStageFilter(undefined);
                   setCandidateAnomalyFilter(undefined);
                   setCandidateReferrerFilter(referrerId);
                   setActiveTab('candidates');

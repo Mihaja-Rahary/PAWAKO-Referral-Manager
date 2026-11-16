@@ -1,10 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { Candidate, CandidateStatus, Referrer, UserRole, VAType } from '../types';
+import { Candidate, CandidateStatus, RecruitmentStage, Referrer, UserRole, VAType } from '../types';
 import { api } from '../api';
 import {
   getStatusBadgeClasses,
   getAdminStatusLabel,
   getOperationalStatusLabel,
+  getRecruitmentStageLabel,
+  getRecruitmentStageBadgeClasses,
   getServerLabel,
   getVaTypeLabel,
   formatDate,
@@ -30,6 +32,7 @@ interface Props {
   referrers?: Referrer[];
   initialStatusFilter?: string;
   initialVaTypeFilter?: string;
+  initialRecruitmentStageFilter?: string;
   initialAnomalyFilter?: boolean;
   initialReferrerIdFilter?: string;
   onClearReferrerFilter?: () => void;
@@ -45,6 +48,7 @@ export const CandidatesView: React.FC<Props> = ({
   referrers = [],
   initialStatusFilter,
   initialVaTypeFilter,
+  initialRecruitmentStageFilter,
   initialAnomalyFilter,
   initialReferrerIdFilter,
   onClearReferrerFilter,
@@ -66,6 +70,9 @@ export const CandidatesView: React.FC<Props> = ({
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [vaType, setVaType] = useState<VAType | 'ALL'>((initialVaTypeFilter as any) || 'ALL');
   const [status, setStatus] = useState<CandidateStatus | 'ALL'>((initialStatusFilter as any) || 'ALL');
+  const [recruitmentStage, setRecruitmentStage] = useState<RecruitmentStage | 'ALL'>(
+    (initialRecruitmentStageFilter as any) || 'ALL'
+  );
   const [server, setServer] = useState<string>('ALL');
   const [attributionStatus, setAttributionStatus] = useState<string>('ALL');
   const [anomalyOnly, setAnomalyOnly] = useState<boolean>(Boolean(initialAnomalyFilter));
@@ -80,10 +87,11 @@ export const CandidatesView: React.FC<Props> = ({
   useEffect(() => {
     setStatus(((initialStatusFilter as any) || 'ALL') as CandidateStatus | 'ALL');
     setVaType(((initialVaTypeFilter as any) || 'ALL') as VAType | 'ALL');
+    setRecruitmentStage(((initialRecruitmentStageFilter as any) || 'ALL') as RecruitmentStage | 'ALL');
     setAnomalyOnly(Boolean(initialAnomalyFilter));
     setReferrerIdFilter(initialReferrerIdFilter);
     setPage(1);
-  }, [initialStatusFilter, initialVaTypeFilter, initialAnomalyFilter, initialReferrerIdFilter]);
+  }, [initialStatusFilter, initialVaTypeFilter, initialRecruitmentStageFilter, initialAnomalyFilter, initialReferrerIdFilter]);
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -100,6 +108,7 @@ export const CandidatesView: React.FC<Props> = ({
         search: debouncedSearch.trim() || undefined,
         vaType,
         status,
+        recruitmentStage,
         server,
         attributionStatus,
         referrerId: referrerIdFilter,
@@ -120,7 +129,7 @@ export const CandidatesView: React.FC<Props> = ({
 
   useEffect(() => {
     fetchCandidates();
-  }, [debouncedSearch, vaType, status, server, attributionStatus, anomalyOnly, referrerIdFilter, page, refreshTrigger]);
+  }, [debouncedSearch, vaType, status, recruitmentStage, server, attributionStatus, anomalyOnly, referrerIdFilter, page, refreshTrigger]);
 
   const handleCopyId = (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
@@ -275,6 +284,7 @@ export const CandidatesView: React.FC<Props> = ({
                   } else {
                     setAnomalyOnly(false);
                     setStatus(tab.id as CandidateStatus | 'ALL');
+                    if (tab.id === 'ALL') setRecruitmentStage('ALL');
                   }
                   setPage(1);
                 }}
@@ -321,7 +331,7 @@ export const CandidatesView: React.FC<Props> = ({
         </div>
 
         {/* Filters Row */}
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-2.5 pt-1 text-xs">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5 pt-1 text-xs">
           {/* VA Type Filter */}
           <div>
             <label className="block text-[11px] font-medium text-slate-500 dark:text-[#9d93b8] mb-1">
@@ -363,6 +373,27 @@ export const CandidatesView: React.FC<Props> = ({
               <option value="EN_PRODUCTION">En production</option>
               <option value="REFUSE">Refusé</option>
               <option value="ABANDONNE">Abandonné</option>
+            </select>
+          </div>
+
+          {/* Recruitment Stage Filter */}
+          <div>
+            <label className="block text-[11px] font-medium text-slate-500 dark:text-[#9d93b8] mb-1">
+              Phase Recrutement
+            </label>
+            <select
+              value={recruitmentStage}
+              onChange={e => {
+                setRecruitmentStage(e.target.value as any);
+                setPage(1);
+              }}
+              className="w-full p-2 border border-slate-200 dark:border-[#241a38] rounded-lg text-slate-800 dark:text-[#f4f1fa] bg-white dark:bg-[#171026] focus:outline-none focus:ring-1 focus:ring-violet-500"
+            >
+              <option value="ALL">Toutes phases</option>
+              <option value="EN_ATTENTE_QUALIFICATION">Attente qualification</option>
+              <option value="EN_ATTENTE_RETOUR">Attente retour (24h+)</option>
+              <option value="QUALIFIE">Qualifié</option>
+              <option value="NON_QUALIFIE">Non qualifié</option>
             </select>
           </div>
 
@@ -521,6 +552,15 @@ export const CandidatesView: React.FC<Props> = ({
                       <div className="text-[10px] text-slate-500 dark:text-[#9d93b8] truncate">
                         Admin : {getAdminStatusLabel(candidate.adminStatus)}
                       </div>
+                      {candidate.recruitmentStage && (() => {
+                        const stageBadge = getRecruitmentStageBadgeClasses(candidate.recruitmentStage);
+                        return (
+                          <div className={`mt-1 inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[10px] font-semibold ${stageBadge.bg} ${stageBadge.text}`}>
+                            <span className={`w-1.5 h-1.5 rounded-full ${stageBadge.dot}`} />
+                            <span className="truncate">{getRecruitmentStageLabel(candidate.recruitmentStage)}</span>
+                          </div>
+                        );
+                      })()}
                     </div>
 
                     <div className="bg-slate-50 dark:bg-[#171026] border border-slate-100 dark:border-[#241a38] rounded-lg px-2.5 py-2">
@@ -697,6 +737,15 @@ export const CandidatesView: React.FC<Props> = ({
                           <div className="text-[11px] text-slate-500 dark:text-[#9d93b8]">
                             Admin : <strong className="text-slate-700 dark:text-[#d8d0eb]">{getAdminStatusLabel(candidate.adminStatus)}</strong>
                           </div>
+                          {candidate.recruitmentStage && (() => {
+                            const stageBadge = getRecruitmentStageBadgeClasses(candidate.recruitmentStage);
+                            return (
+                              <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[10px] font-semibold ${stageBadge.bg} ${stageBadge.text}`}>
+                                <span className={`w-1.5 h-1.5 rounded-full ${stageBadge.dot}`} />
+                                <span>{getRecruitmentStageLabel(candidate.recruitmentStage)}</span>
+                              </span>
+                            );
+                          })()}
                         </div>
                       </td>
 

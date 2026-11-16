@@ -6,6 +6,8 @@ import {
   getStatusLabel,
   getAdminStatusLabel,
   getOperationalStatusLabel,
+  getRecruitmentStageLabel,
+  getRecruitmentStageBadgeClasses,
   getServerLabel,
   getVaTypeLabel,
   formatDate,
@@ -313,6 +315,15 @@ export const CandidateDrawer: React.FC<Props> = ({
                     <span className={`w-2 h-2 rounded-full ${badge?.dot}`} />
                     {getStatusLabel(candidate.status)}
                   </span>
+                  {candidate.recruitmentStage && (() => {
+                    const stageBadge = getRecruitmentStageBadgeClasses(candidate.recruitmentStage);
+                    return (
+                      <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded border text-[11px] font-semibold ${stageBadge.bg} ${stageBadge.text}`}>
+                        <span className={`w-1.5 h-1.5 rounded-full ${stageBadge.dot}`} />
+                        {getRecruitmentStageLabel(candidate.recruitmentStage)}
+                      </span>
+                    );
+                  })()}
                 </div>
               </div>
             </div>
@@ -378,8 +389,8 @@ export const CandidateDrawer: React.FC<Props> = ({
               </div>
             )}
 
-            {/* Status Split Grid : Administratif & Opérationnel */}
-            <div className="grid grid-cols-2 gap-3 text-xs">
+            {/* Status Split Grid : Administratif & Opérationnel & Phase Recrutement */}
+            <div className={`grid grid-cols-2 ${candidate.recruitmentStage ? 'sm:grid-cols-3' : ''} gap-3 text-xs`}>
               <div className="p-3 bg-slate-50 dark:bg-[#171026] border border-slate-200 dark:border-[#241a38] rounded-xl space-y-1">
                 <div className="text-slate-500 dark:text-[#9d93b8] font-medium text-[11px] uppercase tracking-wider">
                   Statut Administratif
@@ -397,6 +408,17 @@ export const CandidateDrawer: React.FC<Props> = ({
                   {getOperationalStatusLabel(candidate.operationalStatus)}
                 </div>
               </div>
+
+              {candidate.recruitmentStage && (
+                <div className="col-span-2 sm:col-span-1 p-3 bg-slate-50 dark:bg-[#171026] border border-slate-200 dark:border-[#241a38] rounded-xl space-y-1">
+                  <div className="text-slate-500 dark:text-[#9d93b8] font-medium text-[11px] uppercase tracking-wider">
+                    Phase Recrutement
+                  </div>
+                  <div className={`font-bold text-sm ${getRecruitmentStageBadgeClasses(candidate.recruitmentStage).text}`}>
+                    {getRecruitmentStageLabel(candidate.recruitmentStage)}
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Server & Referrer Info */}

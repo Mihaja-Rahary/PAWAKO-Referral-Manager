@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Candidate, CandidateStatus, AdminStatus, OperationalStatus } from '../types';
+import { Candidate, CandidateStatus, AdminStatus, OperationalStatus, RecruitmentStage } from '../types';
 import { getVaTypeLabel } from '../utils/statusUtils';
 import { X, AlertCircle } from 'lucide-react';
 
@@ -11,6 +11,7 @@ interface Props {
     newAdminStatus?: AdminStatus;
     newOperationalStatus?: OperationalStatus;
     newStatus?: CandidateStatus;
+    newRecruitmentStage?: RecruitmentStage | null;
     refusalReason?: string;
     notes: string;
   }) => Promise<void>;
@@ -23,6 +24,9 @@ export const StatusChangeModal: React.FC<Props> = ({
   onSubmit,
 }) => {
   const [selectedStatus, setSelectedStatus] = useState<CandidateStatus>(candidate.status);
+  const [selectedRecruitmentStage, setSelectedRecruitmentStage] = useState<RecruitmentStage | ''>(
+    candidate.recruitmentStage || ''
+  );
   const [refusalReason, setRefusalReason] = useState(candidate.refusalReason || '');
   const [notes, setNotes] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -107,6 +111,14 @@ export const StatusChangeModal: React.FC<Props> = ({
       setIsSubmitting(true);
       await onSubmit({
         newStatus: selectedStatus,
+        newRecruitmentStage:
+          selectedStatus === 'EN_ATTENTE'
+            ? selectedRecruitmentStage || null
+            : selectedStatus === 'ACCEPTE'
+              ? 'QUALIFIE'
+              : selectedStatus === 'REFUSE'
+                ? 'NON_QUALIFIE'
+                : undefined,
         refusalReason: refusalReason.trim(),
         notes: notes.trim() || (selectedStatus === 'REFUSE' ? refusalReason.trim() : 'Modification de statut'),
       });
@@ -188,6 +200,28 @@ export const StatusChangeModal: React.FC<Props> = ({
               ))}
             </div>
           </div>
+
+          {/* Phase Serveur Recrutement when EN_ATTENTE */}
+          {selectedStatus === 'EN_ATTENTE' && (
+            <div className="pt-2 border-t border-slate-100 dark:border-[#241a38]">
+              <label className="block text-xs font-semibold text-slate-700 dark:text-[#d8d0eb] mb-1.5">
+                Phase Serveur Recrutement (optionnel)
+              </label>
+              <select
+                value={selectedRecruitmentStage}
+                onChange={e => setSelectedRecruitmentStage(e.target.value as RecruitmentStage | '')}
+                className="w-full text-xs p-2.5 border border-slate-200 dark:border-[#241a38] rounded-lg focus:outline-none focus:ring-2 focus:ring-violet-500/20 focus:border-violet-500 text-slate-900 dark:text-[#f4f1fa] bg-white dark:bg-[#08050f]"
+              >
+                <option value="">Non précisée</option>
+                <option value="EN_ATTENTE_QUALIFICATION">
+                  En attente de qualification (formulaire non complété)
+                </option>
+                <option value="EN_ATTENTE_RETOUR">
+                  En attente d’un retour (sans réponse aux relances 24h+)
+                </option>
+              </select>
+            </div>
+          )}
 
           {/* Refusal Reason (Mandatory when REFUSE) */}
           {selectedStatus === 'REFUSE' && (

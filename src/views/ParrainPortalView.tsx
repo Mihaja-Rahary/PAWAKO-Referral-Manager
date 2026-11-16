@@ -4,6 +4,8 @@ import { api } from '../api';
 import {
   getStatusBadgeClasses,
   getStatusLabel,
+  getRecruitmentStageLabel,
+  getRecruitmentStageBadgeClasses,
   getServerLabel,
   getVaTypeLabel,
   formatDate,
@@ -76,6 +78,10 @@ export const ParrainPortalView: React.FC<Props> = ({
       valides?: number;
       enProduction: number;
       abandonnes: number;
+      enAttenteQualification?: number;
+      enAttenteRetour?: number;
+      qualifies?: number;
+      nonQualifies?: number;
       conversionRate: number;
       acceptanceRate: number;
     };
@@ -1466,6 +1472,26 @@ export const ParrainPortalView: React.FC<Props> = ({
                     );
                   })}
                 </div>
+
+                {(candidates.some(c => c.recruitmentStage === 'EN_ATTENTE_QUALIFICATION' || c.recruitmentStage === 'EN_ATTENTE_RETOUR')) && (
+                  <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-600 dark:text-slate-300 pt-1">
+                    <span className="font-semibold text-slate-500 dark:text-slate-400">Suivi Serveur Recrutement :</span>
+                    <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md border bg-sky-50/70 dark:bg-sky-950/30 border-sky-200 dark:border-sky-800/50 text-sky-700 dark:text-sky-300 font-semibold">
+                      <span className="w-1.5 h-1.5 rounded-full bg-sky-500" />
+                      Formulaire à compléter :{' '}
+                      <span className="font-mono tabular-nums">
+                        {candidates.filter(c => c.recruitmentStage === 'EN_ATTENTE_QUALIFICATION').length}
+                      </span>
+                    </span>
+                    <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md border bg-amber-50/70 dark:bg-amber-950/30 border-amber-200 dark:border-amber-800/50 text-amber-700 dark:text-amber-300 font-semibold">
+                      <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+                      Sans réponse 24h+ (à relancer) :{' '}
+                      <span className="font-mono tabular-nums">
+                        {candidates.filter(c => c.recruitmentStage === 'EN_ATTENTE_RETOUR').length}
+                      </span>
+                    </span>
+                  </div>
+                )}
               </div>
 
               {/* Mobile Card View */}
@@ -1510,9 +1536,20 @@ export const ParrainPortalView: React.FC<Props> = ({
                               </div>
                             </div>
                           </div>
-                          <span className={`text-[11px] ${badge.text} font-bold shrink-0`}>
-                            {getStatusLabel(candidate.status)}
-                          </span>
+                          <div className="flex flex-col items-end gap-1 shrink-0">
+                            <span className={`text-[11px] ${badge.text} font-bold`}>
+                              {getStatusLabel(candidate.status)}
+                            </span>
+                            {candidate.recruitmentStage && (() => {
+                              const stageBadge = getRecruitmentStageBadgeClasses(candidate.recruitmentStage);
+                              return (
+                                <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[10px] font-semibold ${stageBadge.bg} ${stageBadge.text}`}>
+                                  <span className={`w-1.5 h-1.5 rounded-full ${stageBadge.dot}`} />
+                                  {getRecruitmentStageLabel(candidate.recruitmentStage)}
+                                </span>
+                              );
+                            })()}
+                          </div>
                         </div>
 
                         {/* Step Progress Bar */}
@@ -1602,9 +1639,20 @@ export const ParrainPortalView: React.FC<Props> = ({
                               {getServerLabel(candidate.currentServer)}
                             </td>
                             <td className="py-3.5 px-4">
-                              <span className={`text-xs ${badge.text} font-bold`}>
-                                {getStatusLabel(candidate.status)}
-                              </span>
+                              <div className="space-y-1">
+                                <span className={`text-xs ${badge.text} font-bold block`}>
+                                  {getStatusLabel(candidate.status)}
+                                </span>
+                                {candidate.recruitmentStage && (() => {
+                                  const stageBadge = getRecruitmentStageBadgeClasses(candidate.recruitmentStage);
+                                  return (
+                                    <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[10px] font-semibold ${stageBadge.bg} ${stageBadge.text}`}>
+                                      <span className={`w-1.5 h-1.5 rounded-full ${stageBadge.dot}`} />
+                                      <span>{getRecruitmentStageLabel(candidate.recruitmentStage)}</span>
+                                    </span>
+                                  );
+                                })()}
+                              </div>
                             </td>
                             <td className="py-3.5 px-4 min-w-[160px]">
                               <div className="space-y-1">

@@ -871,6 +871,7 @@ export function normalizeDiscordLabel(raw?: string | null): string {
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase()
+    .replace(/[’'`´]+/g, ' ')
     .replace(/[_-]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
@@ -904,18 +905,74 @@ const SERVER_ROLE_RULES: Record<
 > = {
   RECRUTEMENT: [
     {
+      roleType: 'VA_CHATTING',
+      positive: [/\bva chatting\b/, /\bva chatteur\b/, /\bchatting\b/, /\bchatteur\b/],
+      negative: [/\binstagram\b/, /\binsta\b/, /\badmin\b/, /\bstaff\b/, /\bresponsable\b/],
+    },
+    {
+      roleType: 'VA_INSTAGRAM',
+      positive: [/\bva instagram\b/, /\bva insta\b/, /\binstagram\b/, /\binsta\b/],
+      negative: [/\bchatting\b/, /\bchatteur\b/, /\badmin\b/, /\bstaff\b/, /\bresponsable\b/],
+    },
+    {
+      roleType: 'EN_ATTENTE_QUALIFICATION',
+      positive: [
+        /\ben attente de qualification\b/,
+        /\battente de qualification\b/,
+        /\battente qualification\b/,
+        /\bformulaire\b/,
+        /\bqualification\b/,
+      ],
+      negative: [/\bretour\b/, /\bnon qualifie\b/, /\bqualifie\b/],
+    },
+    {
+      roleType: 'EN_ATTENTE_RETOUR',
+      positive: [
+        /\ben attente d un retour\b/,
+        /\ben attente retour\b/,
+        /\battente d un retour\b/,
+        /\battente retour\b/,
+        /\bretour 24h\b/,
+        /\brelance\b/,
+      ],
+      negative: [/\bqualification\b/, /\bformulaire\b/],
+    },
+    {
+      roleType: 'NON_QUALIFIE',
+      positive: [/\bnon qualifie\b/, /\bdisqualifie\b/, /\bineligible\b/],
+      negative: [/\ben attente\b/],
+    },
+    {
+      roleType: 'QUALIFIE',
+      positive: [/\bqualifie\b/, /\bqualified\b/],
+      negative: [/\bnon qualifie\b/, /\bdisqualifie\b/, /\bqualification\b/, /\ben attente\b/],
+    },
+    {
       roleType: 'CANDIDAT_ACCEPTE',
       positive: [/\bcandidat accepte\b/, /\baccepte\b/, /\baccepted\b/, /\badmis\b/, /\bretenu\b/, /\brecrute\b/],
-      negative: [/\brefus/, /\brejet/],
+      negative: [/\brefus/, /\brejet/, /\bnon qualifie\b/],
     },
     {
       roleType: 'CANDIDAT_REFUSE',
       positive: [/\bcandidat refuse\b/, /\brefuse\b/, /\brefus\b/, /\brefused\b/, /\brejete\b/, /\bdeclin\b/],
+      negative: [/\bnon qualifie\b/],
     },
     {
       roleType: 'CANDIDAT',
       positive: [/\bcandidat\b/, /\bpostulant\b/, /\bapplicant\b/, /\brecrue\b/, /\bnouveau\b/, /\ben attente\b/],
-      negative: [/\baccepte\b/, /\brefus/, /\bvalide\b/, /\bformateur\b/, /\bstaff\b/, /\badmin\b/],
+      negative: [
+        /\baccepte\b/,
+        /\brefus/,
+        /\bvalide\b/,
+        /\bformateur\b/,
+        /\bstaff\b/,
+        /\badmin\b/,
+        /\bchatting\b/,
+        /\binstagram\b/,
+        /\bqualifie\b/,
+        /\bqualification\b/,
+        /\bretour\b/,
+      ],
     },
   ],
   FORMATION: [

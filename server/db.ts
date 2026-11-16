@@ -16,6 +16,7 @@ import {
   AdminStatus,
   OperationalStatus,
   CandidateStatus,
+  RecruitmentStage,
   DiscordServerType,
   PawakoRoleType,
   DiscordRoleMapping,
@@ -81,10 +82,26 @@ const OFFICIAL_DISCORD_SERVERS: DiscordServerInfo[] = [
 
 // Mappings initiaux par défaut des rôles Discord pour chacun des 4 serveurs
 const DEFAULT_ROLE_MAPPINGS: DiscordRoleMapping[] = [
-  // 1. Serveur Recrutement
-  { serverId: 'RECRUTEMENT', roleType: 'CANDIDAT', discordRoleId: '', roleName: 'Candidat (En attente)' },
-  { serverId: 'RECRUTEMENT', roleType: 'CANDIDAT_ACCEPTE', discordRoleId: '', roleName: 'Candidat Accepté' },
-  { serverId: 'RECRUTEMENT', roleType: 'CANDIDAT_REFUSE', discordRoleId: '', roleName: 'Candidat Refusé' },
+  // 1. Serveur Recrutement (6 rôles principaux + compatibilité)
+  { serverId: 'RECRUTEMENT', roleType: 'VA_CHATTING', discordRoleId: '', roleName: 'VA Chatting' },
+  { serverId: 'RECRUTEMENT', roleType: 'VA_INSTAGRAM', discordRoleId: '', roleName: 'VA Instagram' },
+  {
+    serverId: 'RECRUTEMENT',
+    roleType: 'EN_ATTENTE_QUALIFICATION',
+    discordRoleId: '',
+    roleName: 'En attente de qualification',
+  },
+  {
+    serverId: 'RECRUTEMENT',
+    roleType: 'EN_ATTENTE_RETOUR',
+    discordRoleId: '',
+    roleName: 'En attente d’un retour',
+  },
+  { serverId: 'RECRUTEMENT', roleType: 'QUALIFIE', discordRoleId: '', roleName: 'Qualifié' },
+  { serverId: 'RECRUTEMENT', roleType: 'NON_QUALIFIE', discordRoleId: '', roleName: 'Non qualifié' },
+  { serverId: 'RECRUTEMENT', roleType: 'CANDIDAT', discordRoleId: '', roleName: 'Candidat (Legacy)' },
+  { serverId: 'RECRUTEMENT', roleType: 'CANDIDAT_ACCEPTE', discordRoleId: '', roleName: 'Candidat Accepté (Legacy)' },
+  { serverId: 'RECRUTEMENT', roleType: 'CANDIDAT_REFUSE', discordRoleId: '', roleName: 'Candidat Refusé (Legacy)' },
 
   // 2. Serveur Formation (Chatteurs uniquement)
   { serverId: 'FORMATION', roleType: 'EN_FORMATION', discordRoleId: '', roleName: 'En Formation' },
@@ -145,10 +162,15 @@ class DatabaseService {
           };
         });
 
-        // Ensure role mappings
-        const roleMappings: DiscordRoleMapping[] = parsed.discord_role_mappings?.length
+        // Ensure role mappings (backfill missing defaults cleanly)
+        const existingRoleMappings: DiscordRoleMapping[] = Array.isArray(parsed.discord_role_mappings)
           ? parsed.discord_role_mappings
-          : DEFAULT_ROLE_MAPPINGS;
+          : [];
+        const existingKeys = new Set(existingRoleMappings.map(m => `${m.serverId}_${m.roleType}`));
+        const roleMappings: DiscordRoleMapping[] = [
+          ...existingRoleMappings,
+          ...DEFAULT_ROLE_MAPPINGS.filter(def => !existingKeys.has(`${def.serverId}_${def.roleType}`)),
+        ];
 
         // Migrate candidates if necessary
         const candidates: Candidate[] = (parsed.candidates || []).map((c: any) => {
@@ -896,6 +918,7 @@ class DatabaseService {
     adminStatus?: AdminStatus | 'ALL';
     operationalStatus?: OperationalStatus | 'ALL';
     status?: CandidateStatus | 'ALL';
+    recruitmentStage?: RecruitmentStage | 'ALL';
     server?: DiscordServerType | 'AUCUN' | 'ALL';
     attributionStatus?: Candidate['attributionStatus'] | 'ALL';
     hasAnomaly?: boolean;
@@ -921,6 +944,10 @@ class DatabaseService {
 
     if (filters?.status && filters.status !== 'ALL') {
       result = result.filter(c => c.status === filters.status);
+    }
+
+    if (filters?.recruitmentStage && filters.recruitmentStage !== 'ALL') {
+      result = result.filter(c => c.recruitmentStage === filters.recruitmentStage);
     }
 
     if (filters?.server && filters.server !== 'ALL') {
@@ -1029,6 +1056,7 @@ class DatabaseService {
       adminStatus: 'EN_ATTENTE',
       operationalStatus: 'RECRUTEMENT',
       status: 'EN_ATTENTE',
+      recruitmentStage: null,
       referrerId: referrer ? referrer.id : null,
       referrerDiscordUserId: referrer ? referrer.discordUserId : null,
       referrerName: referrer ? referrer.discordDisplayName : null,
@@ -1088,6 +1116,7 @@ class DatabaseService {
     newAdminStatus?: AdminStatus;
     newOperationalStatus?: OperationalStatus;
     newStatus?: CandidateStatus;
+    newRecruitmentStage?: RecruitmentStage | null;
     authorUserId: string;
     authorName: string;
     authorSource?: 'MANUAL_ADMIN' | 'MANUAL_RESPONSABLE' | 'DISCORD_SYNC' | 'JARVIS_GATEWAY';
@@ -1211,6 +1240,19 @@ class DatabaseService {
     candidate.adminStatus = targetAdmin;
     candidate.operationalStatus = targetOp;
     candidate.status = deriveCandidateStatus(targetAdmin, targetOp);
+    if (params.newRecruitmentStage !== undefined) {
+      candidate.recruitmentStage = params.newRecruitmentStage;
+    } else if (targetAdmin === 'REFUSE') {
+      candidate.recruitmentStage = 'NON_QUALIFIE';
+    } else if (
+      targetAdmin === 'ACCEPTE' &&
+      (!candidate.recruitmentStage ||
+        candidate.recruitmentStage === 'EN_ATTENTE_QUALIFICATION' ||
+        candidate.recruitmentStage === 'EN_ATTENTE_RETOUR' ||
+        candidate.recruitmentStage === 'NON_QUALIFIE')
+    ) {
+      candidate.recruitmentStage = 'QUALIFIE';
+    }
     candidate.currentServer = targetServer;
     candidate.updatedAt = now;
 
@@ -1514,6 +1556,12 @@ class DatabaseService {
     const instagram = candidates.filter(c => c.vaType === 'INSTAGRAM');
 
     const enAttente = candidates.filter(c => c.adminStatus === 'EN_ATTENTE').length;
+    const enAttenteQualification = candidates.filter(
+      c => c.recruitmentStage === 'EN_ATTENTE_QUALIFICATION'
+    ).length;
+    const enAttenteRetour = candidates.filter(c => c.recruitmentStage === 'EN_ATTENTE_RETOUR').length;
+    const qualifies = candidates.filter(c => c.recruitmentStage === 'QUALIFIE').length;
+    const nonQualifies = candidates.filter(c => c.recruitmentStage === 'NON_QUALIFIE').length;
     const acceptes = candidates.filter(c => c.adminStatus === 'ACCEPTE').length;
     const refuses = candidates.filter(c => c.adminStatus === 'REFUSE').length;
     const abandonnes = candidates.filter(c => c.adminStatus === 'ABANDONNE').length;
@@ -1574,6 +1622,10 @@ class DatabaseService {
         totalChatteurs: chatteurs.length,
         totalInstagram: instagram.length,
         enAttente,
+        enAttenteQualification,
+        enAttenteRetour,
+        qualifies,
+        nonQualifies,
         acceptes,
         enFormation,
         enSimulation,
