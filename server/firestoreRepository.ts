@@ -4594,17 +4594,25 @@ export class FirestoreRepository {
   async listParrainGuides(): Promise<ParrainGuide[]> {
     const rawDocs = await this.client.listDocuments<ParrainGuide>('pawako_parrain_guides');
     const byId = new Map<string, ParrainGuide>();
+    const archivedPrimaryIds = new Set<string>();
 
     for (const rawDoc of rawDocs) {
       const cleaned = stripFirestoreMeta(rawDoc);
+      const rawId = String(cleaned.id || '').trim().toUpperCase();
+      if (cleaned.isArchived === true) {
+        if (rawId === 'CHATTEUR' || rawId === 'INSTAGRAM') {
+          archivedPrimaryIds.add(rawId);
+        }
+        continue;
+      }
       const normalized = normalizeStoredParrainGuide(cleaned);
       byId.set(normalized.id, normalized);
     }
 
-    if (!byId.has('CHATTEUR')) {
+    if (!byId.has('CHATTEUR') && !archivedPrimaryIds.has('CHATTEUR')) {
       byId.set('CHATTEUR', buildDefaultParrainGuide('CHATTEUR'));
     }
-    if (!byId.has('INSTAGRAM')) {
+    if (!byId.has('INSTAGRAM') && !archivedPrimaryIds.has('INSTAGRAM')) {
       byId.set('INSTAGRAM', buildDefaultParrainGuide('INSTAGRAM'));
     }
 
@@ -4742,8 +4750,9 @@ export class FirestoreRepository {
 
   async deleteParrainGuide(
     guideId: string,
-    actor: { id: string; displayName: string }
-  ): Promise<{ deletedId: string; resetToDefault: boolean; vaType: VAType }> {
+    actor: { id: string; displayName: string },
+    options?: { permanent?: boolean }
+  ): Promise<{ deletedId: string; resetToDefault: boolean; archived?: boolean; vaType: VAType }> {
     const trimmedId = (guideId || '').trim();
     const isPrimary = isPrimaryGuideId(trimmedId);
     const targetId = isPrimary ? trimmedId.toUpperCase() : trimmedId;
@@ -4765,6 +4774,53 @@ export class FirestoreRepository {
         ? 'INSTAGRAM'
         : 'CHATTEUR';
 
+    const permanent = Boolean(options?.permanent);
+
+    if (isPrimary && permanent) {
+      if (existing?.isArchived === true) {
+        const err: any = new Error('Ce guide parrain a déjà été supprimé.');
+        err.status = 404;
+        throw err;
+      }
+
+      const now = new Date().toISOString();
+      const archivedDoc: ParrainGuide = {
+        id: targetId,
+        vaType,
+        title: existing?.title || buildDefaultParrainGuide(vaType).title,
+        subtitle: '',
+        blocks: [],
+        createdAt: existing?.createdAt || now,
+        updatedAt: now,
+        updatedByUserId: actor.id,
+        updatedByName: actor.displayName,
+        isPrimary: true,
+        isArchived: true,
+      };
+      await this.client.setDocument('pawako_parrain_guides', targetId, archivedDoc);
+
+      await this.logAudit({
+        action: 'PARRAIN_GUIDE_DELETED',
+        actorUserId: actor.id,
+        actorName: actor.displayName,
+        targetType: 'PARRAIN_GUIDE',
+        targetId,
+        details: {
+          vaType,
+          title: archivedDoc.title,
+          resetToDefault: false,
+          permanent: true,
+        },
+      });
+
+      return {
+        deletedId: targetId,
+        resetToDefault: false,
+        archived: true,
+        vaType,
+      };
+    }
+
     if (existing) {
       await this.client.deleteDocument('pawako_parrain_guides', targetId);
     }
@@ -4785,7 +4841,37 @@ export class FirestoreRepository {
     return {
       deletedId: targetId,
       resetToDefault: isPrimary,
+      archived: false,
       vaType,
     };
+  }
+
+  async restoreDefaultParrainGuide(
+    vaType: VAType,
+    actor: { id: string; displayName: string }
+  ): Promise<ParrainGuide> {
+    if (vaType !== 'CHATTEUR' && vaType !== 'INSTAGRAM') {
+      throw new Error('Spécialité invalide (CHATTEUR ou INSTAGRAM attendu).');
+    }
+
+    const existing = await this.client.getDocument<ParrainGuide>('pawako_parrain_guides', vaType);
+    if (existing) {
+      await this.client.deleteDocument('pawako_parrain_guides', vaType);
+    }
+
+    const restored = buildDefaultParrainGuide(vaType);
+    await this.logAudit({
+      action: 'PARRAIN_GUIDE_RESTORED',
+      actorUserId: actor.id,
+      actorName: actor.displayName,
+      targetType: 'PARRAIN_GUIDE',
+      targetId: vaType,
+      details: {
+        vaType,
+        title: restored.title,
+      },
+    });
+
+    return restored;
   }
 }

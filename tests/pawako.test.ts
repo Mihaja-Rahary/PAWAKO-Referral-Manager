@@ -3029,6 +3029,140 @@ describe('PAWAKO Referral Manager — Tests Complets Isolés (Mockés)', () => {
     assert.equal(comboStageSync.candidate?.hasAnomaly, true);
     assert.match(comboStageSync.candidate?.anomalyReason || '', /Qualifié et Non qualifié/i);
   });
+
+  it('7.11 Suppression permanente des articles (défaut + personnalisés) et restauration officielle dans Guides des parrains', async () => {
+    const adminLogin = await loginViaWorkerOAuth(mock, env, 'admin', {
+      id: env.INITIAL_ADMIN_DISCORD_ID!,
+      username: 'super_admin',
+      global_name: 'Super Admin',
+      avatar: null,
+    });
+    const parrainChatLogin = await loginViaWorkerOAuth(mock, env, 'parrain', {
+      id: '200000000000000810',
+      username: 'parrain_delete_chat',
+      global_name: 'Parrain Delete Chat',
+      avatar: null,
+    });
+
+    await app.fetch(
+      new Request(`${WORKER_ORIGIN}/api/parrain/specialty`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: `pawako_session=${parrainChatLogin.sessionCookie}`,
+          Origin: FRONTEND_ORIGIN,
+        },
+        body: JSON.stringify({ vaType: 'CHATTEUR' }),
+      }),
+      env
+    );
+
+    // 1. Créer un article personnalisé CHATTEUR
+    const createRes = await app.fetch(
+      new Request(`${WORKER_ORIGIN}/api/admin/parrain-guides`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: `pawako_session=${adminLogin.sessionCookie}`,
+          Origin: FRONTEND_ORIGIN,
+        },
+        body: JSON.stringify({
+          vaType: 'CHATTEUR',
+          title: 'Article Temporaire Chatteur',
+          category: 'Onboarding',
+          tags: ['Onboarding'],
+          blocks: [],
+        }),
+      }),
+      env
+    );
+    assert.equal(createRes.status, 201);
+    const createdCustom = ((await createRes.json()) as any).guide;
+
+    // 2. Suppression permanente de l'article officiel CHATTEUR (?permanent=true)
+    const permDelPrimaryRes = await app.fetch(
+      new Request(`${WORKER_ORIGIN}/api/admin/parrain-guides/CHATTEUR?permanent=true`, {
+        method: 'DELETE',
+        headers: { Cookie: `pawako_session=${adminLogin.sessionCookie}`, Origin: FRONTEND_ORIGIN },
+      }),
+      env
+    );
+    assert.equal(permDelPrimaryRes.status, 200);
+    const permDelPrimaryJson = (await permDelPrimaryRes.json()) as any;
+    assert.equal(permDelPrimaryJson.deletedId, 'CHATTEUR');
+    assert.equal(permDelPrimaryJson.resetToDefault, false);
+    assert.equal(permDelPrimaryJson.archived, true);
+    assert.ok(!permDelPrimaryJson.guideList.some((g: any) => g.id === 'CHATTEUR'));
+    assert.ok(permDelPrimaryJson.guideList.some((g: any) => g.id === createdCustom.id));
+
+    // Le parrain CHATTEUR ne voit plus le guide officiel supprimé, uniquement l'article personnalisé restant
+    const parrainAfterPrimaryDelRes = await app.fetch(
+      new Request(`${WORKER_ORIGIN}/api/parrain/guide`, {
+        headers: { Cookie: `pawako_session=${parrainChatLogin.sessionCookie}`, Origin: FRONTEND_ORIGIN },
+      }),
+      env
+    );
+    const parrainAfterPrimaryDel = (await parrainAfterPrimaryDelRes.json()) as any;
+    assert.equal(parrainAfterPrimaryDel.guides.length, 1);
+    assert.equal(parrainAfterPrimaryDel.guides[0].id, createdCustom.id);
+
+    // 3. Suppression du dernier article personnalisé -> journal CHATTEUR vide sans erreur
+    const delCustomRes = await app.fetch(
+      new Request(`${WORKER_ORIGIN}/api/admin/parrain-guides/${encodeURIComponent(createdCustom.id)}?permanent=true`, {
+        method: 'DELETE',
+        headers: { Cookie: `pawako_session=${adminLogin.sessionCookie}`, Origin: FRONTEND_ORIGIN },
+      }),
+      env
+    );
+    assert.equal(delCustomRes.status, 200);
+    const delCustomJson = (await delCustomRes.json()) as any;
+    assert.equal(delCustomJson.guideList.filter((g: any) => g.vaType === 'CHATTEUR').length, 0);
+
+    const parrainEmptyRes = await app.fetch(
+      new Request(`${WORKER_ORIGIN}/api/parrain/guide`, {
+        headers: { Cookie: `pawako_session=${parrainChatLogin.sessionCookie}`, Origin: FRONTEND_ORIGIN },
+      }),
+      env
+    );
+    assert.equal(parrainEmptyRes.status, 200);
+    const parrainEmptyJson = (await parrainEmptyRes.json()) as any;
+    assert.equal(parrainEmptyJson.guide, null);
+    assert.equal(parrainEmptyJson.guides.length, 0);
+
+    // 4. Un parrain ne peut pas restaurer le guide officiel (403)
+    const forbiddenRestoreRes = await app.fetch(
+      new Request(`${WORKER_ORIGIN}/api/admin/parrain-guides/CHATTEUR/restore-default`, {
+        method: 'POST',
+        headers: { Cookie: `pawako_session=${parrainChatLogin.sessionCookie}`, Origin: FRONTEND_ORIGIN },
+      }),
+      env
+    );
+    assert.equal(forbiddenRestoreRes.status, 403);
+
+    // 5. Admin restaure le guide officiel CHATTEUR
+    const restoreRes = await app.fetch(
+      new Request(`${WORKER_ORIGIN}/api/admin/parrain-guides/CHATTEUR/restore-default`, {
+        method: 'POST',
+        headers: { Cookie: `pawako_session=${adminLogin.sessionCookie}`, Origin: FRONTEND_ORIGIN },
+      }),
+      env
+    );
+    assert.equal(restoreRes.status, 200);
+    const restoreJson = (await restoreRes.json()) as any;
+    assert.equal(restoreJson.guide.id, 'CHATTEUR');
+    assert.equal(restoreJson.guide.isDefault, true);
+    assert.ok(restoreJson.guideList.some((g: any) => g.id === 'CHATTEUR'));
+
+    const parrainRestoredRes = await app.fetch(
+      new Request(`${WORKER_ORIGIN}/api/parrain/guide`, {
+        headers: { Cookie: `pawako_session=${parrainChatLogin.sessionCookie}`, Origin: FRONTEND_ORIGIN },
+      }),
+      env
+    );
+    const parrainRestoredJson = (await parrainRestoredRes.json()) as any;
+    assert.equal(parrainRestoredJson.guides.length, 1);
+    assert.equal(parrainRestoredJson.guides[0].id, 'CHATTEUR');
+  });
 });
 
 

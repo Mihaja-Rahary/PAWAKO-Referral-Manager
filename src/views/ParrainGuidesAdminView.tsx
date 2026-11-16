@@ -229,8 +229,12 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
   const [isCreating, setIsCreating] = useState(false);
 
   // Delete / Reset Confirmation Modal state
-  const [confirmDeleteGuide, setConfirmDeleteGuide] = useState<ParrainGuide | null>(null);
+  const [confirmDeleteGuide, setConfirmDeleteGuide] = useState<{
+    guide: ParrainGuide;
+    mode: 'delete' | 'reset';
+  } | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [isRestoringDefault, setIsRestoringDefault] = useState(false);
 
   // Unsaved guard modal when switching guides
   const [pendingSwitchGuide, setPendingSwitchGuide] = useState<ParrainGuide | null>(null);
@@ -246,10 +250,9 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
       setLoadError(null);
       setLoadErrorStatus(null);
       const res = await api.getAdminParrainGuides();
-      const list: ParrainGuide[] =
-        Array.isArray(res.guideList) && res.guideList.length > 0
-          ? res.guideList
-          : [res.guides.CHATTEUR, res.guides.INSTAGRAM].filter(Boolean);
+      const list: ParrainGuide[] = Array.isArray(res.guideList)
+        ? res.guideList
+        : [res.guides.CHATTEUR, res.guides.INSTAGRAM].filter((g): g is ParrainGuide => Boolean(g));
 
       setGuideList(list);
 
@@ -263,6 +266,10 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
         setSelectedGuideId(target.id);
         setActiveVaType(target.vaType);
         setDraft(structuredClone(target));
+        setIsDirty(false);
+      } else {
+        setSelectedGuideId('');
+        setDraft(null);
         setIsDirty(false);
       }
     } catch (err: any) {
@@ -389,6 +396,10 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
     const primary = trackGuides.find(g => g.id === vaType) || trackGuides[0];
     if (!primary) {
       setActiveVaType(vaType);
+      setSelectedGuideId('');
+      setDraft(null);
+      setIsDirty(false);
+      setFeedback(null);
       return;
     }
     if (isDirty) {
@@ -717,36 +728,38 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
     if (!confirmDeleteGuide || !isAdmin || isDeleting) return;
     try {
       setIsDeleting(true);
-      const target = confirmDeleteGuide;
-      const res = await api.deleteAdminParrainGuide(target.id);
+      const { guide: target, mode: deleteMode } = confirmDeleteGuide;
+      const isPermanentDelete = deleteMode === 'delete';
+      const res = await api.deleteAdminParrainGuide(target.id, { permanent: isPermanentDelete });
 
-      const nextList: ParrainGuide[] =
-        Array.isArray(res.guideList) && res.guideList.length > 0
-          ? res.guideList
-          : guideList.filter(g => g.id !== target.id);
+      const nextList: ParrainGuide[] = Array.isArray(res.guideList)
+        ? res.guideList
+        : guideList.filter(g => g.id !== target.id);
 
       setGuideList(nextList);
       setConfirmDeleteGuide(null);
 
       const fallbackGuide =
-        (target.isPrimary
+        (res.resetToDefault
           ? nextList.find(g => g.id === target.id)
-          : nextList.find(g => g.id === target.vaType)) ||
-        nextList.find(g => g.vaType === target.vaType) ||
-        nextList[0] ||
-        null;
+          : nextList.find(g => g.vaType === target.vaType && g.id === target.vaType) ||
+            nextList.find(g => g.vaType === target.vaType)) || null;
 
       if (fallbackGuide) {
         setActiveVaType(fallbackGuide.vaType);
         setSelectedGuideId(fallbackGuide.id);
         setDraft(structuredClone(fallbackGuide));
+      } else {
+        setActiveVaType(target.vaType);
+        setSelectedGuideId('');
+        setDraft(null);
       }
       setIsDirty(false);
       setFeedback({
         type: 'ok',
         text: res.resetToDefault
           ? `L'article principal « ${target.title} » a été réinitialisé sur le modèle par défaut.`
-          : `L'article « ${target.title} » a été supprimé définitivement.`,
+          : `L'article « ${target.title} » a été supprimé du journal des parrains.`,
       });
     } catch (err: any) {
       setConfirmDeleteGuide(null);
@@ -759,6 +772,35 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
     }
   };
 
+  const handleRestoreDefaultGuide = async (vaType: VAType) => {
+    if (!isAdmin || isRestoringDefault) return;
+    try {
+      setIsRestoringDefault(true);
+      setFeedback(null);
+      const res = await api.restoreDefaultAdminParrainGuide(vaType);
+      const nextList = Array.isArray(res.guideList)
+        ? res.guideList
+        : [...guideList.filter(g => g.id !== res.guide.id), res.guide];
+      setGuideList(nextList);
+      setActiveVaType(vaType);
+      setActiveCategoryFilter('ALL');
+      setSelectedGuideId(res.guide.id);
+      setDraft(structuredClone(res.guide));
+      setIsDirty(false);
+      setFeedback({
+        type: 'ok',
+        text: `Le guide officiel « ${res.guide.title} » a été restauré dans le journal.`,
+      });
+    } catch (err: any) {
+      setFeedback({
+        type: 'err',
+        text: err?.message || 'Impossible de restaurer le guide officiel.',
+      });
+    } finally {
+      setIsRestoringDefault(false);
+    }
+  };
+
   if (isLoading) {
     return (
       <div className="bg-white dark:bg-[#100b1a] border border-slate-200 dark:border-[#241a38] rounded-2xl p-12 text-center text-xs text-slate-500 dark:text-[#9d93b8]">
@@ -768,12 +810,12 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
     );
   }
 
-  if (loadError || !draft) {
+  if (loadError) {
     return (
       <div className="bg-white dark:bg-[#100b1a] border border-rose-200 dark:border-rose-500/30 rounded-2xl p-8 max-w-xl mx-auto text-center space-y-3 text-xs">
         <AlertCircle className="w-6 h-6 text-rose-500 mx-auto" />
         <p className="text-rose-800 dark:text-rose-200 font-medium leading-relaxed">
-          {loadError || 'Guides introuvables.'}
+          {loadError}
         </p>
         {loadErrorStatus === 404 && (
           <div className="p-3 rounded-lg bg-slate-50 dark:bg-[#171026] border border-slate-200 dark:border-[#2e224a] text-left text-[11px] text-slate-600 dark:text-[#b7aed0] space-y-1">
@@ -800,9 +842,10 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
     );
   }
 
-  const isPrimaryDraft = Boolean(draft.isPrimary || draft.id === 'CHATTEUR' || draft.id === 'INSTAGRAM');
-  const resolvedCover = resolveGuideCoverUrl(draft);
-  const draftMinutes = estimateReadingMinutes(draft);
+  const isPrimaryDraft = Boolean(draft && (draft.isPrimary || draft.id === 'CHATTEUR' || draft.id === 'INSTAGRAM'));
+  const hasPrimaryInActiveTrack = guidesByTrack[activeVaType].some(g => g.id === activeVaType);
+  const resolvedCover = draft ? resolveGuideCoverUrl(draft) : '';
+  const draftMinutes = draft ? estimateReadingMinutes(draft) : 1;
 
   return (
     <div className="space-y-6">
@@ -862,15 +905,17 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
                   <span>Nouvel article</span>
                 </button>
 
-                <button
-                  type="button"
-                  onClick={handleSave}
-                  disabled={isSaving || isOverSizeLimit}
-                  className="min-h-[40px] px-4 py-2 text-xs font-bold text-white bg-gradient-to-r from-[#FA4616] to-rose-500 hover:from-[#e43d11] hover:to-rose-400 disabled:opacity-50 rounded-xl shadow-sm shadow-[#FA4616]/20 transition-all flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
-                >
-                  {isSaving ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
-                  <span>{isSaving ? 'Publication...' : isDirty ? 'Publier les modifs *' : 'Enregistrer & Publier'}</span>
-                </button>
+                {draft && (
+                  <button
+                    type="button"
+                    onClick={handleSave}
+                    disabled={isSaving || isOverSizeLimit}
+                    className="min-h-[40px] px-4 py-2 text-xs font-bold text-white bg-gradient-to-r from-[#FA4616] to-rose-500 hover:from-[#e43d11] hover:to-rose-400 disabled:opacity-50 rounded-xl shadow-sm shadow-[#FA4616]/20 transition-all flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
+                  >
+                    {isSaving ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+                    <span>{isSaving ? 'Publication...' : isDirty ? 'Publier les modifs *' : 'Enregistrer & Publier'}</span>
+                  </button>
+                )}
               </>
             )}
           </div>
@@ -912,29 +957,44 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
             })}
           </div>
 
-          <div className="flex flex-wrap items-center gap-3 text-[11px] text-slate-500 dark:text-[#9d93b8]">
-            {draft.updatedAt && (
-              <span>
-                Modifié le <span className="font-mono tabular-nums">{formatDate(draft.updatedAt)}</span>
+          {draft && (
+            <div className="flex flex-wrap items-center gap-3 text-[11px] text-slate-500 dark:text-[#9d93b8]">
+              {draft.updatedAt && (
+                <span>
+                  Modifié le <span className="font-mono tabular-nums">{formatDate(draft.updatedAt)}</span>
+                </span>
+              )}
+              <span
+                className={`font-mono tabular-nums px-2 py-0.5 rounded-md border ${
+                  isOverSizeLimit
+                    ? 'bg-rose-50 dark:bg-rose-950/30 border-rose-200 dark:border-rose-500/30 text-rose-700 dark:text-rose-300'
+                    : 'bg-slate-50 dark:bg-[#171026] border-slate-200 dark:border-[#241a38]'
+                }`}
+              >
+                Poids : {sizeKb} / {maxKb} Ko
               </span>
-            )}
-            <span
-              className={`font-mono tabular-nums px-2 py-0.5 rounded-md border ${
-                isOverSizeLimit
-                  ? 'bg-rose-50 dark:bg-rose-950/30 border-rose-200 dark:border-rose-500/30 text-rose-700 dark:text-rose-300'
-                  : 'bg-slate-50 dark:bg-[#171026] border-slate-200 dark:border-[#241a38]'
-              }`}
-            >
-              Poids : {sizeKb} / {maxKb} Ko
-            </span>
-          </div>
+            </div>
+          )}
         </div>
 
         {/* Visual Blog Cards Selector with Category & Tag Organization Filter */}
         <div className="pt-4 border-t border-slate-100 dark:border-[#1e1530] space-y-3">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-            <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-500 dark:text-[#9d93b8]">
-              Articles publiés dans ce journal ({guidesByTrack[activeVaType].length})
+            <div className="flex flex-wrap items-center gap-2.5">
+              <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-500 dark:text-[#9d93b8]">
+                Articles publiés dans ce journal ({guidesByTrack[activeVaType].length})
+              </div>
+              {isAdmin && !hasPrimaryInActiveTrack && (
+                <button
+                  type="button"
+                  disabled={isRestoringDefault}
+                  onClick={() => handleRestoreDefaultGuide(activeVaType)}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-semibold text-violet-700 dark:text-violet-300 bg-violet-50 dark:bg-violet-950/30 hover:bg-violet-100 dark:hover:bg-violet-950/50 border border-violet-200 dark:border-violet-500/30 cursor-pointer disabled:opacity-50"
+                >
+                  <RotateCcw className={`w-3 h-3 ${isRestoringDefault ? 'animate-spin' : ''}`} />
+                  <span>Restaurer le guide officiel</span>
+                </button>
+              )}
             </div>
             {guidesByTrack[activeVaType].length > 1 && (
               <div className="relative w-full sm:w-64">
@@ -994,7 +1054,35 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
             </div>
           )}
 
-          {filteredTrackGuides.length === 0 ? (
+          {guidesByTrack[activeVaType].length === 0 ? (
+            <div className="p-6 rounded-xl border border-dashed border-slate-200 dark:border-[#241a38] text-xs text-slate-500 dark:text-[#9d93b8] text-center space-y-3">
+              <p>
+                Aucun article publié dans le journal{' '}
+                <strong>{activeVaType === 'CHATTEUR' ? 'VA Chatteur' : 'VA Instagram'}</strong>.
+              </p>
+              {isAdmin && (
+                <div className="flex flex-wrap items-center justify-center gap-2">
+                  <button
+                    type="button"
+                    onClick={openCreateModal}
+                    className="px-3.5 py-1.5 bg-violet-600 hover:bg-violet-500 text-white font-semibold rounded-lg inline-flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Créer un article</span>
+                  </button>
+                  <button
+                    type="button"
+                    disabled={isRestoringDefault}
+                    onClick={() => handleRestoreDefaultGuide(activeVaType)}
+                    className="px-3.5 py-1.5 bg-slate-100 dark:bg-[#171026] hover:bg-slate-200 dark:hover:bg-[#231839] text-slate-800 dark:text-[#f4f1fa] font-semibold rounded-lg inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                  >
+                    <RotateCcw className={`w-3.5 h-3.5 ${isRestoringDefault ? 'animate-spin' : ''}`} />
+                    <span>Restaurer le guide officiel par défaut</span>
+                  </button>
+                </div>
+              )}
+            </div>
+          ) : filteredTrackGuides.length === 0 ? (
             <div className="p-6 rounded-xl border border-dashed border-slate-200 dark:border-[#241a38] text-xs text-slate-500 dark:text-[#9d93b8] text-center space-y-2">
               <p>
                 Aucun article ne correspond à votre filtre
@@ -1015,18 +1103,25 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5">
               {filteredTrackGuides.map(g => {
-                const isSelected = g.id === draft.id;
+                const isSelected = Boolean(draft && g.id === draft.id);
                 const thumbUrl = resolveGuideCoverUrl(g);
                 const mins = estimateReadingMinutes(g);
                 const cardTags = Array.isArray(g.tags) ? g.tags.slice(0, 3) : [];
                 const cardCat = g.category || (g.isPrimary ? 'Guide principal' : 'Onboarding');
                 const cardTheme = getTopicColorTheme(cardCat);
                 return (
-                  <button
+                  <div
                     key={g.id}
-                    type="button"
+                    role="button"
+                    tabIndex={0}
                     onClick={() => handleSelectGuide(g)}
-                    className={`group text-left rounded-xl border overflow-hidden transition-all cursor-pointer flex flex-col ${
+                    onKeyDown={e => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        handleSelectGuide(g);
+                      }
+                    }}
+                    className={`group text-left rounded-xl border overflow-hidden transition-all cursor-pointer flex flex-col focus:outline-none focus:ring-2 focus:ring-[#FA4616]/50 ${
                       isSelected
                         ? 'bg-orange-50/40 dark:bg-[#1b1520] border-[#FA4616] ring-1 ring-[#FA4616]/40'
                         : `bg-slate-50/70 dark:bg-[#140d21] border-slate-200 dark:border-[#241a38] ${cardTheme.borderAccent}`
@@ -1072,18 +1167,35 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
                         )}
                       </div>
 
-                      <div className="pt-2 flex items-center justify-between text-[11px] text-slate-400 dark:text-[#7c7296]">
-                        <span className="font-mono tabular-nums">
-                          {g.blocks.length} bloc{g.blocks.length > 1 ? 's' : ''}
-                        </span>
-                        {isSelected && (
-                          <span className="font-bold text-[#FA4616] dark:text-orange-400">
-                            En cours d&apos;édition
+                      <div className="pt-2.5 mt-1 border-t border-slate-200/60 dark:border-[#241a38] flex items-center justify-between gap-2 text-[11px] text-slate-400 dark:text-[#7c7296]">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="font-mono tabular-nums shrink-0">
+                            {g.blocks.length} bloc{g.blocks.length > 1 ? 's' : ''}
                           </span>
+                          {isSelected && (
+                            <span className="font-bold text-[#FA4616] dark:text-orange-400 truncate">
+                              · En édition
+                            </span>
+                          )}
+                        </div>
+                        {isAdmin && (
+                          <button
+                            type="button"
+                            onClick={e => {
+                              e.stopPropagation();
+                              setConfirmDeleteGuide({ guide: g, mode: 'delete' });
+                            }}
+                            title={`Supprimer « ${g.title} »`}
+                            aria-label={`Supprimer « ${g.title} »`}
+                            className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-semibold text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/30 hover:bg-rose-100 dark:hover:bg-rose-950/60 border border-rose-200/80 dark:border-rose-500/30 cursor-pointer shrink-0 transition-colors"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                            <span>Supprimer</span>
+                          </button>
                         )}
                       </div>
                     </div>
-                  </button>
+                  </div>
                 );
               })}
             </div>
@@ -1117,10 +1229,32 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
         </div>
       )}
 
-      {mode === 'preview' ? (
+      {!draft ? (
+        <div className="bg-white dark:bg-[#100b1a] border border-slate-200 dark:border-[#241a38] rounded-2xl p-10 text-center space-y-3 text-xs text-slate-500 dark:text-[#9d93b8]">
+          <BookOpen className="w-7 h-7 text-violet-500 mx-auto" />
+          <div className="text-sm font-bold text-slate-900 dark:text-[#f4f1fa]">
+            Aucun article sélectionné dans le journal {activeVaType === 'CHATTEUR' ? 'VA Chatteur' : 'VA Instagram'}
+          </div>
+          <p className="max-w-md mx-auto leading-relaxed">
+            Créez un nouvel article ou restaurez le guide officiel pour publier du contenu auprès des parrains de cette spécialité.
+          </p>
+        </div>
+      ) : mode === 'preview' ? (
         <div className="space-y-3">
-          <div className="text-[11px] uppercase tracking-wider font-semibold text-slate-500 dark:text-[#9d93b8]">
-            Aperçu lecteur tel que vu par un parrain {draft.vaType === 'CHATTEUR' ? 'VA Chatteur' : 'VA Instagram'}
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="text-[11px] uppercase tracking-wider font-semibold text-slate-500 dark:text-[#9d93b8]">
+              Aperçu lecteur tel que vu par un parrain {draft.vaType === 'CHATTEUR' ? 'VA Chatteur' : 'VA Instagram'}
+            </div>
+            {isAdmin && (
+              <button
+                type="button"
+                onClick={() => setConfirmDeleteGuide({ guide: draft, mode: 'delete' })}
+                className="min-h-[32px] px-3 py-1 text-xs text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/25 hover:bg-rose-100 dark:hover:bg-rose-950/45 border border-rose-200 dark:border-rose-500/30 rounded-lg font-semibold flex items-center gap-1.5 cursor-pointer transition-colors"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>Supprimer cet article</span>
+              </button>
+            )}
           </div>
           <ParrainGuideRenderer guide={draft} />
         </div>
@@ -1151,14 +1285,25 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
                   <span>{showCoverStudio ? 'Masquer options couverture' : 'Changer la couverture'}</span>
                 </button>
 
-                {isAdmin && (!isPrimaryDraft || !draft.isDefault) && (
+                {isAdmin && isPrimaryDraft && !draft.isDefault && (
                   <button
                     type="button"
-                    onClick={() => setConfirmDeleteGuide(draft)}
+                    onClick={() => setConfirmDeleteGuide({ guide: draft, mode: 'reset' })}
+                    className="min-h-[34px] px-3 py-1 text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/25 hover:bg-amber-100 dark:hover:bg-amber-950/45 border border-amber-200 dark:border-amber-500/30 rounded-lg font-semibold flex items-center gap-1.5 cursor-pointer transition-colors"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" />
+                    <span>Réinitialiser</span>
+                  </button>
+                )}
+
+                {isAdmin && (
+                  <button
+                    type="button"
+                    onClick={() => setConfirmDeleteGuide({ guide: draft, mode: 'delete' })}
                     className="min-h-[34px] px-3 py-1 text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/25 hover:bg-rose-100 dark:hover:bg-rose-950/45 border border-rose-200 dark:border-rose-500/30 rounded-lg font-semibold flex items-center gap-1.5 cursor-pointer transition-colors"
                   >
-                    {isPrimaryDraft ? <RotateCcw className="w-3.5 h-3.5" /> : <Trash2 className="w-3.5 h-3.5" />}
-                    <span>{isPrimaryDraft ? 'Réinitialiser' : 'Supprimer'}</span>
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Supprimer l&apos;article</span>
                   </button>
                 )}
               </div>
@@ -1911,14 +2056,16 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
           <div className="w-full max-w-md bg-white dark:bg-[#100b1a] border border-slate-200 dark:border-[#241a38] rounded-2xl p-5 sm:p-6 space-y-4 text-xs shadow-xl">
             <div className="space-y-1.5">
               <h3 className="font-serif text-base font-bold text-slate-900 dark:text-[#f4f1fa]">
-                {confirmDeleteGuide.isPrimary
+                {confirmDeleteGuide.mode === 'reset'
                   ? 'Réinitialiser le guide principal ?'
                   : 'Supprimer cet article ?'}
               </h3>
               <p className="text-slate-600 dark:text-[#b7aed0] leading-relaxed">
-                {confirmDeleteGuide.isPrimary
-                  ? `Cette action supprime vos personnalisations sur « ${confirmDeleteGuide.title} » et restaure le modèle officiel par défaut.`
-                  : `L'article « ${confirmDeleteGuide.title} » sera retiré immédiatement du journal des parrains. Cette action est irréversible.`}
+                {confirmDeleteGuide.mode === 'reset'
+                  ? `Cette action supprime vos personnalisations sur « ${confirmDeleteGuide.guide.title} » et restaure le modèle officiel par défaut.`
+                  : confirmDeleteGuide.guide.isPrimary
+                    ? `L'article officiel « ${confirmDeleteGuide.guide.title} » sera retiré du journal des parrains et du studio. Vous pourrez le restaurer à tout moment via « Restaurer le guide officiel ».`
+                    : `L'article « ${confirmDeleteGuide.guide.title} » sera retiré immédiatement du journal des parrains. Cette action est irréversible.`}
               </p>
             </div>
             <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100 dark:border-[#1e1530]">
@@ -1934,15 +2081,25 @@ export const ParrainGuidesAdminView: React.FC<Props> = ({ currentUserRole }) => 
                 type="button"
                 disabled={isDeleting}
                 onClick={handleConfirmDeleteGuide}
-                className="min-h-[38px] px-4 py-1.5 bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white font-semibold rounded-lg flex items-center gap-1.5 cursor-pointer"
+                className={`min-h-[38px] px-4 py-1.5 disabled:opacity-50 text-white font-semibold rounded-lg flex items-center gap-1.5 cursor-pointer ${
+                  confirmDeleteGuide.mode === 'reset'
+                    ? 'bg-amber-600 hover:bg-amber-500'
+                    : 'bg-rose-600 hover:bg-rose-500'
+                }`}
               >
-                {isDeleting ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                {isDeleting ? (
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                ) : confirmDeleteGuide.mode === 'reset' ? (
+                  <RotateCcw className="w-3.5 h-3.5" />
+                ) : (
+                  <Trash2 className="w-3.5 h-3.5" />
+                )}
                 <span>
                   {isDeleting
                     ? 'Suppression...'
-                    : confirmDeleteGuide.isPrimary
+                    : confirmDeleteGuide.mode === 'reset'
                       ? 'Réinitialiser'
-                      : 'Supprimer définitivement'}
+                      : 'Supprimer'}
                 </span>
               </button>
             </div>

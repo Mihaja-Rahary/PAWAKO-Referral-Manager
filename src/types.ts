@@ -165,6 +165,7 @@ export interface ParrainGuide {
   updatedByName: string;
   isDefault?: boolean;
   isPrimary?: boolean;
+  isArchived?: boolean;
 }
 
 export interface ReferrerDependencySummary {

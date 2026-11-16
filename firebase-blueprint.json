@@ -312,7 +312,8 @@
         "updatedAt": { "type": "string" },
         "updatedByUserId": { "type": "string" },
         "updatedByName": { "type": "string" },
-        "isPrimary": { "type": "boolean" }
+        "isPrimary": { "type": "boolean" },
+        "isArchived": { "type": "boolean" }
       },
       "required": ["id", "vaType", "title", "blocks", "updatedAt"]
     }

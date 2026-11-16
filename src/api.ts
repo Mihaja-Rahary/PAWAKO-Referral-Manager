@@ -488,7 +488,7 @@ export const api = {
   },
 
   async getAdminParrainGuides(): Promise<{
-    guides: Record<VAType, ParrainGuide>;
+    guides: Partial<Record<VAType, ParrainGuide>>;
     guideList?: ParrainGuide[];
   }> {
     return request('/api/admin/parrain-guides');
@@ -531,16 +531,32 @@ export const api = {
     });
   },
 
-  async deleteAdminParrainGuide(guideId: string): Promise<{
+  async deleteAdminParrainGuide(
+    guideId: string,
+    options?: { permanent?: boolean }
+  ): Promise<{
     success: boolean;
     deletedId: string;
     resetToDefault: boolean;
+    archived?: boolean;
     vaType: VAType;
-    guides?: Record<VAType, ParrainGuide>;
+    guides?: Partial<Record<VAType, ParrainGuide>>;
     guideList?: ParrainGuide[];
   }> {
-    return request(`/api/admin/parrain-guides/${encodeURIComponent(guideId)}`, {
+    const qs = options?.permanent ? '?permanent=true' : '';
+    return request(`/api/admin/parrain-guides/${encodeURIComponent(guideId)}${qs}`, {
       method: 'DELETE',
+    });
+  },
+
+  async restoreDefaultAdminParrainGuide(vaType: VAType): Promise<{
+    success: boolean;
+    guide: ParrainGuide;
+    guides?: Partial<Record<VAType, ParrainGuide>>;
+    guideList?: ParrainGuide[];
+  }> {
+    return request(`/api/admin/parrain-guides/${encodeURIComponent(vaType)}/restore-default`, {
+      method: 'POST',
     });
   },
 
