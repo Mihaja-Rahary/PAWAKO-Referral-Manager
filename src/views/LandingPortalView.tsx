@@ -146,14 +146,10 @@ export const LandingPortalView: React.FC<Props> = ({
               </div>
 
               {/* Whop-style colorful mini capability strip */}
-              <div className="grid grid-cols-3 gap-3 text-center">
+              <div className="grid grid-cols-2 gap-3 text-center">
                 <div className="p-3 rounded-xl bg-white dark:bg-[#13131b] border border-slate-200 dark:border-white/10">
                   <div className="text-[11px] font-bold text-[#FA4616]">Lien Express</div>
                   <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">Partage en 1 clic</div>
-                </div>
-                <div className="p-3 rounded-xl bg-white dark:bg-[#13131b] border border-slate-200 dark:border-white/10">
-                  <div className="text-[11px] font-bold text-indigo-600 dark:text-indigo-400">4 Serveurs</div>
-                  <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">Synchro Bot Discord</div>
                 </div>
                 <div className="p-3 rounded-xl bg-white dark:bg-[#13131b] border border-slate-200 dark:border-white/10">
                   <div className="text-[11px] font-bold text-emerald-600 dark:text-emerald-400 flex items-center justify-center gap-1">
