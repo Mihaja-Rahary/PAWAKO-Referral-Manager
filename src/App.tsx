@@ -545,7 +545,13 @@ export default function App() {
 
         {/* View Content Area */}
         <main className="flex-1 overflow-y-auto p-3.5 sm:p-6">
-          <div className="max-w-7xl mx-auto space-y-5 sm:space-y-6">
+          <div
+            className={`${
+              activeTab === 'parrain_portal' || activeTab === 'parrain_guides'
+                ? 'max-w-[1440px]'
+                : 'max-w-7xl'
+            } mx-auto space-y-5 sm:space-y-6`}
+          >
             {loadError && (
               <div className="p-3.5 bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-500/30 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-rose-800 dark:text-rose-200">
                 <div className="flex items-start gap-2">

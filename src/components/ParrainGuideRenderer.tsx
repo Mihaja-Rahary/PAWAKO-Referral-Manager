@@ -218,7 +218,7 @@ export function RichTextContent({
 
   flushAll('end');
 
-  return <div className={`space-y-4 text-[15px] sm:text-base ${className}`}>{elements}</div>;
+  return <div className={`space-y-4 text-[15.5px] sm:text-[16.5px] ${className}`}>{elements}</div>;
 }
 
 function SafeImage({
@@ -462,91 +462,89 @@ export const ParrainGuideRenderer: React.FC<Props> = ({ guide, compactHeader = f
   return (
     <article className="bg-white dark:bg-[#12121a] border border-slate-200 dark:border-white/10 rounded-2xl overflow-hidden shadow-xs transition-colors">
       <div className={`h-1 w-full bg-gradient-to-r ${specialtyTheme.gradient}`} />
-      {/* Editorial Article Header */}
-      <header className={`${compactHeader ? 'px-5 pt-6 pb-5 sm:px-8 sm:pt-8' : 'px-5 pt-7 pb-6 sm:px-10 sm:pt-10'} max-w-5xl mx-auto space-y-5`}>
-        {/* Colorful Kicker & Metadata Line */}
-        <div className="space-y-2.5">
-          <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
-            {categoryLabel && (
-              <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md border text-[11px] font-bold uppercase tracking-wider ${categoryTheme.badge}`}>
-                <span className={`w-1.5 h-1.5 rounded-full ${categoryTheme.dot}`} />
-                <span>{categoryLabel}</span>
+
+      {/* Editorial Article Header — Balanced Split Hero */}
+      <header
+        className={`${
+          compactHeader
+            ? 'px-6 pt-6 pb-6 sm:px-8 sm:pt-7 sm:pb-7'
+            : 'px-6 pt-7 pb-7 sm:px-10 sm:pt-9 sm:pb-8 lg:px-12'
+        } border-b border-slate-200/80 dark:border-white/10`}
+      >
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-10 items-center">
+          {/* Left: Clean Kicker + Headline + Lead */}
+          <div className="lg:col-span-7 space-y-4 min-w-0">
+            {/* Single Unboxed Typographic Metadata Line */}
+            <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-xs text-slate-500 dark:text-slate-400">
+              {categoryLabel && (
+                <>
+                  <span className={`inline-flex items-center gap-1.5 font-bold uppercase tracking-wider text-[11px] ${categoryTheme.text}`}>
+                    <span className={`w-1.5 h-1.5 rounded-full ${categoryTheme.dot}`} />
+                    <span>{categoryLabel}</span>
+                  </span>
+                  <span aria-hidden="true" className="text-slate-300 dark:text-white/20">·</span>
+                </>
+              )}
+              <span className={`font-semibold ${specialtyTheme.text}`}>
+                Parcours {getVaTypeLabel(guide.vaType)}
               </span>
-            )}
-            <span className={`inline-flex items-center px-2 py-0.5 rounded-md border text-[11px] font-semibold ${specialtyTheme.badge}`}>
-              Parcours {getVaTypeLabel(guide.vaType)}
-            </span>
-            <span className="inline-flex items-center gap-1 font-mono tabular-nums">
-              <Clock className="w-3.5 h-3.5 text-slate-400 dark:text-slate-500" />
-              {readingMinutes} min de lecture
-            </span>
-            {guide.updatedAt && (
-              <>
-                <span aria-hidden="true" className="text-slate-300 dark:text-white/20">·</span>
-                <span className="font-mono tabular-nums">
-                  Mis à jour le {formatDate(guide.updatedAt)}
-                </span>
-              </>
+              <span aria-hidden="true" className="text-slate-300 dark:text-white/20">·</span>
+              <span className="inline-flex items-center gap-1 font-mono tabular-nums">
+                <Clock className="w-3.5 h-3.5 text-slate-400 dark:text-slate-500" />
+                {readingMinutes} min de lecture
+              </span>
+              {guide.updatedAt && (
+                <>
+                  <span aria-hidden="true" className="text-slate-300 dark:text-white/20">·</span>
+                  <span className="font-mono tabular-nums">
+                    Mis à jour le {formatDate(guide.updatedAt)}
+                  </span>
+                </>
+              )}
+            </div>
+
+            {/* Display Headline */}
+            <h1 className="font-serif text-2xl sm:text-3xl lg:text-[2.2rem] font-bold text-slate-950 dark:text-white tracking-tight leading-[1.16] [text-wrap:balance]">
+              {guide.title}
+            </h1>
+
+            {/* Lead Deck / Chapeau */}
+            {guide.subtitle && (
+              <p className="text-[15.5px] sm:text-[17px] text-slate-600 dark:text-slate-300 leading-[1.6] max-w-2xl">
+                {guide.subtitle}
+              </p>
             )}
           </div>
 
-          {Array.isArray(guide.tags) && guide.tags.length > 0 && (
-            <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
-              {guide.tags.map(tag => {
-                const tagTheme = getTopicColorTheme(tag);
-                return (
-                  <span
-                    key={tag}
-                    className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md border font-semibold ${tagTheme.badge}`}
-                  >
-                    <span>#{tag}</span>
-                  </span>
-                );
-              })}
+          {/* Right: Crisp Framed Cover Image Alongside Hero */}
+          <div className="lg:col-span-5">
+            <div className="aspect-[16/10] w-full rounded-2xl overflow-hidden bg-slate-100 dark:bg-[#09090d] border border-slate-200/80 dark:border-white/10 shadow-xs">
+              <SafeImage
+                src={coverUrl}
+                alt={guide.title}
+                className="w-full h-full object-cover"
+              />
             </div>
-          )}
-        </div>
-
-        {/* Display Headline */}
-        <h1 className="font-serif text-2xl sm:text-4xl lg:text-[2.55rem] font-bold text-slate-950 dark:text-white tracking-tight leading-[1.14] [text-wrap:balance]">
-          {guide.title}
-        </h1>
-
-        {/* Lead Deck / Chapeau */}
-        {guide.subtitle && (
-          <p className="text-base sm:text-lg text-slate-600 dark:text-slate-300 leading-relaxed max-w-3xl">
-            {guide.subtitle}
-          </p>
-        )}
-
-        {/* Featured Cover Photo cleanly framed below headline/deck */}
-        <div className="pt-2">
-          <div className="aspect-[16/9] max-h-[420px] w-full rounded-2xl overflow-hidden bg-slate-100 dark:bg-[#09090d] border border-slate-200/80 dark:border-white/10">
-            <SafeImage
-              src={coverUrl}
-              alt={guide.title}
-              className="w-full h-full object-cover"
-            />
           </div>
         </div>
       </header>
 
       {/* Main Long-Form Editorial Body + Optional Sticky Sommaire */}
-      <div className="px-5 pb-8 sm:px-10 sm:pb-12 pt-4 sm:pt-6 max-w-5xl mx-auto">
+      <div className="px-6 py-7 sm:px-10 sm:py-9 lg:px-12 lg:py-10">
         {guide.blocks.length === 0 ? (
           <div className="border border-dashed border-slate-200 dark:border-white/10 rounded-2xl p-10 text-center text-sm text-slate-500 dark:text-slate-400">
             Aucun chapitre rédigé dans cet article pour le moment.
           </div>
         ) : hasSidebarToc ? (
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-12 items-start">
-            {/* Reading Column (~70%) */}
+            {/* Reading Column (~67%) */}
             <div className="lg:col-span-8 space-y-8 min-w-0">
               {guide.blocks.map((block, index) =>
                 renderArticleBlock(block, index, firstTextBlockId)
               )}
             </div>
 
-            {/* Sticky Table of Contents (~30%) */}
+            {/* Sticky Table of Contents (~33%) */}
             <aside className="hidden lg:block lg:col-span-4 sticky top-20 space-y-4">
               <div className="rounded-2xl border border-slate-200 dark:border-white/10 bg-slate-50/80 dark:bg-[#171722] p-5 space-y-4">
                 <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-slate-600 dark:text-slate-300">
@@ -581,11 +579,28 @@ export const ParrainGuideRenderer: React.FC<Props> = ({ guide, compactHeader = f
             </aside>
           </div>
         ) : (
-          <div className="max-w-[740px] mx-auto space-y-8">
+          <div className="max-w-[840px] space-y-8">
             {guide.blocks.map((block, index) =>
               renderArticleBlock(block, index, firstTextBlockId)
             )}
           </div>
+        )}
+
+        {/* Quiet Editorial Footer Tags */}
+        {Array.isArray(guide.tags) && guide.tags.length > 0 && (
+          <footer className="mt-10 pt-5 border-t border-slate-100 dark:border-white/10 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs text-slate-500 dark:text-slate-400">
+            <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">
+              Thèmes :
+            </span>
+            {guide.tags.map(tag => {
+              const tagTheme = getTopicColorTheme(tag);
+              return (
+                <span key={tag} className={`font-semibold ${tagTheme.text}`}>
+                  #{tag}
+                </span>
+              );
+            })}
+          </footer>
         )}
       </div>
     </article>

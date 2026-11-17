@@ -834,10 +834,17 @@ export const ParrainPortalView: React.FC<Props> = ({
     </div>
   );
 
+  const isReadingArticle =
+    activePortalTab === 'home' &&
+    !isGuideLoading &&
+    !guideError &&
+    guides.length > 0 &&
+    (guides.length === 1 || homeViewMode === 'article');
+
   return (
     <div className="flex flex-col lg:flex-row gap-5 xl:gap-6 items-start">
       {/* Desktop Dedicated Parrain Left Sidebar */}
-      <aside className="hidden lg:block w-64 shrink-0">
+      <aside className="hidden lg:block w-60 shrink-0">
         {renderLeftSidebar(false)}
       </aside>
 
@@ -932,7 +939,7 @@ export const ParrainPortalView: React.FC<Props> = ({
                         <span>Retour au fil ({guides.length} articles)</span>
                       </button>
 
-                      <span className={`inline-flex items-center px-2.5 py-1 rounded-lg border text-[11px] font-bold ${specialtyTheme.badge}`}>
+                      <span className={`text-xs font-semibold ${specialtyTheme.text}`}>
                         Édition {getVaTypeLabel(lockedSpecialty)}
                       </span>
                     </div>
@@ -1849,8 +1856,9 @@ export const ParrainPortalView: React.FC<Props> = ({
         )}
       </div>
 
-      {/* RIGHT WIDGET RAIL: EXPRESS LINK + MILESTONES + PULSE */}
-      <aside className="w-full xl:w-80 shrink-0 space-y-4 xl:sticky xl:top-20 xl:self-start">
+      {/* RIGHT WIDGET RAIL: EXPRESS LINK + MILESTONES + PULSE (hidden during distraction-free article reading) */}
+      {!isReadingArticle && (
+      <aside className="w-full xl:w-[300px] shrink-0 space-y-4 xl:sticky xl:top-20 xl:self-start">
         {/* Widget 1: Mon Lien Express */}
         <div className="bg-white dark:bg-[#111118] border border-slate-200 dark:border-white/10 rounded-2xl overflow-hidden">
           <div className={`px-4 py-3 bg-gradient-to-r ${specialtyTheme.gradient} text-white flex items-center justify-between gap-2`}>
@@ -2073,6 +2081,7 @@ export const ParrainPortalView: React.FC<Props> = ({
           </div>
         </div>
       </aside>
+      )}
     </div>
   );
 };
