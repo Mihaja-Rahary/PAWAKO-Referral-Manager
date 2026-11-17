@@ -69,19 +69,44 @@ export function sanitizeGuideTags(rawTags: unknown): string[] {
   return result;
 }
 
-const LEGACY_PREMADE_GUIDE_TITLES = new Set([
-  'Guide Officiel Parrain — Pôle VA Chatteur',
-  'Guide Officiel Parrain — Pôle VA Instagram',
-  'Guide Officiel Parrain - Pôle VA Chatteur',
-  'Guide Officiel Parrain - Pôle VA Instagram',
+const LEGACY_SYSTEM_BLOCK_IDS = new Set([
+  'chatteur-role',
+  'chatteur-condition',
+  'chatteur-remuneration',
+  'chatteur-practices',
+  'insta-role',
+  'insta-condition',
+  'insta-remuneration',
+  'insta-practices',
+]);
+
+function normalizeGuideTitleForLegacyCheck(rawTitle: unknown): string {
+  return String(rawTitle || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[\u2010-\u2015\u2212]+/g, '-')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+const LEGACY_NORMALIZED_GUIDE_TITLES = new Set([
+  'guide officiel parrain - pole va chatteur',
+  'guide officiel parrain - pole va instagram',
 ]);
 
 export function isLegacyPreMadeParrainGuide(raw: Partial<ParrainGuide> | null | undefined): boolean {
   if (!raw || typeof raw !== 'object') return false;
   if (raw.isDefault === true) return true;
   if (raw.updatedByUserId === 'SYSTEM') return true;
-  const title = String(raw.title || '').trim();
-  if (LEGACY_PREMADE_GUIDE_TITLES.has(title)) return true;
+  const normalizedTitle = normalizeGuideTitleForLegacyCheck(raw.title);
+  if (LEGACY_NORMALIZED_GUIDE_TITLES.has(normalizedTitle)) return true;
+  if (
+    Array.isArray(raw.blocks) &&
+    raw.blocks.some(b => b && typeof b.id === 'string' && LEGACY_SYSTEM_BLOCK_IDS.has(b.id.trim()))
+  ) {
+    return true;
+  }
   return false;
 }
 

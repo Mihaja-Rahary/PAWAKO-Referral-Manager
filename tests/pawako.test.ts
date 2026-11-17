@@ -3047,6 +3047,14 @@ describe('PAWAKO Referral Manager — Tests Complets Isolés (Mockés)', () => {
       subtitle: 'Ancien guide pré-fait',
       blocks: [],
     });
+    await (repo as any).client.setDocument('pawako_parrain_guides', 'edited-legacy-chatteur', {
+      id: 'edited-legacy-chatteur',
+      vaType: 'CHATTEUR',
+      title: 'Guide Officiel Parrain – Pole VA Chatteur (Copie)',
+      subtitle: '',
+      blocks: [{ id: 'chatteur-role', type: 'TEXT', title: 'Rôle', body: 'Ancien texte' }],
+      updatedByUserId: env.INITIAL_ADMIN_DISCORD_ID!,
+    });
 
     // 2. La simple lecture /api/admin/parrain-guides purge définitivement ces anciens articles pré-faits de Firestore
     const adminListAfterSeedRes = await app.fetch(
@@ -3056,6 +3064,7 @@ describe('PAWAKO Referral Manager — Tests Complets Isolés (Mockés)', () => {
       env
     );
     assert.equal(adminListAfterSeedRes.status, 200);
+    assert.match(adminListAfterSeedRes.headers.get('cache-control') || '', /no-store/i);
     const adminListAfterSeedJson = (await adminListAfterSeedRes.json()) as any;
     assert.deepEqual(adminListAfterSeedJson.guideList, []);
     assert.equal(
@@ -3067,6 +3076,11 @@ describe('PAWAKO Referral Manager — Tests Complets Isolés (Mockés)', () => {
       await (repo as any).client.getDocument('pawako_parrain_guides', 'legacy-insta-doc-id'),
       null,
       'Le document pré-fait INSTAGRAM doit être physiquement supprimé de Firestore'
+    );
+    assert.equal(
+      await (repo as any).client.getDocument('pawako_parrain_guides', 'edited-legacy-chatteur'),
+      null,
+      'La copie du guide pré-fait avec bloc système doit être physiquement supprimée de Firestore'
     );
 
     // 3. Créer un article vierge (sans catégorie ni tag ni bloc pré-rempli) + un document avec docId différent de son champ id

@@ -36,6 +36,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 
   const res = await fetch(url, {
     ...options,
+    cache: options.cache ?? 'no-store',
     credentials: 'include',
     headers,
   });
@@ -88,6 +89,7 @@ export const api = {
     referrers: Referrer[];
   }> {
     const res = await fetch(`${API_BASE}/api/admin/bootstrap`, {
+      cache: 'no-store',
       credentials: 'include',
     });
 

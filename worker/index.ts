@@ -368,6 +368,12 @@ app.use('*', async (c, next) => {
   c.res.headers.set('Access-Control-Allow-Credentials', 'true');
 });
 
+app.use('/api/*', async (c, next) => {
+  await next();
+  c.res.headers.set('Cache-Control', 'no-store, no-cache, must-revalidate');
+  c.res.headers.set('Pragma', 'no-cache');
+});
+
 // Helper pour extraire et valider l'utilisateur authentifié
 export async function getAuthenticatedUser(c: any, repo: FirestoreRepository): Promise<User | null> {
   let secret: string;
@@ -503,6 +509,7 @@ app.get('/api/health', async c => {
     {
       status: connectivity && !connectivity.ok ? 'degraded' : 'ok',
       worker: 'referral-manager',
+      buildRevision: '2026-11-17-no-premade-guides-v2',
       firestore: {
         projectId: rawProjectId,
         databaseId: rawDatabaseId,
